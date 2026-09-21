@@ -280,7 +280,7 @@ bool FInventoryBlueprintNativeAddItemTest::RunTest(const FString& Parameters)
 	FClassProperty* Parameter = FindFProperty<FClassProperty>(AddItem, TEXT("ItemDefinitions"));
 	if (!TestNotNull(TEXT("Original class parameter exists"), Parameter)) { return false; }
 	for (const TCHAR* Path : { TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_Wood.Item_Wood_C"),
-		TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_Sword.Item_Sword_C") })
+		TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_ShortSword.Item_ShortSword_C") })
 	{
 		UClass* Definition = LoadClass<UItemDefinition>(nullptr, Path);
 		if (!TestNotNull(TEXT("Production definition loads"), Definition)) { return false; }
@@ -292,7 +292,7 @@ bool FInventoryBlueprintNativeAddItemTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("Old Blueprint AddItem now awards two native units"), Items.Num(), 2)) { return false; }
 	TestTrue(TEXT("Old API produces distinct native identities"), Items[0]->GetInstanceId() != Items[1]->GetInstanceId());
 	TestEqual(TEXT("Old API preserves Wood then Sword order"), Items[0]->GetDefinitionClass()->GetName(), FString(TEXT("Item_Wood_C")));
-	TestEqual(TEXT("Old API preserves Sword second"), Items[1]->GetDefinitionClass()->GetName(), FString(TEXT("Item_Sword_C")));
+	TestEqual(TEXT("Old API preserves Short Sword second"), Items[1]->GetDefinitionClass()->GetName(), FString(TEXT("Item_ShortSword_C")));
 	TestEqual(TEXT("Empty cutover plus two old-API calls commit three revisions"), Inventory->GetRevision(), 3);
 	EInventoryOperationResult QueryResult;
 	const auto Projection = ULegacyInventoryCompatibilityLibrary::GetLegacyItemsSnapshot(Inventory.Get(), QueryResult);

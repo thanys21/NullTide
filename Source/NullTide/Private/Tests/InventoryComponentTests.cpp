@@ -293,7 +293,7 @@ bool FInventoryReparentedBlueprintTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Legacy default inventory is still empty"), LegacyArray.Num(), 0);
 	for (const TCHAR* DefinitionPath : {
 		TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_Wood.Item_Wood_C"),
-		TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_Sword.Item_Sword_C") })
+		TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_ShortSword.Item_ShortSword_C") })
 	{
 		UClass* DefinitionClass = LoadClass<UItemDefinition>(nullptr, DefinitionPath);
 		if (!TestNotNull(TEXT("Existing item definition loads"), DefinitionClass))

@@ -200,7 +200,7 @@ bool FInventoryFragmentValidationTest::RunTest(const FString& Case)
 		const FArrayProperty* CanonicalProperty = FindFProperty<FArrayProperty>(UItemDefinition::StaticClass(), TEXT("ItemFragments"));
 		TestTrue(TEXT("Canonical array is readonly and contains instanced references"), CanonicalProperty &&
 			CanonicalProperty->HasAllPropertyFlags(CPF_BlueprintReadOnly | CPF_ContainsInstancedReference));
-		for (const TCHAR* Name : { TEXT("Wood"), TEXT("Sword") })
+		for (const TCHAR* Name : { TEXT("Wood"), TEXT("ShortSword") })
 		{
 			const FString Path = FString::Printf(TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_%s.Item_%s_C"), Name, Name);
 			UClass* Class = LoadClass<UItemDefinition>(nullptr, *Path);

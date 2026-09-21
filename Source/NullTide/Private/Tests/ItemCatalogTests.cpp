@@ -90,12 +90,13 @@ bool FItemCatalogTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Canonical fragments validate: ") + Diagnostic, bValid);
 	TestTrue(TEXT("No legacy authoring"), Definition->Fragments.IsEmpty());
 	const auto Templates = Definition->GetResolvedFragments();
-	TestEqual(TEXT("Exact capability count"), Templates.Num(), Entry->FragmentCount);
+	const int32 ExpectedTotalFragmentCount = Entry->FragmentCount + 1;
+	TestEqual(TEXT("Exact G1 capabilities plus world presentation"), Templates.Num(), ExpectedTotalFragmentCount);
 	TArray<UObject*> Children;
 	GetObjectsWithOuter(Definition, Children, EGetObjectsFlags::None);
 	int32 OwnedCount = 0;
 	for (const UObject* Child : Children) { if (Child->IsA<UItemFragment>()) { ++OwnedCount; } }
-	TestEqual(TEXT("No orphan or duplicate owned templates"), OwnedCount, Entry->FragmentCount);
+	TestEqual(TEXT("No orphan or duplicate owned templates"), OwnedCount, ExpectedTotalFragmentCount);
 	TArray<FString> Before;
 	for (const UItemFragment* Fragment : Templates)
 	{

@@ -208,7 +208,8 @@ bool FInventoryFragmentValidationTest::RunTest(const FString& Case)
 			TestEqual(TEXT("Native parent unchanged"), Class->GetSuperClass(), UItemDefinition::StaticClass());
 			const UItemDefinition* Authored = Class->GetDefaultObject<UItemDefinition>();
 			const bool bWood = FString(Name) == TEXT("Wood");
-			const int32 ExpectedCount = bWood ? 1 : 3;
+			const int32 ExpectedG1Count = bWood ? 1 : 3;
+			const int32 ExpectedCount = ExpectedG1Count + 1;
 			TestTrue(TEXT("Authored canonical data valid"), Authored->ValidateFragments(Diagnostic));
 			TestTrue(TEXT("Legacy source empty"), Authored->Fragments.IsEmpty());
 			const auto Before = Authored->GetResolvedFragments();

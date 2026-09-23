@@ -12,14 +12,18 @@
 #include "Items/Fragments/ItemFragment_Durability.h"
 #include "UI/InventoryDragDropOperation.h"
 #include "UI/InventoryDragVisualWidget.h"
+#include "UI/InventoryScreenWidget.h"
 
-void UInventorySlotWidget::InitializeSlot(UItemInstance* Item, UInventoryComponent* Inventory)
+void UInventorySlotWidget::InitializeSlot(UItemInstance* Item, UInventoryComponent* Inventory, UInventoryScreenWidget* InOwnerScreen)
 {
 	BoundItem = Item;
 	SourceInventory = Inventory;
+	OwnerScreen = InOwnerScreen;
 	bSelected = false;
 	bHovered = false;
 	bDragging = false;
+	bDropTarget = false;
+	bInvalidDropTarget = false;
 	Category = UInventoryUIFunctionLibrary::ResolveItemCategory(Item);
 	RefreshContent();
 }
@@ -33,6 +37,13 @@ void UInventorySlotWidget::SetSelected(const bool bInSelected)
 void UInventorySlotWidget::SetDragging(const bool bInDragging)
 {
 	bDragging = bInDragging;
+	RefreshVisualState();
+}
+
+void UInventorySlotWidget::SetDropTargetState(const bool bInDropTarget, const bool bInInvalidDropTarget)
+{
+	bDropTarget = bInDropTarget;
+	bInvalidDropTarget = bInDropTarget && bInInvalidDropTarget;
 	RefreshVisualState();
 }
 
@@ -50,6 +61,7 @@ void UInventorySlotWidget::NativeDestruct()
 {
 	BoundItem = nullptr;
 	SourceInventory = nullptr;
+	OwnerScreen = nullptr;
 	OnSlotSelected.Clear();
 	Super::NativeDestruct();
 }
@@ -87,8 +99,7 @@ void UInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, con
 	}
 
 	auto* Operation = NewObject<UInventoryDragDropOperation>(this);
-	Operation->ItemId = GetItemId();
-	Operation->ItemInstance = BoundItem;
+	Operation->InitializePayload(SourceInventory, BoundItem);
 	Operation->Pivot = EDragPivot::MouseDown;
 	Operation->SetSourceSlot(this);
 
@@ -103,14 +114,65 @@ void UInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, con
 
 	bDragging = true;
 	RefreshVisualState();
+	if (OwnerScreen.IsValid())
+	{
+		OwnerScreen->RegisterDragOperation(Operation);
+	}
 	OutOperation = Operation;
+}
+
+void UInventorySlotWidget::NativeOnDragEnter(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation)
+{
+	Super::NativeOnDragEnter(InGeometry, InDragDropEvent, InOperation);
+	if (const auto* Operation = Cast<UInventoryDragDropOperation>(InOperation))
+	{
+		const bool bValidTarget = Operation->IsPayloadValid(SourceInventory)
+			&& IsItemCurrent()
+			&& Operation->ItemId != GetItemId();
+		SetDropTargetState(true, !bValidTarget);
+	}
+}
+
+void UInventorySlotWidget::NativeOnDragLeave(const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation)
+{
+	SetDropTargetState(false);
+	Super::NativeOnDragLeave(InDragDropEvent, InOperation);
+}
+
+bool UInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation)
+{
+	SetDropTargetState(false);
+	if (auto* Operation = Cast<UInventoryDragDropOperation>(InOperation))
+	{
+		const bool bValidTarget = Operation->IsPayloadValid(SourceInventory)
+			&& IsItemCurrent()
+			&& Operation->ItemId != GetItemId();
+		if (OwnerScreen.IsValid())
+		{
+			OwnerScreen->CompleteDragOperation(Operation,
+				bValidTarget ? EInventoryUIDropResult::AcceptedNoMutation : EInventoryUIDropResult::Invalid);
+		}
+		else
+		{
+			Operation->Complete(bValidTarget ? EInventoryUIDropResult::AcceptedNoMutation : EInventoryUIDropResult::Invalid);
+		}
+		return true;
+	}
+	return Super::NativeOnDrop(InGeometry, InDragDropEvent, InOperation);
 }
 
 void UInventorySlotWidget::NativeOnDragCancelled(const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation)
 {
 	if (auto* Operation = Cast<UInventoryDragDropOperation>(InOperation))
 	{
-		Operation->ResetSourceVisual();
+		if (OwnerScreen.IsValid())
+		{
+			OwnerScreen->HandleUnreceivedDragCancellation(Operation, InDragDropEvent.GetScreenSpacePosition());
+		}
+		else
+		{
+			Operation->Complete(EInventoryUIDropResult::Cancelled);
+		}
 	}
 	Super::NativeOnDragCancelled(InDragDropEvent, InOperation);
 }
@@ -166,6 +228,14 @@ void UInventorySlotWidget::RefreshVisualState()
 	else if (bDragging)
 	{
 		Color = FLinearColor(Color.R, Color.G, Color.B, 0.35f);
+	}
+	else if (bInvalidDropTarget)
+	{
+		Color = FLinearColor(0.45f, 0.12f, 0.10f, 1.0f);
+	}
+	else if (bDropTarget)
+	{
+		Color = FLinearColor(0.20f, 0.66f, 0.72f, 1.0f);
 	}
 	else if (bSelected)
 	{

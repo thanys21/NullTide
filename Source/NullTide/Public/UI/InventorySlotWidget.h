@@ -8,7 +8,9 @@
 class UBorder;
 class UImage;
 class UInventoryComponent;
+class UInventoryDragDropOperation;
 class UInventoryDragVisualWidget;
+class UInventoryScreenWidget;
 class UItemInstance;
 class UProgressBar;
 class UTextBlock;
@@ -22,9 +24,10 @@ class NULLTIDE_API UInventorySlotWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	void InitializeSlot(UItemInstance* Item, UInventoryComponent* Inventory);
+	void InitializeSlot(UItemInstance* Item, UInventoryComponent* Inventory, UInventoryScreenWidget* InOwnerScreen);
 	void SetSelected(bool bInSelected);
 	void SetDragging(bool bInDragging);
+	void SetDropTargetState(bool bInDropTarget, bool bInInvalidDropTarget = false);
 	bool IsItemCurrent() const;
 	FGuid GetItemId() const;
 
@@ -37,6 +40,9 @@ protected:
 	virtual void NativeOnMouseLeave(const FPointerEvent& InMouseEvent) override;
 	virtual FReply NativeOnPreviewMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 	virtual void NativeOnDragDetected(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent, UDragDropOperation*& OutOperation) override;
+	virtual void NativeOnDragEnter(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation) override;
+	virtual void NativeOnDragLeave(const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation) override;
+	virtual bool NativeOnDrop(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation) override;
 	virtual void NativeOnDragCancelled(const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation) override;
 
 	UPROPERTY(meta = (BindWidgetOptional))
@@ -65,8 +71,11 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UInventoryComponent> SourceInventory;
 
+	TWeakObjectPtr<UInventoryScreenWidget> OwnerScreen;
 	EInventoryCategory Category = EInventoryCategory::Misc;
 	bool bSelected = false;
 	bool bHovered = false;
 	bool bDragging = false;
+	bool bDropTarget = false;
+	bool bInvalidDropTarget = false;
 };

@@ -10,9 +10,11 @@ class APawn;
 class UButton;
 class UImage;
 class UInventoryComponent;
+class UInventoryDragDropOperation;
 class UInventorySlotWidget;
 class UTextBlock;
 class UWrapBox;
+enum class EInventoryUIDropResult : uint8;
 
 /** Structured read-only inventory projection with identity-based selection. */
 UCLASS(Abstract, Blueprintable)
@@ -23,6 +25,10 @@ class NULLTIDE_API UInventoryScreenWidget : public UUserWidget
 public:
 	UFUNCTION(BlueprintCallable, Category = "Inventory|UI")
 	void RebuildInventoryView();
+
+	void RegisterDragOperation(UInventoryDragDropOperation* Operation);
+	void CompleteDragOperation(UInventoryDragDropOperation* Operation, EInventoryUIDropResult Result);
+	void HandleUnreceivedDragCancellation(UInventoryDragDropOperation* Operation, FVector2D ScreenPosition);
 
 	UFUNCTION(BlueprintPure, Category = "Inventory|UI")
 	EInventoryCategory GetActiveCategory() const { return ActiveCategory; }
@@ -115,6 +121,8 @@ private:
 	void ClearDetails();
 	void RefreshTabVisuals();
 	bool IsVisibleInActiveCategory(const UItemInstance* Item) const;
+	bool IsScreenPositionInsideInventoryWindow(FVector2D ScreenPosition) const;
+	void CancelActiveDragIfInvalidOrHidden();
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInventoryComponent> ObservedInventory;
@@ -127,4 +135,5 @@ private:
 
 	EInventoryCategory ActiveCategory = EInventoryCategory::All;
 	FGuid SelectedItemId;
+	TWeakObjectPtr<UInventoryDragDropOperation> ActiveDragOperation;
 };

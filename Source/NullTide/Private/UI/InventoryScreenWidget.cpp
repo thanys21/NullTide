@@ -5,6 +5,7 @@
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
 #include "Components/WrapBox.h"
+#include "Components/Widget.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -67,14 +68,16 @@ bool UInventoryScreenWidget::NativeOnDrop(const FGeometry& InGeometry, const FDr
 {
 	if (auto* Operation = Cast<UInventoryDragDropOperation>(InOperation))
 	{
-		Operation->ResetSourceVisual();
 		if (Operation->IsPayloadValid(ObservedInventory))
 		{
-			UE_LOG(LogTemp, Log, TEXT("G4 inventory drop requested for %s; no mutation is implemented."), *Operation->ItemId.ToString());
+			CompleteDragOperation(Operation,
+				IsScreenPositionInsideInventoryWindow(InDragDropEvent.GetScreenSpacePosition())
+					? EInventoryUIDropResult::AcceptedNoMutation
+					: EInventoryUIDropResult::OutsideDropRequested);
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning, TEXT("G4 ignored a stale inventory drag payload."));
+			CompleteDragOperation(Operation, EInventoryUIDropResult::Invalid);
 		}
 		return true;
 	}
@@ -106,7 +109,7 @@ void UInventoryScreenWidget::RebuildInventoryView()
 			{
 				continue;
 			}
-			SlotWidget->InitializeSlot(Item, ObservedInventory);
+			SlotWidget->InitializeSlot(Item, ObservedInventory, this);
 			SlotWidget->OnSlotSelected.AddUniqueDynamic(this, &UInventoryScreenWidget::HandleSlotSelected);
 			const bool bIsSelected = SelectedItemId.IsValid() && Item->GetInstanceId() == SelectedItemId;
 			SlotWidget->SetSelected(bIsSelected);
@@ -130,6 +133,7 @@ void UInventoryScreenWidget::RebuildInventoryView()
 
 void UInventoryScreenWidget::HandleNativeInventoryChanged(const int32 NewRevision)
 {
+	CancelActiveDragIfInvalidOrHidden();
 	RebuildInventoryView();
 }
 
@@ -195,6 +199,10 @@ void UInventoryScreenWidget::BindControls()
 
 void UInventoryScreenWidget::RebindToPawn(APawn* Pawn)
 {
+	if (ActiveDragOperation.IsValid())
+	{
+		CompleteDragOperation(ActiveDragOperation.Get(), EInventoryUIDropResult::Cancelled);
+	}
 	ReleaseInventoryBinding();
 	ObservedPawn = Pawn;
 	ObservedInventory = Pawn ? Pawn->FindComponentByClass<UInventoryComponent>() : nullptr;
@@ -221,7 +229,84 @@ void UInventoryScreenWidget::SetActiveCategory(const EInventoryCategory NewCateg
 		return;
 	}
 	ActiveCategory = NewCategory;
+	CancelActiveDragIfInvalidOrHidden();
 	RebuildInventoryView();
+}
+
+void UInventoryScreenWidget::RegisterDragOperation(UInventoryDragDropOperation* Operation)
+{
+	ActiveDragOperation = Operation;
+}
+
+void UInventoryScreenWidget::CompleteDragOperation(UInventoryDragDropOperation* Operation, const EInventoryUIDropResult Result)
+{
+	if (!Operation)
+	{
+		return;
+	}
+
+	Operation->Complete(Result);
+	if (ActiveDragOperation.Get() == Operation)
+	{
+		ActiveDragOperation = nullptr;
+	}
+
+	switch (Result)
+	{
+	case EInventoryUIDropResult::AcceptedNoMutation:
+		UE_LOG(LogTemp, Log, TEXT("G5 inventory UI drop accepted without mutation for %s."), *Operation->ItemId.ToString());
+		break;
+	case EInventoryUIDropResult::OutsideDropRequested:
+		UE_LOG(LogTemp, Log, TEXT("G5 inventory outside drop requested for %s; no mutation is implemented."), *Operation->ItemId.ToString());
+		break;
+	case EInventoryUIDropResult::Invalid:
+		UE_LOG(LogTemp, Warning, TEXT("G5 rejected a stale or invalid inventory drag payload."));
+		break;
+	default:
+		break;
+	}
+}
+
+void UInventoryScreenWidget::HandleUnreceivedDragCancellation(UInventoryDragDropOperation* Operation, const FVector2D ScreenPosition)
+{
+	if (!Operation || Operation != ActiveDragOperation.Get())
+	{
+		return;
+	}
+
+	if (!Operation->IsPayloadValid(ObservedInventory))
+	{
+		CompleteDragOperation(Operation, EInventoryUIDropResult::Invalid);
+	}
+	else if (IsScreenPositionInsideInventoryWindow(ScreenPosition))
+	{
+		CompleteDragOperation(Operation, EInventoryUIDropResult::Cancelled);
+	}
+	else
+	{
+		CompleteDragOperation(Operation, EInventoryUIDropResult::OutsideDropRequested);
+	}
+}
+
+bool UInventoryScreenWidget::IsScreenPositionInsideInventoryWindow(const FVector2D ScreenPosition) const
+{
+	const UWidget* InventoryWindow = GetWidgetFromName(TEXT("InventoryWindow"));
+	return InventoryWindow && InventoryWindow->GetCachedGeometry().IsUnderLocation(ScreenPosition);
+}
+
+void UInventoryScreenWidget::CancelActiveDragIfInvalidOrHidden()
+{
+	if (!ActiveDragOperation.IsValid())
+	{
+		return;
+	}
+
+	UInventoryDragDropOperation* Operation = ActiveDragOperation.Get();
+	const UItemInstance* Item = Operation->IsPayloadValid(ObservedInventory)
+		? ObservedInventory->FindItemById(Operation->ItemId)
+		: nullptr;
+	CompleteDragOperation(Operation,
+		Item && IsVisibleInActiveCategory(Item) ? EInventoryUIDropResult::Cancelled : EInventoryUIDropResult::Invalid);
 }
 
 void UInventoryScreenWidget::RefreshDetails()

@@ -1,0 +1,273 @@
+#include "UI/InventoryScreenWidget.h"
+
+#include "Blueprint/WidgetBlueprintLibrary.h"
+#include "Components/Button.h"
+#include "Components/Image.h"
+#include "Components/TextBlock.h"
+#include "Components/WrapBox.h"
+#include "GameFramework/Controller.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
+#include "Inventory/InventoryComponent.h"
+#include "Items/ItemDefinition.h"
+#include "Items/ItemInstance.h"
+#include "UI/InventoryDragDropOperation.h"
+#include "UI/InventorySlotWidget.h"
+
+void UInventoryScreenWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+	SetIsFocusable(true);
+	BindControls();
+
+	ObservedController = GetOwningPlayer();
+	if (ObservedController)
+	{
+		ObservedController->OnPossessedPawnChanged.AddUniqueDynamic(this, &UInventoryScreenWidget::HandlePossessedPawnChanged);
+	}
+	RebindToPawn(GetOwningPlayerPawn());
+	SetKeyboardFocus();
+}
+
+void UInventoryScreenWidget::NativeDestruct()
+{
+	ReleaseInventoryBinding();
+	if (ObservedController)
+	{
+		ObservedController->OnPossessedPawnChanged.RemoveDynamic(this, &UInventoryScreenWidget::HandlePossessedPawnChanged);
+	}
+	ObservedController = nullptr;
+	ObservedPawn = nullptr;
+	SelectedItemId.Invalidate();
+	Super::NativeDestruct();
+}
+
+void UInventoryScreenWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+	APawn* CurrentPawn = GetOwningPlayerPawn();
+	UInventoryComponent* CurrentInventory = CurrentPawn ? CurrentPawn->FindComponentByClass<UInventoryComponent>() : nullptr;
+	if (CurrentPawn != ObservedPawn || CurrentInventory != ObservedInventory)
+	{
+		RebindToPawn(CurrentPawn);
+	}
+}
+
+FReply UInventoryScreenWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
+{
+	if (InKeyEvent.GetKey() == EKeys::I || InKeyEvent.GetKey() == EKeys::Escape)
+	{
+		CloseInventory();
+		return FReply::Handled();
+	}
+	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
+}
+
+bool UInventoryScreenWidget::NativeOnDrop(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation)
+{
+	if (auto* Operation = Cast<UInventoryDragDropOperation>(InOperation))
+	{
+		Operation->ResetSourceVisual();
+		if (Operation->IsPayloadValid(ObservedInventory))
+		{
+			UE_LOG(LogTemp, Log, TEXT("G4 inventory drop requested for %s; no mutation is implemented."), *Operation->ItemId.ToString());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("G4 ignored a stale inventory drag payload."));
+		}
+		return true;
+	}
+	return Super::NativeOnDrop(InGeometry, InDragDropEvent, InOperation);
+}
+
+void UInventoryScreenWidget::RebuildInventoryView()
+{
+	if (!InventoryContainerWrapBox)
+	{
+		return;
+	}
+	InventoryContainerWrapBox->ClearChildren();
+
+	int32 VisibleCount = 0;
+	const int32 TotalCount = ObservedInventory ? ObservedInventory->GetItemCount() : 0;
+	bool bSelectionStillVisible = false;
+	if (ObservedInventory && SlotWidgetClass)
+	{
+		for (UItemInstance* Item : ObservedInventory->GetItemsSnapshot())
+		{
+			if (!IsVisibleInActiveCategory(Item))
+			{
+				continue;
+			}
+
+			auto* SlotWidget = CreateWidget<UInventorySlotWidget>(GetOwningPlayer(), SlotWidgetClass);
+			if (!SlotWidget)
+			{
+				continue;
+			}
+			SlotWidget->InitializeSlot(Item, ObservedInventory);
+			SlotWidget->OnSlotSelected.AddUniqueDynamic(this, &UInventoryScreenWidget::HandleSlotSelected);
+			const bool bIsSelected = SelectedItemId.IsValid() && Item->GetInstanceId() == SelectedItemId;
+			SlotWidget->SetSelected(bIsSelected);
+			bSelectionStillVisible |= bIsSelected;
+			InventoryContainerWrapBox->AddChildToWrapBox(SlotWidget);
+			++VisibleCount;
+		}
+	}
+
+	if (SelectedItemId.IsValid() && !bSelectionStillVisible)
+	{
+		SelectedItemId.Invalidate();
+	}
+	if (FooterCount)
+	{
+		FooterCount->SetText(FText::FromString(FString::Printf(TEXT("%d shown  |  %d total  |  24 slots"), VisibleCount, TotalCount)));
+	}
+	RefreshDetails();
+	RefreshTabVisuals();
+}
+
+void UInventoryScreenWidget::HandleNativeInventoryChanged(const int32 NewRevision)
+{
+	RebuildInventoryView();
+}
+
+void UInventoryScreenWidget::HandlePossessedPawnChanged(APawn* OldPawn, APawn* NewPawn)
+{
+	RebindToPawn(NewPawn);
+}
+
+void UInventoryScreenWidget::HandleSlotSelected(const FGuid ItemId)
+{
+	if (!ObservedInventory)
+	{
+		return;
+	}
+	UItemInstance* Item = ObservedInventory->FindItemById(ItemId);
+	if (!Item || !IsVisibleInActiveCategory(Item))
+	{
+		SelectedItemId.Invalidate();
+	}
+	else
+	{
+		SelectedItemId = ItemId;
+	}
+
+	if (InventoryContainerWrapBox)
+	{
+		for (UWidget* Child : InventoryContainerWrapBox->GetAllChildren())
+		{
+			if (auto* SlotWidget = Cast<UInventorySlotWidget>(Child))
+			{
+				SlotWidget->SetSelected(SelectedItemId.IsValid() && SlotWidget->GetItemId() == SelectedItemId);
+			}
+		}
+	}
+	RefreshDetails();
+}
+
+void UInventoryScreenWidget::CloseInventory()
+{
+	if (APlayerController* PlayerController = GetOwningPlayer())
+	{
+		PlayerController->SetShowMouseCursor(false);
+		UWidgetBlueprintLibrary::SetInputMode_GameOnly(PlayerController, false);
+	}
+	RemoveFromParent();
+}
+
+void UInventoryScreenWidget::ShowAll() { SetActiveCategory(EInventoryCategory::All); }
+void UInventoryScreenWidget::ShowResources() { SetActiveCategory(EInventoryCategory::Resource); }
+void UInventoryScreenWidget::ShowConsumables() { SetActiveCategory(EInventoryCategory::Consumable); }
+void UInventoryScreenWidget::ShowWeapons() { SetActiveCategory(EInventoryCategory::Weapon); }
+void UInventoryScreenWidget::ShowAmmo() { SetActiveCategory(EInventoryCategory::Ammo); }
+
+void UInventoryScreenWidget::BindControls()
+{
+	if (CloseButton) CloseButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::CloseInventory);
+	if (TabAllButton) TabAllButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ShowAll);
+	if (TabResourceButton) TabResourceButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ShowResources);
+	if (TabConsumableButton) TabConsumableButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ShowConsumables);
+	if (TabWeaponButton) TabWeaponButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ShowWeapons);
+	if (TabAmmoButton) TabAmmoButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ShowAmmo);
+}
+
+void UInventoryScreenWidget::RebindToPawn(APawn* Pawn)
+{
+	ReleaseInventoryBinding();
+	ObservedPawn = Pawn;
+	ObservedInventory = Pawn ? Pawn->FindComponentByClass<UInventoryComponent>() : nullptr;
+	if (ObservedInventory)
+	{
+		ObservedInventory->OnInventoryChanged.AddUniqueDynamic(this, &UInventoryScreenWidget::HandleNativeInventoryChanged);
+	}
+	RebuildInventoryView();
+}
+
+void UInventoryScreenWidget::ReleaseInventoryBinding()
+{
+	if (ObservedInventory)
+	{
+		ObservedInventory->OnInventoryChanged.RemoveDynamic(this, &UInventoryScreenWidget::HandleNativeInventoryChanged);
+	}
+	ObservedInventory = nullptr;
+}
+
+void UInventoryScreenWidget::SetActiveCategory(const EInventoryCategory NewCategory)
+{
+	if (ActiveCategory == NewCategory)
+	{
+		return;
+	}
+	ActiveCategory = NewCategory;
+	RebuildInventoryView();
+}
+
+void UInventoryScreenWidget::RefreshDetails()
+{
+	UItemInstance* Item = ObservedInventory && SelectedItemId.IsValid()
+		? ObservedInventory->FindItemById(SelectedItemId)
+		: nullptr;
+	if (!Item || !IsVisibleInActiveCategory(Item))
+	{
+		ClearDetails();
+		return;
+	}
+	const UItemDefinition* Definition = UInventoryUIFunctionLibrary::GetDefinition(Item->GetDefinitionClass());
+	if (!Definition)
+	{
+		ClearDetails();
+		return;
+	}
+	if (DetailsIcon) DetailsIcon->SetBrushFromTexture(Definition->ItemIcon.Get(), true);
+	if (DetailsItemName) DetailsItemName->SetText(Definition->ItemName);
+	if (DetailsItemDescription) DetailsItemDescription->SetText(Definition->ItemDescription);
+	if (DetailsCategory) DetailsCategory->SetText(UInventoryUIFunctionLibrary::GetCategoryDisplayName(UInventoryUIFunctionLibrary::ResolveItemCategory(Item)));
+	if (CapabilitySummary) CapabilitySummary->SetText(UInventoryUIFunctionLibrary::BuildCapabilitySummary(Item->GetDefinitionClass()));
+}
+
+void UInventoryScreenWidget::ClearDetails()
+{
+	if (DetailsIcon) DetailsIcon->SetBrushFromTexture(nullptr, true);
+	if (DetailsItemName) DetailsItemName->SetText(FText::FromString(TEXT("Select an item")));
+	if (DetailsItemDescription) DetailsItemDescription->SetText(FText::FromString(TEXT("Item details appear here.")));
+	if (DetailsCategory) DetailsCategory->SetText(FText::GetEmpty());
+	if (CapabilitySummary) CapabilitySummary->SetText(FText::GetEmpty());
+}
+
+void UInventoryScreenWidget::RefreshTabVisuals()
+{
+	const FLinearColor Active(0.26f, 0.38f, 0.24f, 1.0f);
+	const FLinearColor Inactive(0.12f, 0.13f, 0.12f, 1.0f);
+	if (TabAllButton) TabAllButton->SetBackgroundColor(ActiveCategory == EInventoryCategory::All ? Active : Inactive);
+	if (TabResourceButton) TabResourceButton->SetBackgroundColor(ActiveCategory == EInventoryCategory::Resource ? Active : Inactive);
+	if (TabConsumableButton) TabConsumableButton->SetBackgroundColor(ActiveCategory == EInventoryCategory::Consumable ? Active : Inactive);
+	if (TabWeaponButton) TabWeaponButton->SetBackgroundColor(ActiveCategory == EInventoryCategory::Weapon ? Active : Inactive);
+	if (TabAmmoButton) TabAmmoButton->SetBackgroundColor(ActiveCategory == EInventoryCategory::Ammo ? Active : Inactive);
+}
+
+bool UInventoryScreenWidget::IsVisibleInActiveCategory(const UItemInstance* Item) const
+{
+	return UInventoryUIFunctionLibrary::IsItemVisible(ObservedInventory, Item, ActiveCategory);
+}

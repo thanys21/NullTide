@@ -10,6 +10,7 @@
 #include "InventoryComponentTestTypes.generated.h"
 
 class UInventoryComponent;
+class UStorageComponent;
 class AActor;
 class APawn;
 
@@ -105,4 +106,22 @@ public:
 	FInventoryOperationResult ReentrantInitializationResult;
 	int32 ObservedItemCount = 0;
 	TArray<TSubclassOf<UItemDefinition>> ObservedDefinitions;
+};
+
+/** Dynamic delegate listener used only by native storage automation tests. */
+UCLASS(Transient, NotBlueprintable)
+class UStorageComponentTestListener : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UFUNCTION()
+	void HandleStorageChanged(int32 NewRevision);
+
+	UPROPERTY()
+	TObjectPtr<UStorageComponent> Storage;
+
+	int32 EventCount = 0;
+	int32 LastRevision = 0;
+	int32 ObservedItemCount = 0;
 };

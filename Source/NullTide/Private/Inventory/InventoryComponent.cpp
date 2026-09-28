@@ -3,6 +3,8 @@
 #include "Inventory/InventoryComponent.h"
 
 #include "Inventory/LegacyInventoryStorage.h"
+#include "Storage/StorageComponent.h"
+#include "Storage/StorageTransferLibrary.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -223,6 +225,10 @@ FInventoryOperationResult UInventoryComponent::TryAddDefinition(
 	{
 		return MakeInventoryResult(EInventoryOperationResult::InvalidDefinitionData);
 	}
+	if (IsFull())
+	{
+		return MakeInventoryResult(EInventoryOperationResult::CapacityFull);
+	}
 
 	FArrayProperty* ProjectionArray = nullptr;
 	FClassProperty* ProjectionClass = nullptr;
@@ -373,6 +379,12 @@ FInventoryWorldDropResult UInventoryComponent::TryDropItemToWorld(APawn* OwningP
 	}
 
 	return MakeWorldDropResult(EInventoryWorldDropResult::Success, ItemId, SpawnedPickup);
+}
+
+FInventoryStorageTransferResult UInventoryComponent::TryTransferItemToStorage(
+	UStorageComponent* Storage, const FGuid ItemId)
+{
+	return UStorageTransferLibrary::TransferInventoryToStorage(this, Storage, ItemId);
 }
 
 TArray<UItemInstance*> UInventoryComponent::GetItemsSnapshot() const

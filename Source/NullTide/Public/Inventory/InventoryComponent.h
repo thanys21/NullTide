@@ -9,6 +9,8 @@
 
 class UItemDefinition;
 class UItemInstance;
+class UStorageComponent;
+class UStorageTransferLibrary;
 class AActor;
 class APawn;
 class FArrayProperty;
@@ -35,6 +37,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Inventory")
 	FInventoryWorldDropResult TryDropItemToWorld(APawn* OwningPawn, FGuid ItemId);
 
+	/** Moves the exact runtime instance to storage without changing its ItemId. */
+	UFUNCTION(BlueprintCallable, Category = "Inventory|Storage")
+	FInventoryStorageTransferResult TryTransferItemToStorage(UStorageComponent* Storage, FGuid ItemId);
+
 	UFUNCTION(BlueprintPure, Category = "Inventory")
 	TArray<UItemInstance*> GetItemsSnapshot() const;
 
@@ -46,6 +52,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Inventory")
 	int32 GetItemCount() const { return Items.Num(); }
+
+	UFUNCTION(BlueprintPure, Category = "Inventory")
+	int32 GetCapacity() const { return Capacity; }
+
+	UFUNCTION(BlueprintPure, Category = "Inventory")
+	bool IsFull() const { return Items.Num() >= Capacity; }
 
 	UFUNCTION(BlueprintPure, Category = "Inventory")
 	int32 GetRevision() const { return Revision; }
@@ -87,6 +99,8 @@ protected:
 	virtual FInventoryOperationResult CommitWorldDropRemoval(FGuid ItemId);
 
 private:
+	friend class UStorageTransferLibrary;
+
 	bool CanOperate() const;
 	bool IsDefinitionDataValid(const UItemDefinition* Definition) const;
 	bool HasItemId(const FGuid& ItemId) const;
@@ -94,6 +108,9 @@ private:
 
 	UPROPERTY()
 	TArray<TObjectPtr<UItemInstance>> Items;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Inventory", meta = (AllowPrivateAccess = "true", ClampMin = "1"))
+	int32 Capacity = 24;
 
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Inventory", meta = (AllowPrivateAccess = "true"))
 	int32 Revision = 0;

@@ -25,6 +25,7 @@ enum class EInventoryOperationResult : uint8
 	InvalidDefinition,
 	InvalidDefinitionData,
 	InvalidItemId,
+	CapacityFull,
 	NotInitialized,
 	Busy
 };
@@ -82,6 +83,39 @@ struct NULLTIDE_API FInventoryWorldDropResult
 	bool IsSuccess() const
 	{
 		return Result == EInventoryWorldDropResult::Success;
+	}
+};
+
+UENUM(BlueprintType, meta = (ScriptName = "InventoryStorageTransferResultCode"))
+enum class EInventoryStorageTransferResult : uint8
+{
+	Success,
+	InvalidSource,
+	InvalidDestination,
+	InvalidItemId,
+	DestinationFull,
+	Busy,
+	TransferFailed
+};
+
+/** Result for an exact runtime-item transfer between player inventory and storage. */
+USTRUCT(BlueprintType)
+struct NULLTIDE_API FInventoryStorageTransferResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory|Storage")
+	EInventoryStorageTransferResult Result = EInventoryStorageTransferResult::InvalidSource;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory|Storage")
+	FGuid ItemId;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory|Storage")
+	TObjectPtr<UItemInstance> Item = nullptr;
+
+	bool IsSuccess() const
+	{
+		return Result == EInventoryStorageTransferResult::Success;
 	}
 };
 

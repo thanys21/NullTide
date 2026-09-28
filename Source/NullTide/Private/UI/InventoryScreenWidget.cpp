@@ -245,19 +245,39 @@ void UInventoryScreenWidget::CompleteDragOperation(UInventoryDragDropOperation* 
 		return;
 	}
 
+	const bool bOutsideDropRequest = Result == EInventoryUIDropResult::OutsideDropRequested;
+	const bool bPayloadIsValid = bOutsideDropRequest && Operation->IsPayloadValid(ObservedInventory);
+	const FGuid ItemId = Operation->ItemId;
 	Operation->Complete(Result);
 	if (ActiveDragOperation.Get() == Operation)
 	{
 		ActiveDragOperation = nullptr;
+	}
+	if (bOutsideDropRequest)
+	{
+		if (!bPayloadIsValid || !ObservedInventory || !ObservedPawn)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("G6 rejected an invalid inventory world-drop request for %s."), *ItemId.ToString());
+			return;
+		}
+
+		const FInventoryWorldDropResult DropResult = ObservedInventory->TryDropItemToWorld(ObservedPawn, ItemId);
+		if (DropResult.IsSuccess())
+		{
+			UE_LOG(LogTemp, Log, TEXT("G6 inventory world drop committed for %s."), *ItemId.ToString());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("G6 inventory world drop failed for %s (result %d)."),
+				*ItemId.ToString(), static_cast<int32>(DropResult.Result));
+		}
+		return;
 	}
 
 	switch (Result)
 	{
 	case EInventoryUIDropResult::AcceptedNoMutation:
 		UE_LOG(LogTemp, Log, TEXT("G5 inventory UI drop accepted without mutation for %s."), *Operation->ItemId.ToString());
-		break;
-	case EInventoryUIDropResult::OutsideDropRequested:
-		UE_LOG(LogTemp, Log, TEXT("G5 inventory outside drop requested for %s; no mutation is implemented."), *Operation->ItemId.ToString());
 		break;
 	case EInventoryUIDropResult::Invalid:
 		UE_LOG(LogTemp, Warning, TEXT("G5 rejected a stale or invalid inventory drag payload."));
@@ -273,12 +293,13 @@ void UInventoryScreenWidget::HandleUnreceivedDragCancellation(UInventoryDragDrop
 	{
 		return;
 	}
+	const bool bInsideInventoryWindow = IsScreenPositionInsideInventoryWindow(ScreenPosition);
 
 	if (!Operation->IsPayloadValid(ObservedInventory))
 	{
 		CompleteDragOperation(Operation, EInventoryUIDropResult::Invalid);
 	}
-	else if (IsScreenPositionInsideInventoryWindow(ScreenPosition))
+	else if (bInsideInventoryWindow)
 	{
 		CompleteDragOperation(Operation, EInventoryUIDropResult::Cancelled);
 	}

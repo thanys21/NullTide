@@ -1,12 +1,16 @@
 #include "Items/ItemDefinition.h"
+#include "Items/ItemInstance.h"
 #include "Items/Fragments/ItemFragment_Consumable.h"
 #include "Items/Fragments/ItemFragment_Weapon.h"
 #include "Inventory/InventoryComponent.h"
+#include "InventoryComponentTestTypes.h"
 #include "InventoryUITestTypes.h"
+#include "GameFramework/Pawn.h"
 #include "Misc/AutomationTest.h"
 #include "UI/InventoryDragDropOperation.h"
 #include "UI/InventoryUICategory.h"
 #include "UObject/StrongObjectPtr.h"
+#include "UObject/UnrealType.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 namespace
@@ -243,6 +247,124 @@ bool FInventoryUIDragInvalidationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Stale payload records invalid result"), StaleOperation->GetResult(), EInventoryUIDropResult::Invalid);
 	TestEqual(TEXT("Only authoritative removal advances revision"), Inventory->GetRevision(), RevisionBeforeFilter + 1);
 	TestTrue(TEXT("Unrelated item remains in inventory"), Inventory->ContainsItem(Potion.ItemId));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInventoryWorldDropSuccessTest, "NullTide.Gameplay.G6.WorldDrop.SuccessPreservesDuplicateIdentityAndProjection",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FInventoryWorldDropSuccessTest::RunTest(const FString& Parameters)
+{
+	const TStrongObjectPtr<UInventoryWorldDropTestComponent> Inventory(
+		NewObject<UInventoryWorldDropTestComponent>(GetTransientPackage()));
+	const TStrongObjectPtr<APawn> Pawn(NewObject<APawn>(GetTransientPackage()));
+	const TStrongObjectPtr<UInventoryComponentTestListener> Listener(NewObject<UInventoryComponentTestListener>(GetTransientPackage()));
+	Listener->Inventory = Inventory.Get();
+	Inventory->OnInventoryChanged.AddDynamic(Listener.Get(), &UInventoryComponentTestListener::HandleInventoryChanged);
+
+	const FInventoryOperationResult First = Inventory->TryAddDefinition(UInventoryTestItemDefinition::StaticClass());
+	const FInventoryOperationResult Second = Inventory->TryAddDefinition(UInventoryTestItemDefinition::StaticClass());
+	if (!TestTrue(TEXT("Two same-definition instances are acquired"), First.IsSuccess() && Second.IsSuccess()))
+	{
+		return false;
+	}
+	const int32 RevisionBeforeDrop = Inventory->GetRevision();
+	const int32 EventsBeforeDrop = Listener->EventCount;
+
+	const FInventoryWorldDropResult Dropped = Inventory->TryDropItemToWorld(Pawn.Get(), First.ItemId);
+	TestTrue(TEXT("World drop transaction succeeds"), Dropped.IsSuccess());
+	TestEqual(TEXT("World drop reports the requested identity"), Dropped.ItemId, First.ItemId);
+	TestNotNull(TEXT("Generic pickup spawn is returned"), Dropped.SpawnedPickup.Get());
+	TestEqual(TEXT("Only the exact duplicate identity is removed"), Inventory->GetItemsSnapshot(), TArray<UItemInstance*>({ Second.Item.Get() }));
+	TestTrue(TEXT("Remaining duplicate keeps its distinct ID"), Inventory->ContainsItem(Second.ItemId) && !Inventory->ContainsItem(First.ItemId));
+	TestEqual(TEXT("Successful drop commits one revision"), Inventory->GetRevision(), RevisionBeforeDrop + 1);
+	TestEqual(TEXT("Successful drop emits one event"), Listener->EventCount, EventsBeforeDrop + 1);
+	TestEqual(TEXT("No rollback follows a successful commit"), Inventory->RollbackCount, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInventoryWorldDropFailureTest, "NullTide.Gameplay.G6.WorldDrop.FailuresAreAtomic",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FInventoryWorldDropFailureTest::RunTest(const FString& Parameters)
+{
+	const TStrongObjectPtr<UInventoryWorldDropTestComponent> Inventory(
+		NewObject<UInventoryWorldDropTestComponent>(GetTransientPackage()));
+	const TStrongObjectPtr<APawn> Pawn(NewObject<APawn>(GetTransientPackage()));
+	const TStrongObjectPtr<UInventoryComponentTestListener> Listener(NewObject<UInventoryComponentTestListener>(GetTransientPackage()));
+	Listener->Inventory = Inventory.Get();
+	Inventory->OnInventoryChanged.AddDynamic(Listener.Get(), &UInventoryComponentTestListener::HandleInventoryChanged);
+	const FInventoryOperationResult Added = Inventory->TryAddDefinition(UInventoryTestItemDefinition::StaticClass());
+	if (!TestTrue(TEXT("Item acquisition succeeds"), Added.IsSuccess()))
+	{
+		return false;
+	}
+	const TArray<UItemInstance*> ItemsBefore = Inventory->GetItemsSnapshot();
+	const int32 RevisionBefore = Inventory->GetRevision();
+	const int32 EventsBefore = Listener->EventCount;
+
+	TestEqual(TEXT("Stale identity is rejected before spawn"),
+		Inventory->TryDropItemToWorld(Pawn.Get(), FGuid::NewGuid()).Result, EInventoryWorldDropResult::InvalidItemId);
+	TestEqual(TEXT("Missing pawn is rejected before spawn"),
+		Inventory->TryDropItemToWorld(nullptr, Added.ItemId).Result, EInventoryWorldDropResult::InvalidPawn);
+	Inventory->bResolveTransformSucceeds = false;
+	TestEqual(TEXT("Unsafe placement is rejected before spawn"),
+		Inventory->TryDropItemToWorld(Pawn.Get(), Added.ItemId).Result, EInventoryWorldDropResult::NoSafeTransform);
+	Inventory->bResolveTransformSucceeds = true;
+	Inventory->bSpawnSucceeds = false;
+	TestEqual(TEXT("Spawn failure is rejected before removal"),
+		Inventory->TryDropItemToWorld(Pawn.Get(), Added.ItemId).Result, EInventoryWorldDropResult::SpawnFailed);
+	TestEqual(TEXT("Only the spawn-failure path attempted a spawn"), Inventory->SpawnAttempts, 1);
+	TestEqual(TEXT("Failures emit no event"), Listener->EventCount, EventsBefore);
+	return InventoryStateIsUnchanged(*this, Inventory.Get(), ItemsBefore, RevisionBefore);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FInventoryWorldDropRollbackTest, "NullTide.Gameplay.G6.WorldDrop.RemoveFailureRollsBackAndProjectsOrder",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FInventoryWorldDropRollbackTest::RunTest(const FString& Parameters)
+{
+	const TStrongObjectPtr<UInventoryWorldDropTestComponent> Inventory(
+		NewObject<UInventoryWorldDropTestComponent>(GetTransientPackage()));
+	const TStrongObjectPtr<APawn> Pawn(NewObject<APawn>(GetTransientPackage()));
+	const TStrongObjectPtr<UInventoryComponentTestListener> Listener(NewObject<UInventoryComponentTestListener>(GetTransientPackage()));
+	Listener->Inventory = Inventory.Get();
+	Inventory->OnInventoryChanged.AddDynamic(Listener.Get(), &UInventoryComponentTestListener::HandleInventoryChanged);
+	Inventory->InventoryItems = { UInventoryTestItemDefinition::StaticClass(), UInventoryOtherTestItemDefinition::StaticClass(), UInventoryTestItemDefinition::StaticClass() };
+	FindFProperty<FBoolProperty>(UInventoryComponent::StaticClass(), TEXT("bLegacyInventoryMode"))
+		->SetPropertyValue_InContainer(Inventory.Get(), true);
+	FindFProperty<FBoolProperty>(UInventoryComponent::StaticClass(), TEXT("bImportLegacyInventoryOnBeginPlay"))
+		->SetPropertyValue_InContainer(Inventory.Get(), true);
+	if (!TestTrue(TEXT("Compatibility seed initializes"), Inventory->InitializeFromLegacyInventory().IsSuccess()))
+	{
+		return false;
+	}
+	const TArray<UItemInstance*> ItemsBefore = Inventory->GetItemsSnapshot();
+	const TArray<TSubclassOf<UItemDefinition>> ProjectionBefore = Inventory->InventoryItems;
+	const int32 RevisionBefore = Inventory->GetRevision();
+	const int32 EventsBefore = Listener->EventCount;
+	Inventory->bCommitSucceeds = false;
+
+	const FInventoryWorldDropResult Dropped = Inventory->TryDropItemToWorld(Pawn.Get(), ItemsBefore[1]->GetInstanceId());
+	TestEqual(TEXT("Removal failure is reported after rollback"), Dropped.Result, EInventoryWorldDropResult::RemovalFailedRolledBack);
+	TestEqual(TEXT("Spawned pickup is rolled back exactly once"), Inventory->RollbackCount, 1);
+	TestEqual(TEXT("Rollback receives the spawned pickup"), Inventory->LastRolledBackPickup, Inventory->LastSpawnedPickup);
+	TestTrue(TEXT("Compatibility projection order remains unchanged"), Inventory->InventoryItems == ProjectionBefore);
+	TestEqual(TEXT("Rollback emits no event"), Listener->EventCount, EventsBefore);
+	if (!InventoryStateIsUnchanged(*this, Inventory.Get(), ItemsBefore, RevisionBefore))
+	{
+		return false;
+	}
+
+	Inventory->bCommitSucceeds = true;
+	const FInventoryWorldDropResult Committed = Inventory->TryDropItemToWorld(Pawn.Get(), ItemsBefore[1]->GetInstanceId());
+	TestTrue(TEXT("Exact legacy instance commits after a prior rollback"), Committed.IsSuccess());
+	TestEqual(TEXT("Remaining authoritative order skips only the dropped identity"),
+		Inventory->GetItemsSnapshot(), TArray<UItemInstance*>({ ItemsBefore[0], ItemsBefore[2] }));
+	TestTrue(TEXT("Compatibility projection rebuilds in remaining order"), Inventory->InventoryItems == TArray<TSubclassOf<UItemDefinition>>({
+		UInventoryTestItemDefinition::StaticClass(), UInventoryTestItemDefinition::StaticClass() }));
+	TestEqual(TEXT("Successful compatibility drop advances revision once"), Inventory->GetRevision(), RevisionBefore + 1);
+	TestEqual(TEXT("Successful compatibility drop emits one event"), Listener->EventCount, EventsBefore + 1);
 	return true;
 }
 #endif

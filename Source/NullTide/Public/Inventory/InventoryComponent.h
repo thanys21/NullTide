@@ -9,6 +9,8 @@
 
 class UItemDefinition;
 class UItemInstance;
+class AActor;
+class APawn;
 class FArrayProperty;
 class FClassProperty;
 
@@ -28,6 +30,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Inventory")
 	FInventoryOperationResult TryRemoveItem(FGuid ItemId);
+
+	/** Spawns the generic pickup first, then commits the exact-ID removal on success. */
+	UFUNCTION(BlueprintCallable, Category = "Inventory")
+	FInventoryWorldDropResult TryDropItemToWorld(APawn* OwningPawn, FGuid ItemId);
 
 	UFUNCTION(BlueprintPure, Category = "Inventory")
 	TArray<UItemInstance*> GetItemsSnapshot() const;
@@ -71,6 +77,14 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+
+	/** Engine seams keep the transaction testable while the component retains commit authority. */
+	virtual bool ResolveWorldDropTransform(const APawn* OwningPawn, TSubclassOf<UItemDefinition> DefinitionClass,
+		FTransform& OutTransform) const;
+	virtual AActor* SpawnAndConfigureWorldDrop(APawn* OwningPawn, TSubclassOf<UItemDefinition> DefinitionClass,
+		const FTransform& DropTransform);
+	virtual void RollbackWorldDrop(AActor* SpawnedPickup);
+	virtual FInventoryOperationResult CommitWorldDropRemoval(FGuid ItemId);
 
 private:
 	bool CanOperate() const;

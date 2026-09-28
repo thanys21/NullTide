@@ -4,6 +4,7 @@
 
 #include "Inventory/InventoryComponent.h"
 #include "Compatibility/LegacyInventoryCompatibilityLibrary.h"
+#include "GameFramework/Actor.h"
 #include "Items/ItemInstance.h"
 #include "Misc/AutomationTest.h"
 #include "UObject/StrongObjectPtr.h"
@@ -29,6 +30,49 @@ void UInventoryComponentTestListener::HandleInventoryChanged(int32 NewRevision)
 	{
 		ReentrantResult = Inventory->TryAddDefinition(ReentrantDefinitionClass);
 	}
+}
+
+bool UInventoryWorldDropTestComponent::ResolveWorldDropTransform(
+	const APawn* OwningPawn,
+	const TSubclassOf<UItemDefinition> DefinitionClass,
+	FTransform& OutTransform) const
+{
+	OutTransform = FTransform::Identity;
+	return bResolveTransformSucceeds;
+}
+
+AActor* UInventoryWorldDropTestComponent::SpawnAndConfigureWorldDrop(
+	APawn* OwningPawn,
+	const TSubclassOf<UItemDefinition> DefinitionClass,
+	const FTransform& DropTransform)
+{
+	++SpawnAttempts;
+	if (!bSpawnSucceeds || !DefinitionClass)
+	{
+		return nullptr;
+	}
+	LastSpawnedPickup = NewObject<AActor>(GetTransientPackage());
+	return LastSpawnedPickup;
+}
+
+void UInventoryWorldDropTestComponent::RollbackWorldDrop(AActor* SpawnedPickup)
+{
+	++RollbackCount;
+	LastRolledBackPickup = SpawnedPickup;
+}
+
+FInventoryOperationResult UInventoryWorldDropTestComponent::CommitWorldDropRemoval(const FGuid ItemId)
+{
+	++CommitAttempts;
+	if (bCommitSucceeds)
+	{
+		return Super::CommitWorldDropRemoval(ItemId);
+	}
+
+	FInventoryOperationResult Failure;
+	Failure.Result = EInventoryOperationResult::Busy;
+	Failure.ItemId = ItemId;
+	return Failure;
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

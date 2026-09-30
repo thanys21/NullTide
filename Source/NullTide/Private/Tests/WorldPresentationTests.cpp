@@ -25,6 +25,7 @@ const FPresentationEntry PresentationCatalog[] = {
 	{ TEXT("Wood"), TEXT("/Engine/BasicShapes/Cube.Cube"), FVector(0.55, 0.22, 0.22), FRotator(0.0, 15.0, 0.0), 1 },
 	{ TEXT("Sandwich"), TEXT("/Engine/BasicShapes/Cube.Cube"), FVector(0.50, 0.35, 0.12), FRotator(0.0, 45.0, 0.0), 2 },
 	{ TEXT("Stone"), TEXT("/Engine/BasicShapes/Sphere.Sphere"), FVector(0.32, 0.40, 0.28), FRotator::ZeroRotator, 1 },
+	{ TEXT("Scrap"), TEXT("/Engine/BasicShapes/Cube.Cube"), FVector(0.32, 0.24, 0.18), FRotator(0.0, 30.0, 0.0), 1 },
 	{ TEXT("Meat"), TEXT("/Engine/BasicShapes/Sphere.Sphere"), FVector(0.45, 0.28, 0.22), FRotator(0.0, 0.0, 20.0), 2 },
 	{ TEXT("LongSword"), TEXT("/Engine/BasicShapes/Cube.Cube"), FVector(0.06, 0.08, 0.90), FRotator::ZeroRotator, 3 },
 	{ TEXT("WoodBow"), TEXT("/Engine/BasicShapes/Cube.Cube"), FVector(0.08, 0.65, 0.40), FRotator::ZeroRotator, 3 },

@@ -33,6 +33,7 @@ const FCatalogEntry Catalog[] = {
 	{ TEXT("Wood"), TEXT("Wood"), TEXT("A basic crafting resource."), 1 },
 	{ TEXT("Sandwich"), TEXT("Sandwich"), TEXT("Simple prepared food."), 2 },
 	{ TEXT("Stone"), TEXT("Stone"), TEXT("A basic crafting resource."), 1 },
+	{ TEXT("Scrap"), TEXT("Scrap"), TEXT("A salvaged scrap material."), 1 },
 	{ TEXT("Meat"), TEXT("Meat"), TEXT("Raw food."), 2 },
 	{ TEXT("LongSword"), TEXT("Long Sword"), TEXT("A longer melee weapon."), 3 },
 	{ TEXT("WoodBow"), TEXT("Wood Bow"), TEXT("A simple wooden bow."), 3 },
@@ -120,7 +121,7 @@ bool FItemCatalogTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("MainHand equipment"), Equip && Equip->EquipmentSlot == EEquipmentSlot::MainHand);
 		TestTrue(TEXT("Exact maximum durability"), Durability && Durability->MaxDurability == (bShort ? 100.0f : bBow ? 80.0f : 150.0f));
 	}
-	else if (Parameters == TEXT("Wood") || Parameters == TEXT("Stone"))
+	else if (Parameters == TEXT("Wood") || Parameters == TEXT("Stone") || Parameters == TEXT("Scrap"))
 	{
 		const auto* Resource = Cast<UItemFragment_Resource>(Definition->FindFragmentByClass(UItemFragment_Resource::StaticClass()));
 		TestTrue(TEXT("Resource type"), Resource && Resource->ResourceType == FName(Entry->Id));

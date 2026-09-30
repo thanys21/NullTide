@@ -22,7 +22,7 @@ void UStorageComponentTestListener::HandleStorageChanged(int32 NewRevision)
 
 namespace
 {
-TStrongObjectPtr<UInventoryComponent> MakeInventory()
+TStrongObjectPtr<UInventoryComponent> MakeStorageTestInventory()
 {
 	return TStrongObjectPtr<UInventoryComponent>(NewObject<UInventoryComponent>(GetTransientPackage()));
 }
@@ -53,7 +53,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FStorageInventoryToStorageTransferTest::RunTest(const FString& Parameters)
 {
-	const TStrongObjectPtr<UInventoryComponent> Inventory = MakeInventory();
+	const TStrongObjectPtr<UInventoryComponent> Inventory = MakeStorageTestInventory();
 	const TStrongObjectPtr<UStorageComponent> Storage = MakeStorage();
 	const FInventoryOperationResult First = Inventory->TryAddDefinition(UInventoryTestItemDefinition::StaticClass());
 	const FInventoryOperationResult Second = Inventory->TryAddDefinition(UInventoryTestItemDefinition::StaticClass());
@@ -106,7 +106,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FStorageStorageToInventoryTransferTest::RunTest(const FString& Parameters)
 {
-	const TStrongObjectPtr<UInventoryComponent> Inventory = MakeInventory();
+	const TStrongObjectPtr<UInventoryComponent> Inventory = MakeStorageTestInventory();
 	const TStrongObjectPtr<UStorageComponent> Storage = MakeStorage();
 	const FInventoryOperationResult First = Inventory->TryAddDefinition(UInventoryTestItemDefinition::StaticClass());
 	const FInventoryOperationResult Second = Inventory->TryAddDefinition(UInventoryOtherTestItemDefinition::StaticClass());
@@ -146,7 +146,7 @@ bool FStorageStorageToInventoryTransferTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Reverse source emits once"), StorageListener->EventCount, 1);
 	TestEqual(TEXT("Reverse destination emits once"), InventoryListener->EventCount, 1);
 
-	const TStrongObjectPtr<UInventoryComponent> BoundaryInventory = MakeInventory();
+	const TStrongObjectPtr<UInventoryComponent> BoundaryInventory = MakeStorageTestInventory();
 	const TStrongObjectPtr<UStorageComponent> BoundaryStorage = MakeStorage();
 	TArray<FGuid> SeedIds;
 	for (int32 Index = 0; Index < 23; ++Index)
@@ -183,7 +183,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FStorageTransferFailureAtomicityTest::RunTest(const FString& Parameters)
 {
-	const TStrongObjectPtr<UInventoryComponent> Inventory = MakeInventory();
+	const TStrongObjectPtr<UInventoryComponent> Inventory = MakeStorageTestInventory();
 	const TStrongObjectPtr<UStorageComponent> Storage = MakeStorage();
 	const FInventoryOperationResult Candidate = Inventory->TryAddDefinition(UInventoryTestItemDefinition::StaticClass());
 	if (!TestTrue(TEXT("Failure-path candidate adds"), Candidate.IsSuccess()))
@@ -235,7 +235,7 @@ bool FStorageTransferFailureAtomicityTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Full storage failure emits no source event"), InventoryListener->EventCount, 0);
 	TestEqual(TEXT("Full storage failure emits no destination event"), StorageListener->EventCount, 0);
 
-	const TStrongObjectPtr<UInventoryComponent> FullInventory = MakeInventory();
+	const TStrongObjectPtr<UInventoryComponent> FullInventory = MakeStorageTestInventory();
 	const TStrongObjectPtr<UStorageComponent> ReverseStorage = MakeStorage();
 	const FInventoryOperationResult ReverseCandidate = FullInventory->TryAddDefinition(UInventoryTestItemDefinition::StaticClass());
 	if (!TestTrue(TEXT("Full-inventory source candidate adds"), ReverseCandidate.IsSuccess())

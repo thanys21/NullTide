@@ -9,6 +9,7 @@
 #include "Items/Fragments/ItemFragment_Food.h"
 #include "Items/Fragments/ItemFragment_Healing.h"
 #include "Items/Fragments/ItemFragment_Resource.h"
+#include "Items/Fragments/ItemFragment_Tool.h"
 #include "Items/Fragments/ItemFragment_Weapon.h"
 #include "Engine/Texture2D.h"
 #include "Misc/AutomationTest.h"
@@ -34,6 +35,8 @@ const FCatalogEntry Catalog[] = {
 	{ TEXT("Sandwich"), TEXT("Sandwich"), TEXT("Simple prepared food."), 2 },
 	{ TEXT("Stone"), TEXT("Stone"), TEXT("A basic crafting resource."), 1 },
 	{ TEXT("Scrap"), TEXT("Scrap"), TEXT("A salvaged scrap material."), 1 },
+	{ TEXT("Axe"), TEXT("Axe"), TEXT("A basic woodcutting tool."), 1 },
+	{ TEXT("Pickaxe"), TEXT("Pickaxe"), TEXT("A basic rock-breaking tool."), 1 },
 	{ TEXT("Meat"), TEXT("Meat"), TEXT("Raw food."), 2 },
 	{ TEXT("LongSword"), TEXT("Long Sword"), TEXT("A longer melee weapon."), 3 },
 	{ TEXT("WoodBow"), TEXT("Wood Bow"), TEXT("A simple wooden bow."), 3 },
@@ -125,6 +128,15 @@ bool FItemCatalogTest::RunTest(const FString& Parameters)
 	{
 		const auto* Resource = Cast<UItemFragment_Resource>(Definition->FindFragmentByClass(UItemFragment_Resource::StaticClass()));
 		TestTrue(TEXT("Resource type"), Resource && Resource->ResourceType == FName(Entry->Id));
+	}
+	else if (Parameters == TEXT("Axe") || Parameters == TEXT("Pickaxe"))
+	{
+		const auto* Tool = Cast<UItemFragment_Tool>(Definition->FindFragmentByClass(UItemFragment_Tool::StaticClass()));
+		const EToolType ExpectedType = Parameters == TEXT("Axe") ? EToolType::Axe : EToolType::Pickaxe;
+		TestTrue(TEXT("Exact passive tool configuration"), Tool && Tool->ToolType == ExpectedType && Tool->Efficiency == 1.0f);
+		TestFalse(TEXT("Tool is not consumable"), Definition->HasFragmentByClass(UItemFragment_Consumable::StaticClass()));
+		TestFalse(TEXT("Tool is not a weapon"), Definition->HasFragmentByClass(UItemFragment_Weapon::StaticClass()));
+		TestFalse(TEXT("Tool has no durability yet"), Definition->HasFragmentByClass(UItemFragment_Durability::StaticClass()));
 	}
 	else if (Parameters == TEXT("WoodArrow"))
 	{

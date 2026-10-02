@@ -3,6 +3,7 @@
 #include "Inventory/InventoryComponent.h"
 #include "Items/ItemDefinition.h"
 #include "TimerManager.h"
+#include "ToolLoadout/ToolLoadoutComponent.h"
 
 namespace
 {
@@ -22,10 +23,24 @@ void AResourceNodeActor::BeginPlay()
 
 bool AResourceNodeActor::BeginGatherFromInteractor(AActor* Interactor)
 {
-	if (IsGathering() || IsDepleted() || !IsValid(Interactor) || !IsOutputDefinitionUsable()
-		|| !IsValid(ResolveInventoryForInteractor(Interactor)))
+	if (IsGathering() || IsDepleted() || !IsValid(Interactor) || !IsOutputDefinitionUsable())
 	{
 		return false;
+	}
+
+	UInventoryComponent* Inventory = ResolveInventoryForInteractor(Interactor);
+	if (!IsValid(Inventory))
+	{
+		return false;
+	}
+
+	if (RequiredToolType != EToolType::None)
+	{
+		UToolLoadoutComponent* ToolLoadout = ResolveToolLoadoutForInteractor(Interactor);
+		if (!IsValid(ToolLoadout) || !ToolLoadout->HasEquippedTool(RequiredToolType))
+		{
+			return false;
+		}
 	}
 
 	CancelActiveGatherForInteractor(Interactor);
@@ -95,6 +110,11 @@ float AResourceNodeActor::GetNormalizedGatherProgress() const
 UInventoryComponent* AResourceNodeActor::ResolveInventoryForInteractor(AActor* Interactor) const
 {
 	return IsValid(Interactor) ? Interactor->FindComponentByClass<UInventoryComponent>() : nullptr;
+}
+
+UToolLoadoutComponent* AResourceNodeActor::ResolveToolLoadoutForInteractor(AActor* Interactor) const
+{
+	return IsValid(Interactor) ? Interactor->FindComponentByClass<UToolLoadoutComponent>() : nullptr;
 }
 
 bool AResourceNodeActor::ScheduleGatherCompletion()

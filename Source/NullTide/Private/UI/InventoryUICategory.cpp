@@ -11,6 +11,7 @@
 #include "Items/Fragments/ItemFragment_Food.h"
 #include "Items/Fragments/ItemFragment_Healing.h"
 #include "Items/Fragments/ItemFragment_Resource.h"
+#include "Items/Fragments/ItemFragment_Tool.h"
 #include "Items/Fragments/ItemFragment_Weapon.h"
 
 namespace
@@ -130,6 +131,10 @@ FText UInventoryUIFunctionLibrary::BuildCapabilitySummary(const TSubclassOf<UIte
 	if (const auto* Equippable = Cast<UItemFragment_Equippable>(Definition->FindFragmentByClass(UItemFragment_Equippable::StaticClass())))
 	{
 		Lines.Add(EquipmentSlotName(Equippable->EquipmentSlot));
+	}
+	if (const auto* Tool = Cast<UItemFragment_Tool>(Definition->FindFragmentByClass(UItemFragment_Tool::StaticClass())))
+	{
+		Lines.Add(Tool->ToolType == EToolType::Axe ? TEXT("Tool: Axe") : Tool->ToolType == EToolType::Pickaxe ? TEXT("Tool: Pickaxe") : TEXT("Tool: Unspecified"));
 	}
 
 	return FText::FromString(FString::Join(Lines, TEXT("\n")));

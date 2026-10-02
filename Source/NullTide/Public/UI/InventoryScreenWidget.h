@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Items/Fragments/ItemFragmentTypes.h"
 #include "UI/InventoryUICategory.h"
 #include "InventoryScreenWidget.generated.h"
 
@@ -12,6 +13,7 @@ class UImage;
 class UInventoryComponent;
 class UInventoryDragDropOperation;
 class UInventorySlotWidget;
+class UToolLoadoutComponent;
 class UTextBlock;
 class UWrapBox;
 enum class EInventoryUIDropResult : uint8;
@@ -82,6 +84,27 @@ protected:
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> FooterCount;
 
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UImage> AxeToolIcon;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> AxeToolName;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UImage> PickaxeToolIcon;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> PickaxeToolName;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UButton> EquipToolButton;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UButton> UnequipToolButton;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> ToolActionText;
+
 	UPROPERTY(EditDefaultsOnly, Category = "Inventory|UI")
 	TSubclassOf<UInventorySlotWidget> SlotWidgetClass;
 
@@ -94,6 +117,12 @@ private:
 
 	UFUNCTION()
 	void HandleSlotSelected(FGuid ItemId);
+
+	UFUNCTION()
+	void EquipSelectedTool();
+
+	UFUNCTION()
+	void UnequipSelectedTool();
 
 	UFUNCTION()
 	void CloseInventory();
@@ -119,6 +148,9 @@ private:
 	void SetActiveCategory(EInventoryCategory NewCategory);
 	void RefreshDetails();
 	void ClearDetails();
+	void RefreshToolLoadout();
+	void RefreshToolSlot(EToolType ToolType, UImage* Icon, UTextBlock* Name);
+	EToolType GetSelectedToolType() const;
 	void RefreshTabVisuals();
 	bool IsVisibleInActiveCategory(const UItemInstance* Item) const;
 	bool IsScreenPositionInsideInventoryWindow(FVector2D ScreenPosition) const;
@@ -126,6 +158,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInventoryComponent> ObservedInventory;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UToolLoadoutComponent> ObservedToolLoadout;
 
 	UPROPERTY(Transient)
 	TObjectPtr<AController> ObservedController;

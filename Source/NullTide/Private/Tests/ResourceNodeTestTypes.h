@@ -9,10 +9,12 @@ class AResourceNodeTestActor : public AResourceNodeActor
 	GENERATED_BODY()
 
 public:
-	void Configure(TSubclassOf<UItemDefinition> InOutputDefinition, int32 InMaxYield)
+	void Configure(TSubclassOf<UItemDefinition> InOutputDefinition, int32 InMaxYield,
+		EToolType InRequiredToolType = EToolType::None)
 	{
 		OutputItemDefinition = InOutputDefinition;
 		MaxYield = InMaxYield;
+		RequiredToolType = InRequiredToolType;
 		RemainingYield = FMath::Max(0, InMaxYield);
 		GatherState = RemainingYield > 0 ? EResourceNodeState::Idle : EResourceNodeState::Depleted;
 	}

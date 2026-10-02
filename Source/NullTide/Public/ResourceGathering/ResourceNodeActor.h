@@ -2,10 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Items/Fragments/ItemFragmentTypes.h"
 #include "ResourceNodeActor.generated.h"
 
 class UInventoryComponent;
 class UItemDefinition;
+class UToolLoadoutComponent;
 
 UENUM(BlueprintType)
 enum class EResourceNodeState : uint8
@@ -56,12 +58,16 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Resource Gathering")
 	float GetGatherDuration() const { return GatherDuration; }
 
+	UFUNCTION(BlueprintPure, Category = "Resource Gathering")
+	EToolType GetRequiredToolType() const { return RequiredToolType; }
+
 	/** Read-only progress for a future UI. This actor does not tick for progress. */
 	UFUNCTION(BlueprintPure, Category = "Resource Gathering")
 	float GetNormalizedGatherProgress() const;
 
 protected:
 	virtual UInventoryComponent* ResolveInventoryForInteractor(AActor* Interactor) const;
+	virtual UToolLoadoutComponent* ResolveToolLoadoutForInteractor(AActor* Interactor) const;
 	virtual bool ScheduleGatherCompletion();
 	virtual void CompleteGather();
 
@@ -76,6 +82,10 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Resource Gathering", meta = (ClampMin = "0.01"))
 	float GatherDuration = 2.0f;
+
+	/** None preserves generic gathering; non-None requires the matching exact inventory tool assignment. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Resource Gathering")
+	EToolType RequiredToolType = EToolType::None;
 
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Resource Gathering", meta = (AllowPrivateAccess = "true"))
 	EResourceNodeState GatherState = EResourceNodeState::Idle;

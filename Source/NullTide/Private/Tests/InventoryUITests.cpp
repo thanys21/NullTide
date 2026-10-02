@@ -28,6 +28,8 @@ const FInventoryUICatalogCase Cases[] = {
 	{ TEXT("Wood"), EInventoryCategory::Resource, TEXT("Type: Wood") },
 	{ TEXT("Sandwich"), EInventoryCategory::Consumable, TEXT("Hunger: 30") },
 	{ TEXT("Stone"), EInventoryCategory::Resource, TEXT("Type: Stone") },
+	{ TEXT("Axe"), EInventoryCategory::Misc, TEXT("Tool: Axe") },
+	{ TEXT("Pickaxe"), EInventoryCategory::Misc, TEXT("Tool: Pickaxe") },
 	{ TEXT("Meat"), EInventoryCategory::Consumable, TEXT("Hunger: 20") },
 	{ TEXT("LongSword"), EInventoryCategory::Weapon, TEXT("Durability: 150") },
 	{ TEXT("WoodBow"), EInventoryCategory::Weapon, TEXT("Range: 800") },

@@ -11,7 +11,9 @@
 #include "GameFramework/PlayerController.h"
 #include "Inventory/InventoryComponent.h"
 #include "Items/ItemDefinition.h"
+#include "Items/Fragments/ItemFragment_Tool.h"
 #include "Items/ItemInstance.h"
+#include "ToolLoadout/ToolLoadoutComponent.h"
 #include "UI/InventoryDragDropOperation.h"
 #include "UI/InventorySlotWidget.h"
 
@@ -39,6 +41,7 @@ void UInventoryScreenWidget::NativeDestruct()
 	}
 	ObservedController = nullptr;
 	ObservedPawn = nullptr;
+	ObservedToolLoadout = nullptr;
 	SelectedItemId.Invalidate();
 	Super::NativeDestruct();
 }
@@ -48,7 +51,8 @@ void UInventoryScreenWidget::NativeTick(const FGeometry& MyGeometry, const float
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	APawn* CurrentPawn = GetOwningPlayerPawn();
 	UInventoryComponent* CurrentInventory = CurrentPawn ? CurrentPawn->FindComponentByClass<UInventoryComponent>() : nullptr;
-	if (CurrentPawn != ObservedPawn || CurrentInventory != ObservedInventory)
+	UToolLoadoutComponent* CurrentToolLoadout = CurrentPawn ? CurrentPawn->FindComponentByClass<UToolLoadoutComponent>() : nullptr;
+	if (CurrentPawn != ObservedPawn || CurrentInventory != ObservedInventory || CurrentToolLoadout != ObservedToolLoadout)
 	{
 		RebindToPawn(CurrentPawn);
 	}
@@ -128,6 +132,7 @@ void UInventoryScreenWidget::RebuildInventoryView()
 		FooterCount->SetText(FText::FromString(FString::Printf(TEXT("%d shown  |  %d total  |  24 slots"), VisibleCount, TotalCount)));
 	}
 	RefreshDetails();
+	RefreshToolLoadout();
 	RefreshTabVisuals();
 }
 
@@ -169,6 +174,7 @@ void UInventoryScreenWidget::HandleSlotSelected(const FGuid ItemId)
 		}
 	}
 	RefreshDetails();
+	RefreshToolLoadout();
 }
 
 void UInventoryScreenWidget::CloseInventory()
@@ -195,6 +201,8 @@ void UInventoryScreenWidget::BindControls()
 	if (TabConsumableButton) TabConsumableButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ShowConsumables);
 	if (TabWeaponButton) TabWeaponButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ShowWeapons);
 	if (TabAmmoButton) TabAmmoButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ShowAmmo);
+	if (EquipToolButton) EquipToolButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::EquipSelectedTool);
+	if (UnequipToolButton) UnequipToolButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::UnequipSelectedTool);
 }
 
 void UInventoryScreenWidget::RebindToPawn(APawn* Pawn)
@@ -206,6 +214,7 @@ void UInventoryScreenWidget::RebindToPawn(APawn* Pawn)
 	ReleaseInventoryBinding();
 	ObservedPawn = Pawn;
 	ObservedInventory = Pawn ? Pawn->FindComponentByClass<UInventoryComponent>() : nullptr;
+	ObservedToolLoadout = Pawn ? Pawn->FindComponentByClass<UToolLoadoutComponent>() : nullptr;
 	if (ObservedInventory)
 	{
 		ObservedInventory->OnInventoryChanged.AddUniqueDynamic(this, &UInventoryScreenWidget::HandleNativeInventoryChanged);
@@ -220,6 +229,7 @@ void UInventoryScreenWidget::ReleaseInventoryBinding()
 		ObservedInventory->OnInventoryChanged.RemoveDynamic(this, &UInventoryScreenWidget::HandleNativeInventoryChanged);
 	}
 	ObservedInventory = nullptr;
+	ObservedToolLoadout = nullptr;
 }
 
 void UInventoryScreenWidget::SetActiveCategory(const EInventoryCategory NewCategory)
@@ -360,6 +370,90 @@ void UInventoryScreenWidget::ClearDetails()
 	if (DetailsItemDescription) DetailsItemDescription->SetText(FText::FromString(TEXT("Item details appear here.")));
 	if (DetailsCategory) DetailsCategory->SetText(FText::GetEmpty());
 	if (CapabilitySummary) CapabilitySummary->SetText(FText::GetEmpty());
+}
+
+void UInventoryScreenWidget::RefreshToolLoadout()
+{
+	RefreshToolSlot(EToolType::Axe, AxeToolIcon, AxeToolName);
+	RefreshToolSlot(EToolType::Pickaxe, PickaxeToolIcon, PickaxeToolName);
+
+	const EToolType SelectedToolType = GetSelectedToolType();
+	const bool bCanEquip = ObservedToolLoadout && SelectedToolType != EToolType::None;
+	const UItemInstance* EquippedItem = bCanEquip ? ObservedToolLoadout->GetEquippedTool(SelectedToolType) : nullptr;
+	const bool bCanUnequip = EquippedItem && EquippedItem->GetInstanceId() == SelectedItemId;
+	if (EquipToolButton) EquipToolButton->SetIsEnabled(bCanEquip);
+	if (UnequipToolButton) UnequipToolButton->SetIsEnabled(bCanUnequip);
+	if (ToolActionText)
+	{
+		if (!ObservedToolLoadout)
+		{
+			ToolActionText->SetText(FText::FromString(TEXT("Tool loadout unavailable.")));
+		}
+		else if (SelectedToolType == EToolType::None)
+		{
+			ToolActionText->SetText(FText::FromString(TEXT("Select an Axe or Pickaxe to manage its slot.")));
+		}
+		else if (bCanUnequip)
+		{
+			ToolActionText->SetText(FText::FromString(TEXT("Selected tool is equipped.")));
+		}
+		else
+		{
+			ToolActionText->SetText(FText::FromString(SelectedToolType == EToolType::Axe
+				? TEXT("Selected Axe can fill the Axe slot.")
+				: TEXT("Selected Pickaxe can fill the Pickaxe slot.")));
+		}
+	}
+}
+
+void UInventoryScreenWidget::RefreshToolSlot(const EToolType ToolType, UImage* Icon, UTextBlock* Name)
+{
+	UItemInstance* Item = ObservedToolLoadout ? ObservedToolLoadout->GetEquippedTool(ToolType) : nullptr;
+	const UItemDefinition* Definition = Item ? UInventoryUIFunctionLibrary::GetDefinition(Item->GetDefinitionClass()) : nullptr;
+	if (Icon) Icon->SetBrushFromTexture(Definition ? Definition->ItemIcon.Get() : nullptr, true);
+	if (Name)
+	{
+		const FString SlotName = ToolType == EToolType::Axe ? TEXT("Axe") : TEXT("Pickaxe");
+		Name->SetText(FText::FromString(Definition
+			? FString::Printf(TEXT("%s\n%s"), *SlotName, *Definition->ItemName.ToString())
+			: FString::Printf(TEXT("%s\nEmpty"), *SlotName)));
+	}
+}
+
+EToolType UInventoryScreenWidget::GetSelectedToolType() const
+{
+	const UItemInstance* Item = ObservedInventory && SelectedItemId.IsValid()
+		? ObservedInventory->FindItemById(SelectedItemId)
+		: nullptr;
+	const UItemDefinition* Definition = Item ? UInventoryUIFunctionLibrary::GetDefinition(Item->GetDefinitionClass()) : nullptr;
+	const UItemFragment_Tool* Tool = Definition
+		? Cast<UItemFragment_Tool>(Definition->FindFragmentByClass(UItemFragment_Tool::StaticClass()))
+		: nullptr;
+	return Tool ? Tool->ToolType : EToolType::None;
+}
+
+void UInventoryScreenWidget::EquipSelectedTool()
+{
+	const EToolType ToolType = GetSelectedToolType();
+	if (ObservedToolLoadout && ToolType != EToolType::None && SelectedItemId.IsValid())
+	{
+		ObservedToolLoadout->EquipTool(ToolType, SelectedItemId);
+	}
+	RefreshToolLoadout();
+}
+
+void UInventoryScreenWidget::UnequipSelectedTool()
+{
+	const EToolType ToolType = GetSelectedToolType();
+	if (ObservedToolLoadout && ToolType != EToolType::None)
+	{
+		if (const UItemInstance* EquippedItem = ObservedToolLoadout->GetEquippedTool(ToolType);
+			EquippedItem && EquippedItem->GetInstanceId() == SelectedItemId)
+		{
+			ObservedToolLoadout->UnequipTool(ToolType);
+		}
+	}
+	RefreshToolLoadout();
 }
 
 void UInventoryScreenWidget::RefreshTabVisuals()

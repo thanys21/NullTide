@@ -14,7 +14,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 namespace
 {
-UClass* LoadProductionDefinition(const TCHAR* Id)
+UClass* LoadProductionToolDefinition(const TCHAR* Id)
 {
 	const FString Path = FString::Printf(
 		TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_%s.Item_%s_C"), Id, Id);
@@ -46,8 +46,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FToolLoadoutIdentityAndStaleSlotTest::RunTest(const FString& Parameters)
 {
 	FToolLoadoutTestFixture Fixture;
-	UClass* AxeClass = LoadProductionDefinition(TEXT("Axe"));
-	UClass* PickaxeClass = LoadProductionDefinition(TEXT("Pickaxe"));
+	UClass* AxeClass = LoadProductionToolDefinition(TEXT("Axe"));
+	UClass* PickaxeClass = LoadProductionToolDefinition(TEXT("Pickaxe"));
 	if (!TestTrue(TEXT("Production tool definitions load"), AxeClass && PickaxeClass))
 	{
 		return false;
@@ -81,8 +81,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FResourceNodeToolRequirementTest::RunTest(const FString& Parameters)
 {
-	UClass* AxeClass = LoadProductionDefinition(TEXT("Axe"));
-	UClass* PickaxeClass = LoadProductionDefinition(TEXT("Pickaxe"));
+	UClass* AxeClass = LoadProductionToolDefinition(TEXT("Axe"));
+	UClass* PickaxeClass = LoadProductionToolDefinition(TEXT("Pickaxe"));
 	if (!TestTrue(TEXT("Production tool definitions load"), AxeClass && PickaxeClass))
 	{
 		return false;

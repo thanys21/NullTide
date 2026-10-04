@@ -97,6 +97,17 @@ AResourceNodeActor* AResourceNodeActor::FindActiveGatherNodeForInteractor(const 
 	return IsValid(Node) ? Node : nullptr;
 }
 
+bool AResourceNodeActor::ShouldShowInteractionPromptFor(const AActor* Interactable)
+{
+	if (!IsValid(Interactable))
+	{
+		return false;
+	}
+
+	const AResourceNodeActor* ResourceNode = Cast<AResourceNodeActor>(Interactable);
+	return !ResourceNode || !ResourceNode->IsDepleted();
+}
+
 float AResourceNodeActor::GetNormalizedGatherProgress() const
 {
 	if (!IsGathering() || GatherDuration <= 0.0f)

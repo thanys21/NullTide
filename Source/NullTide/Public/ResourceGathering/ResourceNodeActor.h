@@ -43,6 +43,10 @@ public:
 	/** Read-only lookup used by the player presentation component. */
 	static AResourceNodeActor* FindActiveGatherNodeForInteractor(const AActor* Interactor);
 
+	/** Presentation-only predicate: depleted resource nodes should not advertise an interaction prompt. */
+	UFUNCTION(BlueprintPure, Category = "Resource Gathering")
+	static bool ShouldShowInteractionPromptFor(const AActor* Interactable);
+
 	UFUNCTION(BlueprintPure, Category = "Resource Gathering")
 	EResourceNodeState GetGatherState() const { return GatherState; }
 
@@ -54,6 +58,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Resource Gathering")
 	int32 GetRemainingYield() const { return RemainingYield; }
+
+	UFUNCTION(BlueprintPure, Category = "Resource Gathering")
+	int32 GetMaxYield() const { return MaxYield; }
+
+	UFUNCTION(BlueprintPure, Category = "Resource Gathering")
+	TSubclassOf<UItemDefinition> GetOutputItemDefinition() const { return OutputItemDefinition; }
 
 	UFUNCTION(BlueprintPure, Category = "Resource Gathering")
 	float GetGatherDuration() const { return GatherDuration; }

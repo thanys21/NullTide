@@ -100,7 +100,7 @@ protected:
 	TObjectPtr<UButton> EquipToolButton;
 
 	UPROPERTY(meta = (BindWidgetOptional))
-	TObjectPtr<UButton> UnequipToolButton;
+	TObjectPtr<UTextBlock> ToolActionButtonText;
 
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> ToolActionText;
@@ -119,10 +119,7 @@ private:
 	void HandleSlotSelected(FGuid ItemId);
 
 	UFUNCTION()
-	void EquipSelectedTool();
-
-	UFUNCTION()
-	void UnequipSelectedTool();
+	void ExecuteSelectedToolAction();
 
 	UFUNCTION()
 	void CloseInventory();

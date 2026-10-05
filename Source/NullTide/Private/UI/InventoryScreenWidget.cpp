@@ -201,8 +201,7 @@ void UInventoryScreenWidget::BindControls()
 	if (TabConsumableButton) TabConsumableButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ShowConsumables);
 	if (TabWeaponButton) TabWeaponButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ShowWeapons);
 	if (TabAmmoButton) TabAmmoButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ShowAmmo);
-	if (EquipToolButton) EquipToolButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::EquipSelectedTool);
-	if (UnequipToolButton) UnequipToolButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::UnequipSelectedTool);
+	if (EquipToolButton) EquipToolButton->OnClicked.AddUniqueDynamic(this, &UInventoryScreenWidget::ExecuteSelectedToolAction);
 }
 
 void UInventoryScreenWidget::RebindToPawn(APawn* Pawn)
@@ -380,9 +379,12 @@ void UInventoryScreenWidget::RefreshToolLoadout()
 	const EToolType SelectedToolType = GetSelectedToolType();
 	const bool bCanEquip = ObservedToolLoadout && SelectedToolType != EToolType::None;
 	const UItemInstance* EquippedItem = bCanEquip ? ObservedToolLoadout->GetEquippedTool(SelectedToolType) : nullptr;
-	const bool bCanUnequip = EquippedItem && EquippedItem->GetInstanceId() == SelectedItemId;
+	const bool bSelectedToolIsEquipped = EquippedItem && EquippedItem->GetInstanceId() == SelectedItemId;
 	if (EquipToolButton) EquipToolButton->SetIsEnabled(bCanEquip);
-	if (UnequipToolButton) UnequipToolButton->SetIsEnabled(bCanUnequip);
+	if (ToolActionButtonText)
+	{
+		ToolActionButtonText->SetText(FText::FromString(bSelectedToolIsEquipped ? TEXT("Unequip Tool") : TEXT("Equip Tool")));
+	}
 	if (ToolActionText)
 	{
 		if (!ObservedToolLoadout)
@@ -393,7 +395,7 @@ void UInventoryScreenWidget::RefreshToolLoadout()
 		{
 			ToolActionText->SetText(FText::FromString(TEXT("Select an Axe or Pickaxe to manage its slot.")));
 		}
-		else if (bCanUnequip)
+		else if (bSelectedToolIsEquipped)
 		{
 			ToolActionText->SetText(FText::FromString(TEXT("Selected tool is equipped.")));
 		}
@@ -432,25 +434,19 @@ EToolType UInventoryScreenWidget::GetSelectedToolType() const
 	return Tool ? Tool->ToolType : EToolType::None;
 }
 
-void UInventoryScreenWidget::EquipSelectedTool()
+void UInventoryScreenWidget::ExecuteSelectedToolAction()
 {
 	const EToolType ToolType = GetSelectedToolType();
 	if (ObservedToolLoadout && ToolType != EToolType::None && SelectedItemId.IsValid())
-	{
-		ObservedToolLoadout->EquipTool(ToolType, SelectedItemId);
-	}
-	RefreshToolLoadout();
-}
-
-void UInventoryScreenWidget::UnequipSelectedTool()
-{
-	const EToolType ToolType = GetSelectedToolType();
-	if (ObservedToolLoadout && ToolType != EToolType::None)
 	{
 		if (const UItemInstance* EquippedItem = ObservedToolLoadout->GetEquippedTool(ToolType);
 			EquippedItem && EquippedItem->GetInstanceId() == SelectedItemId)
 		{
 			ObservedToolLoadout->UnequipTool(ToolType);
+		}
+		else
+		{
+			ObservedToolLoadout->EquipTool(ToolType, SelectedItemId);
 		}
 	}
 	RefreshToolLoadout();

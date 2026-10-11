@@ -54,10 +54,38 @@ Quantity queries (C2), ingredient consumption (C3), outputs (C4), `UCraftingComp
 7. No rendered PIE: C1 has no gameplay-visible behaviour.
 8. Update `CRAFTING_PROGRESS.md`, `NULLTIDE_MASTER_PLAN.md`, `CLAUDE.md`; commit; stop for review.
 
+## C2 - Inventory Quantity Queries
+
+Baseline: `08ed028` (C1 approved). Read-only checkpoint: nothing is consumed or added.
+
+### Decisions
+
+| Decision | Choice | Reason |
+| --- | --- | --- |
+| Dependency direction | `UInventoryComponent` stays generic and never includes crafting types. Recipe queries live in a crafting-side `UCraftingQueryLibrary` that calls the generic inventory queries. | User rule: inventory is generic authority. |
+| One capacity algorithm | `TryAddDefinitionQuantity` and the new add queries share one private `PreflightAdd` that wraps the existing `FInventoryStacking::BuildAddPlan`. | No second stack simulation. |
+| Query result type | Queries return `FInventoryOperationResult` with the same reason codes as the `Try*` calls. New code `InsufficientQuantity` (appended to the enum) reports a short total. | Same shape as existing APIs; callers can tell "not enough" from other failures. |
+| Multiple recipe outputs | A generic batch query `CanAddDefinitionQuantities` checks all outputs together: per-definition merges plus the sum of new stacks against free slots. Duplicate definitions are summed first. | Checking each output alone can say "fits" when two outputs compete for the last free slot. |
+| Ingredient/output overlap | C2 output capacity is checked against the current inventory, before any consumption. This is conservative: consumption can only free space, so a "fits" answer stays true after consumption, but a full inventory may be rejected even though consuming the ingredients would make room. The exact remove-then-add check belongs to the C3/C4 transaction preflight. | Avoid locking in a check that could approve a craft that later loses ingredients. |
+| Busy state | Queries do not report `Busy`; they describe contents and capacity. `NotInitialized` is reported when native authority is inactive, as the `Try*` calls do. | Queries are side-effect free and may run inside change handlers. |
+
+### In scope
+
+1. `UInventoryComponent` (generic):
+   - `GetTotalQuantity(DefinitionClass)`: sum of `Quantity` over stacks of exactly that class; `0` for null or unknown classes.
+   - `CanRemoveDefinitionQuantity(DefinitionClass, Quantity)`: `InvalidQuantity` for `< 1`, `InvalidDefinition` for null, `InsufficientQuantity` when the total is short, otherwise `Success`.
+   - `CanAddDefinitionQuantity(DefinitionClass, Quantity)`: same validation and capacity result as `TryAddDefinitionQuantity`, without committing.
+   - `CanAddDefinitionQuantities(Requests)`: batch form using the new `FInventoryDefinitionQuantity` struct.
+2. `UCraftingQueryLibrary` (crafting side): `CheckRecipeIngredients` and `CheckRecipeOutputCapacity`, returning `FCraftingQueryResult` (reason, failing ingredient index, underlying inventory result).
+3. Automation `NullTide.Crafting.C2.*` covering every case in the C2 request, each proving contents, revision and change events are unchanged.
+
+### Out of scope
+
+Consuming ingredients, adding outputs, any craft transaction, `UCraftingComponent`, UI, C3.
+
 ## Later Checkpoints (summary)
 
-- **C2** `UInventoryComponent` quantity queries: total quantity per definition across stacks, can-consume and can-add-outputs checks.
-- **C3/C4** One atomic craft transaction: preflight ingredients and output capacity, consume stacks in inventory order, add outputs through the stacking authority, one coherent revision/event.
+- **C3/C4** One atomic craft transaction: preflight ingredients and output capacity, consume stacks in inventory order, add outputs through the stacking authority, one coherent revision/event. Must resolve the five transaction-design issues recorded under C2 in `CRAFTING_PROGRESS.md`: exact post-removal output simulation, one batch commit with one revision/event, a remove-by-definition commit inside the inventory, preflight re-run inside the mutation guard, and an explicit choice about exact-class matching.
 - **C5** `UCraftingComponent` as the single crafting authority.
 - **C6** Minimal crafting UI that only observes authority state.
 - **C7** Timed crafting; choose reserve-at-start or consume-at-completion before implementing.

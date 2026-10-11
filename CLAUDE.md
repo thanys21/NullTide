@@ -46,7 +46,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Inventory.{M1..M6,G7,Stacking}`
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
-- `NullTide.Crafting.{C1}`
+- `NullTide.Crafting.{C1,C2}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -71,6 +71,8 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - Every operation is a `Try*` call (add, remove, quantity, drop to world, transfer to storage). Each one returns a result struct with a reason code from `InventoryTypes.h` and is atomic. Failures roll back, for example a world drop spawns the pickup first and only removes the item if the spawn succeeded.
 - Each successful change increments `Revision` and broadcasts `OnInventoryChanged`.
 - UI and other callers read data through `GetItemsSnapshot`. They never mutate items locally.
+- Read-only queries (`GetTotalQuantity`, `CanRemoveDefinitionQuantity`, `CanAddDefinitionQuantity`, `CanAddDefinitionQuantities`) return the same reason codes as the `Try*` calls and never change `Revision` or broadcast. Add commits and add queries share one private `PreflightAdd`; do not add a second capacity algorithm.
+- The inventory stays generic: it must not include or depend on crafting types.
 - Stack planning lives in the private `InventoryStacking.*` files.
 
 **Legacy compatibility (`Compatibility/`, `Inventory/LegacyInventoryStorage.*`)**
@@ -91,7 +93,8 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 **Crafting (`Crafting/`)**
 - `UCraftingRecipeDefinition` is an abstract, const UObject, the same pattern as `UItemDefinition`. Each recipe is a data-only Blueprint subclass in `Content/LevelPrototyping/CraftingSystem/Recipes/Recipe_*`, referenced by `TSubclassOf` and read from its class default object.
 - A recipe has `Ingredients` and `Outputs` (`FCraftingItemQuantity`: item definition class + quantity) and `CraftDuration`. `ValidateRecipe` returns an indexed diagnostic, and `IsDataValid` reports the same error in the editor.
-- Recipes hold static data only. Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. Consumption, a crafting authority and UI come in later checkpoints.
+- Recipes hold static data only. Recipe-specific inventory checks live in `UCraftingQueryLibrary` (read-only ingredient and output-capacity checks built on the generic inventory queries). Its output check runs before consumption, so it is conservative.
+- Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. Consumption, a crafting authority and UI come in later checkpoints.
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

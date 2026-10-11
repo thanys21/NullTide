@@ -219,47 +219,15 @@ FInventoryOperationResult UInventoryComponent::TryAddDefinitionQuantity(
 	{
 		return MakeInventoryResult(EInventoryOperationResult::Busy);
 	}
-	if (Quantity < 1)
-	{
-		return MakeInventoryResult(EInventoryOperationResult::InvalidQuantity);
-	}
 
 	TGuardValue<bool> MutationGuard(bMutationInProgress, true);
-	UClass* DefinitionUClass = DefinitionClass.Get();
-	if (!DefinitionUClass || DefinitionUClass->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
-	{
-		return MakeInventoryResult(EInventoryOperationResult::InvalidDefinition);
-	}
-
-	const UItemDefinition* Definition = Cast<UItemDefinition>(DefinitionUClass->GetDefaultObject());
-	if (!Definition)
-	{
-		return MakeInventoryResult(EInventoryOperationResult::InvalidDefinition);
-	}
-
-	if (!IsDefinitionDataValid(Definition))
-	{
-		return MakeInventoryResult(EInventoryOperationResult::InvalidDefinitionData);
-	}
-
+	FInventoryStackPlan StackPlan;
 	FArrayProperty* ProjectionArray = nullptr;
 	FClassProperty* ProjectionClass = nullptr;
-	if (InitializationState == EInventoryInitializationState::NativeReady)
+	const EInventoryOperationResult Preflight = PreflightAdd(DefinitionClass, Quantity, StackPlan, ProjectionArray, ProjectionClass);
+	if (Preflight != EInventoryOperationResult::Success)
 	{
-		if (!LegacyInventoryStorage::FindArray(this, ProjectionArray, ProjectionClass))
-		{
-			return MakeInventoryResult(EInventoryOperationResult::NotInitialized);
-		}
-		if (!DefinitionUClass->IsChildOf(ProjectionClass->MetaClass))
-		{
-			return MakeInventoryResult(EInventoryOperationResult::InvalidDefinition);
-		}
-	}
-
-	FInventoryStackPlan StackPlan;
-	if (!FInventoryStacking::BuildAddPlan(Items, Capacity, DefinitionClass, Quantity, StackPlan))
-	{
-		return MakeInventoryResult(EInventoryOperationResult::CapacityFull);
+		return MakeInventoryResult(Preflight);
 	}
 
 	TSet<FGuid> ReservedIds;
@@ -476,6 +444,129 @@ bool UInventoryComponent::ContainsItem(FGuid ItemId) const
 	return FindItemById(ItemId) != nullptr;
 }
 
+int32 UInventoryComponent::GetTotalQuantity(TSubclassOf<UItemDefinition> DefinitionClass) const
+{
+	if (!DefinitionClass)
+	{
+		return 0;
+	}
+	int64 Total = 0;
+	for (const UItemInstance* Item : Items)
+	{
+		if (IsValid(Item) && Item->GetDefinitionClass() == DefinitionClass)
+		{
+			Total += Item->GetQuantity();
+		}
+	}
+	return static_cast<int32>(FMath::Min<int64>(Total, MAX_int32));
+}
+
+FInventoryOperationResult UInventoryComponent::CanRemoveDefinitionQuantity(
+	TSubclassOf<UItemDefinition> DefinitionClass,
+	const int32 Quantity) const
+{
+	if (!CanOperate())
+	{
+		return MakeInventoryResult(EInventoryOperationResult::NotInitialized);
+	}
+	if (Quantity < 1)
+	{
+		return MakeInventoryResult(EInventoryOperationResult::InvalidQuantity);
+	}
+	if (!DefinitionClass)
+	{
+		return MakeInventoryResult(EInventoryOperationResult::InvalidDefinition);
+	}
+	FArrayProperty* ProjectionArray = nullptr;
+	FClassProperty* ProjectionClass = nullptr;
+	if (InitializationState == EInventoryInitializationState::NativeReady
+		&& !LegacyInventoryStorage::FindArray(this, ProjectionArray, ProjectionClass))
+	{
+		return MakeInventoryResult(EInventoryOperationResult::NotInitialized);
+	}
+	if (GetTotalQuantity(DefinitionClass) < Quantity)
+	{
+		return MakeInventoryResult(EInventoryOperationResult::InsufficientQuantity);
+	}
+	return MakeInventoryResult(EInventoryOperationResult::Success, nullptr, FGuid(), Quantity);
+}
+
+FInventoryOperationResult UInventoryComponent::CanAddDefinitionQuantity(
+	TSubclassOf<UItemDefinition> DefinitionClass,
+	const int32 Quantity) const
+{
+	if (!CanOperate())
+	{
+		return MakeInventoryResult(EInventoryOperationResult::NotInitialized);
+	}
+	FInventoryStackPlan StackPlan;
+	FArrayProperty* ProjectionArray = nullptr;
+	FClassProperty* ProjectionClass = nullptr;
+	const EInventoryOperationResult Preflight = PreflightAdd(DefinitionClass, Quantity, StackPlan, ProjectionArray, ProjectionClass);
+	return MakeInventoryResult(Preflight, nullptr, FGuid(), Preflight == EInventoryOperationResult::Success ? Quantity : 0);
+}
+
+FInventoryOperationResult UInventoryComponent::CanAddDefinitionQuantities(
+	const TArray<FInventoryDefinitionQuantity>& Requests) const
+{
+	if (!CanOperate())
+	{
+		return MakeInventoryResult(EInventoryOperationResult::NotInitialized);
+	}
+	if (Requests.IsEmpty())
+	{
+		return MakeInventoryResult(EInventoryOperationResult::InvalidQuantity);
+	}
+
+	// Merging only touches stacks of the same definition, so after summing duplicates the requests
+	// compete only for free slots.
+	TArray<TPair<TSubclassOf<UItemDefinition>, int64>> Combined;
+	for (const FInventoryDefinitionQuantity& Request : Requests)
+	{
+		if (Request.Quantity < 1)
+		{
+			return MakeInventoryResult(EInventoryOperationResult::InvalidQuantity);
+		}
+		TPair<TSubclassOf<UItemDefinition>, int64>* Existing = Combined.FindByPredicate(
+			[&Request](const TPair<TSubclassOf<UItemDefinition>, int64>& Entry) { return Entry.Key == Request.DefinitionClass; });
+		if (Existing)
+		{
+			Existing->Value += Request.Quantity;
+		}
+		else
+		{
+			Combined.Emplace(Request.DefinitionClass, Request.Quantity);
+		}
+	}
+
+	int64 TotalQuantity = 0;
+	int32 NewStacks = 0;
+	for (const TPair<TSubclassOf<UItemDefinition>, int64>& Entry : Combined)
+	{
+		if (Entry.Value > MAX_int32)
+		{
+			return MakeInventoryResult(EInventoryOperationResult::InvalidQuantity);
+		}
+		FInventoryStackPlan StackPlan;
+		FArrayProperty* ProjectionArray = nullptr;
+		FClassProperty* ProjectionClass = nullptr;
+		const int32 Quantity = static_cast<int32>(Entry.Value);
+		const EInventoryOperationResult Preflight = PreflightAdd(Entry.Key, Quantity, StackPlan, ProjectionArray, ProjectionClass);
+		if (Preflight != EInventoryOperationResult::Success)
+		{
+			return MakeInventoryResult(Preflight);
+		}
+		NewStacks += StackPlan.NewStackQuantities.Num();
+		TotalQuantity += Quantity;
+	}
+	if (Items.Num() + NewStacks > Capacity)
+	{
+		return MakeInventoryResult(EInventoryOperationResult::CapacityFull);
+	}
+	return MakeInventoryResult(EInventoryOperationResult::Success, nullptr, FGuid(),
+		static_cast<int32>(FMath::Min<int64>(TotalQuantity, MAX_int32)));
+}
+
 bool UInventoryComponent::CanOperate() const
 {
 	return !bLegacyInventoryMode
@@ -621,6 +712,57 @@ void UInventoryComponent::RebuildLegacyProjection(FArrayProperty* ArrayProperty,
 		Definitions.Add(Item->GetDefinitionClass());
 	}
 	LegacyInventoryStorage::WriteArray(this, ArrayProperty, ClassProperty, Definitions);
+}
+
+EInventoryOperationResult UInventoryComponent::PreflightAdd(
+	TSubclassOf<UItemDefinition> DefinitionClass,
+	const int32 Quantity,
+	FInventoryStackPlan& OutPlan,
+	FArrayProperty*& OutProjectionArray,
+	FClassProperty*& OutProjectionClass) const
+{
+	OutPlan = FInventoryStackPlan();
+	OutProjectionArray = nullptr;
+	OutProjectionClass = nullptr;
+	if (Quantity < 1)
+	{
+		return EInventoryOperationResult::InvalidQuantity;
+	}
+
+	UClass* DefinitionUClass = DefinitionClass.Get();
+	if (!DefinitionUClass || DefinitionUClass->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
+	{
+		return EInventoryOperationResult::InvalidDefinition;
+	}
+
+	const UItemDefinition* Definition = Cast<UItemDefinition>(DefinitionUClass->GetDefaultObject());
+	if (!Definition)
+	{
+		return EInventoryOperationResult::InvalidDefinition;
+	}
+
+	if (!IsDefinitionDataValid(Definition))
+	{
+		return EInventoryOperationResult::InvalidDefinitionData;
+	}
+
+	if (InitializationState == EInventoryInitializationState::NativeReady)
+	{
+		if (!LegacyInventoryStorage::FindArray(this, OutProjectionArray, OutProjectionClass))
+		{
+			return EInventoryOperationResult::NotInitialized;
+		}
+		if (!DefinitionUClass->IsChildOf(OutProjectionClass->MetaClass))
+		{
+			return EInventoryOperationResult::InvalidDefinition;
+		}
+	}
+
+	if (!FInventoryStacking::BuildAddPlan(Items, Capacity, DefinitionClass, Quantity, OutPlan))
+	{
+		return EInventoryOperationResult::CapacityFull;
+	}
+	return EInventoryOperationResult::Success;
 }
 
 bool UInventoryComponent::IsDefinitionDataValid(const UItemDefinition* Definition) const

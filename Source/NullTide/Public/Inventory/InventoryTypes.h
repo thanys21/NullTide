@@ -6,6 +6,7 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "InventoryTypes.generated.h"
 
+class UItemDefinition;
 class UItemInstance;
 class AActor;
 
@@ -28,7 +29,22 @@ enum class EInventoryOperationResult : uint8
 	InvalidQuantity,
 	CapacityFull,
 	NotInitialized,
-	Busy
+	Busy,
+	/** The inventory holds less than the requested total quantity. */
+	InsufficientQuantity
+};
+
+/** A definition and quantity requested from an inventory query. */
+USTRUCT(BlueprintType)
+struct NULLTIDE_API FInventoryDefinitionQuantity
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inventory")
+	TSubclassOf<UItemDefinition> DefinitionClass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inventory", meta = (ClampMin = "1"))
+	int32 Quantity = 1;
 };
 
 USTRUCT(BlueprintType)

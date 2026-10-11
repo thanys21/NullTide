@@ -5,7 +5,7 @@
 #include "UObject/UnrealType.h"
 
 bool LegacyInventoryStorage::FindArray(
-	UActorComponent* Inventory, FArrayProperty*& ArrayProperty, FClassProperty*& ClassProperty)
+	const UActorComponent* Inventory, FArrayProperty*& ArrayProperty, FClassProperty*& ClassProperty)
 {
 	ArrayProperty = FindFProperty<FArrayProperty>(Inventory->GetClass(), TEXT("InventoryItems"));
 	ClassProperty = ArrayProperty ? CastField<FClassProperty>(ArrayProperty->Inner) : nullptr;

@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Crafting C1 (Recipe Data Model) complete. Crafting C2 (Inventory Quantity Queries) is next.
+> **Current development state:** Crafting C2 (Inventory Quantity Queries) complete, awaiting review. Crafting C3 (Atomic Ingredient Consumption) is next.
 
 ---
 
@@ -791,9 +791,10 @@ Phase 2 Items & Inventory           ✅
 Phase 3 Resource Gathering          ✅
 Inventory Stacking                  ✅
 Crafting C1 Recipe Data Model       ✅
+Crafting C2 Quantity Queries        ✅ (awaiting review)
 
 NEXT:
-Crafting C2 Inventory Quantity Queries
+Crafting C3 Atomic Ingredient Consumption
 ```
 
 ---
@@ -908,6 +909,13 @@ GetTotalQuantity(Wood) = 28
 ```
 
 No UI dependency.
+
+Implemented (details in `CRAFTING_PROGRESS.md`):
+
+- Generic `UInventoryComponent` queries: `GetTotalQuantity`, `CanRemoveDefinitionQuantity`, `CanAddDefinitionQuantity`, `CanAddDefinitionQuantities`. The inventory never depends on crafting types.
+- `TryAddDefinitionQuantity` and the add queries share one preflight built on `FInventoryStacking::BuildAddPlan`.
+- Recipe queries live in `UCraftingQueryLibrary` (`CheckRecipeIngredients`, `CheckRecipeOutputCapacity`).
+- Output capacity is checked before consumption. This is conservative (never approves a craft that cannot fit) but can reject a full inventory that consumption would free. The exact check belongs to C3/C4.
 
 ---
 
@@ -1374,25 +1382,25 @@ Do not implement without a dedicated milestone.
 
 # 15. Recommended Next Immediate Checkpoint
 
-## Crafting — C2 Inventory Quantity Queries
+## Crafting — C3 Atomic Ingredient Consumption
 
-C1 is complete (see `CRAFTING_PROGRESS.md`). C2 adds read-only quantity queries to the existing inventory authority.
+C2 is complete and awaiting review (see `CRAFTING_PROGRESS.md`). Start C3 only after C2 is approved.
 
 Claude/Codex instruction:
 
 ```text
-1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md.
-2. Add the C2 scope and decisions to CRAFTING_PLAN.md before coding.
-3. Add read-only queries to UInventoryComponent:
-   total quantity per definition across stacks,
-   can-consume recipe ingredients,
-   can-add recipe outputs (stack-aware capacity preflight).
-4. No mutation, no revision change, no event from queries.
-5. Do NOT consume inventory yet (C3).
-6. Do NOT build crafting UI yet (C6).
-7. Build + focused tests + regression + full suite + cook.
-8. Update CRAFTING_PROGRESS.md and this plan.
-9. STOP for review.
+1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md, especially the
+   C2 "Transaction-Design Issues for C3/C4".
+2. Agree the C3 scope with the user and record it in CRAFTING_PLAN.md
+   (C3 alone, or C3+C4 as one transaction).
+3. Keep UInventoryComponent generic: remove-by-definition and batch
+   commits take definitions and quantities, never recipes.
+4. Consume stacks in inventory order inside one mutation guard,
+   one revision, one event; re-run preflight inside the guard.
+5. Do NOT build crafting UI yet (C6).
+6. Build + focused tests + regression + full suite + cook.
+7. Update CRAFTING_PROGRESS.md and this plan.
+8. STOP for review.
 ```
 
 This keeps Crafting incremental and prevents inventory authority from becoming coupled to UI.
@@ -1431,15 +1439,15 @@ Only then advance the roadmap.
 
 # 17. Current Test Baseline
 
-At the completion of Crafting C1:
+At the completion of Crafting C2:
 
 ```text
-Focused Crafting C1                  4/4
-Regression Stacking + G1           20/20
-Full permanent suite             125/125
+Focused Crafting C2                       5/5
+Regression C1 + Stacking + M1           20/20
+Full permanent suite                  130/130
 ```
 
-Previous baseline (Inventory Stacking): Stacking 7/7, regression matrix 33/33, full 121/121.
+Previous baselines: Crafting C1 full 125/125; Inventory Stacking full 121/121.
 
 Future work must preserve these unless test totals intentionally increase.
 
@@ -1546,10 +1554,15 @@ Completed:
 - RG1-RG5
 - Inventory Stacking
 - Crafting C1 Recipe Data Model
+- Crafting C2 Inventory Quantity Queries (awaiting review)
 
 Current crafting:
 - UCraftingRecipeDefinition data-only Blueprint recipes, validated by ValidateRecipe
 - Recipe_Axe (Wood x3 + Stone x5 → Axe x1), Recipe_WoodArrow (Wood x1 → WoodArrow x5)
+- generic inventory queries: GetTotalQuantity, CanRemoveDefinitionQuantity,
+  CanAddDefinitionQuantity, CanAddDefinitionQuantities
+- UCraftingQueryLibrary: read-only ingredient / output-capacity checks
+  (output capacity checked before consumption: conservative)
 - no consumption, authority or UI yet
 
 Current inventory:
@@ -1578,12 +1591,12 @@ Current input:
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
-- Crafting C1 4/4
-- regression Stacking + G1 20/20
-- full 125/125
+- Crafting C2 5/5
+- regression C1 + Stacking + M1 20/20
+- full 130/130
 
 Next:
-Crafting C2 Inventory Quantity Queries.
+Crafting C3 Atomic Ingredient Consumption (after C2 review).
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1615,8 +1628,8 @@ Phase 3  Resource Gathering                 ✅
 
 Phase 4  Crafting                           ⏭ IN PROGRESS
          C1 Recipe Data Model               ✅
-         C2 Quantity Queries                ⏭ NEXT
-         C3 Atomic Ingredient Consumption
+         C2 Quantity Queries                ✅ (awaiting review)
+         C3 Atomic Ingredient Consumption   ⏭ NEXT
          C4 Outputs
          C5 Crafting Authority
          C6 Minimal Crafting UI

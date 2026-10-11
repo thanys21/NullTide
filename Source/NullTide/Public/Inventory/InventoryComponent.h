@@ -15,6 +15,7 @@ class AActor;
 class APawn;
 class FArrayProperty;
 class FClassProperty;
+struct FInventoryStackPlan;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnInventoryChanged, int32, NewRevision);
 
@@ -57,6 +58,22 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Inventory")
 	bool ContainsItem(FGuid ItemId) const;
+
+	/** Sums Quantity over every stack of exactly this definition class. Null or absent definitions return 0. */
+	UFUNCTION(BlueprintPure, Category = "Inventory|Queries")
+	int32 GetTotalQuantity(TSubclassOf<UItemDefinition> DefinitionClass) const;
+
+	/** Read-only: succeeds when the total quantity across stacks covers the request. Removes nothing. */
+	UFUNCTION(BlueprintPure, Category = "Inventory|Queries")
+	FInventoryOperationResult CanRemoveDefinitionQuantity(TSubclassOf<UItemDefinition> DefinitionClass, int32 Quantity) const;
+
+	/** Read-only: returns the result TryAddDefinitionQuantity would return for the current contents. Adds nothing. */
+	UFUNCTION(BlueprintPure, Category = "Inventory|Queries")
+	FInventoryOperationResult CanAddDefinitionQuantity(TSubclassOf<UItemDefinition> DefinitionClass, int32 Quantity) const;
+
+	/** Read-only: checks that every request fits at the same time. Requests for the same definition are summed. */
+	UFUNCTION(BlueprintPure, Category = "Inventory|Queries")
+	FInventoryOperationResult CanAddDefinitionQuantities(const TArray<FInventoryDefinitionQuantity>& Requests) const;
 
 	UFUNCTION(BlueprintPure, Category = "Inventory")
 	int32 GetItemCount() const { return Items.Num(); }
@@ -110,6 +127,9 @@ private:
 	friend class UStorageTransferLibrary;
 
 	bool CanOperate() const;
+	/** Shared add validation and stack plan used by both TryAddDefinitionQuantity and the add queries. */
+	EInventoryOperationResult PreflightAdd(TSubclassOf<UItemDefinition> DefinitionClass, int32 Quantity,
+		FInventoryStackPlan& OutPlan, FArrayProperty*& OutProjectionArray, FClassProperty*& OutProjectionClass) const;
 	bool IsDefinitionDataValid(const UItemDefinition* Definition) const;
 	bool HasItemId(const FGuid& ItemId) const;
 	void RebuildLegacyProjection(FArrayProperty* ArrayProperty, FClassProperty* ClassProperty);

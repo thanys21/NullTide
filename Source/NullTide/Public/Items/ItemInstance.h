@@ -8,8 +8,10 @@
 
 class UInventoryComponent;
 class UItemDefinition;
+class UStorageTransferLibrary;
+class FInventoryStacking;
 
-/** Runtime identity for one acquired item unit. */
+/** Runtime identity for one inventory stack. */
 UCLASS(BlueprintType)
 class NULLTIDE_API UItemInstance : public UObject
 {
@@ -22,14 +24,23 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Inventory|Item")
 	TSubclassOf<UItemDefinition> GetDefinitionClass() const { return DefinitionClass; }
 
+	UFUNCTION(BlueprintPure, Category = "Inventory|Item")
+	int32 GetQuantity() const { return Quantity; }
+
 private:
 	friend class UInventoryComponent;
+	friend class UStorageTransferLibrary;
+	friend class FInventoryStacking;
 
-	bool Initialize(const FGuid& InInstanceId, TSubclassOf<UItemDefinition> InDefinitionClass);
+	bool Initialize(const FGuid& InInstanceId, TSubclassOf<UItemDefinition> InDefinitionClass, int32 InQuantity = 1);
+	bool SetQuantity(int32 InQuantity);
 
 	UPROPERTY(VisibleInstanceOnly, Category = "Inventory|Item")
 	FGuid InstanceId;
 
 	UPROPERTY(VisibleInstanceOnly, Category = "Inventory|Item")
 	TSubclassOf<UItemDefinition> DefinitionClass;
+
+	UPROPERTY(VisibleInstanceOnly, Category = "Inventory|Item", meta = (ClampMin = "1"))
+	int32 Quantity = 1;
 };

@@ -11,6 +11,7 @@
 #include "Items/Fragments/ItemFragment_Ammo.h"
 #include "Items/Fragments/ItemFragment_Durability.h"
 #include "Items/Fragments/ItemFragment_Tool.h"
+#include "Items/Fragments/ItemFragment_Stackable.h"
 
 namespace
 {
@@ -68,5 +69,16 @@ bool UItemFragment_Durability::ValidateTemplate(FString& OutDiagnostic) const
 bool UItemFragment_Tool::ValidateTemplate(FString& OutDiagnostic) const
 {
 	return ValidateNonNegative(OutDiagnostic, { { TEXT("Efficiency"), Efficiency } });
+}
+
+bool UItemFragment_Stackable::ValidateTemplate(FString& OutDiagnostic) const
+{
+	OutDiagnostic.Reset();
+	if (MaxStackSize < 2)
+	{
+		OutDiagnostic = TEXT("MaxStackSize must be at least 2.");
+		return false;
+	}
+	return true;
 }
 

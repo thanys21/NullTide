@@ -10,6 +10,7 @@
 #include "Items/Fragments/ItemFragment_Healing.h"
 #include "Items/Fragments/ItemFragment_Ammo.h"
 #include "Items/Fragments/ItemFragment_Tool.h"
+#include "Items/Fragments/ItemFragment_Stackable.h"
 #include "Items/ItemInstance.h"
 #include "Misc/AutomationTest.h"
 #include "UObject/StrongObjectPtr.h"
@@ -209,7 +210,7 @@ bool FInventoryFragmentValidationTest::RunTest(const FString& Case)
 			const UItemDefinition* Authored = Class->GetDefaultObject<UItemDefinition>();
 			const bool bWood = FString(Name) == TEXT("Wood");
 			const int32 ExpectedG1Count = bWood ? 1 : 3;
-			const int32 ExpectedCount = ExpectedG1Count + 1;
+			const int32 ExpectedCount = ExpectedG1Count + 1 + (bWood ? 1 : 0);
 			TestTrue(TEXT("Authored canonical data valid"), Authored->ValidateFragments(Diagnostic));
 			TestTrue(TEXT("Legacy source empty"), Authored->Fragments.IsEmpty());
 			const auto Before = Authored->GetResolvedFragments();
@@ -241,7 +242,16 @@ bool FInventoryFragmentValidationTest::RunTest(const FString& Case)
 			const TStrongObjectPtr<UInventoryComponent> Inventory(NewObject<UInventoryComponent>());
 			const auto First = Inventory->TryAddDefinition(Class);
 			const auto Second = Inventory->TryAddDefinition(Class);
-			TestTrue(TEXT("Authored definition acquires two distinct units"), First.IsSuccess() && Second.IsSuccess() && First.ItemId != Second.ItemId);
+			if (bWood)
+			{
+				TestTrue(TEXT("Authored stackable definition merges acquired units"), First.IsSuccess() && Second.IsSuccess()
+					&& First.ItemId == Second.ItemId && First.Item && First.Item->GetQuantity() == 2
+					&& Authored->HasFragmentByClass(UItemFragment_Stackable::StaticClass()));
+			}
+			else
+			{
+				TestTrue(TEXT("Authored non-stackable definition acquires distinct units"), First.IsSuccess() && Second.IsSuccess() && First.ItemId != Second.ItemId);
+			}
 			TestTrue(TEXT("Runtime acquisition shares unchanged configuration templates"), Authored->GetResolvedFragments() == Before);
 			DirectChildren.Reset();
 			GetObjectsWithOuter(Authored, DirectChildren, EGetObjectsFlags::None);

@@ -30,8 +30,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Inventory")
 	FInventoryOperationResult TryAddDefinition(TSubclassOf<UItemDefinition> DefinitionClass);
 
+	/** Adds an entire requested quantity atomically, filling compatible stacks before allocating slots. */
+	UFUNCTION(BlueprintCallable, Category = "Inventory", meta = (ClampMin = "1"))
+	FInventoryOperationResult TryAddDefinitionQuantity(TSubclassOf<UItemDefinition> DefinitionClass, int32 Quantity);
+
 	UFUNCTION(BlueprintCallable, Category = "Inventory")
 	FInventoryOperationResult TryRemoveItem(FGuid ItemId);
+
+	/** Removes quantity from one exact stack identity. A zero remainder removes that stack entry. */
+	UFUNCTION(BlueprintCallable, Category = "Inventory", meta = (ClampMin = "1"))
+	FInventoryOperationResult TryRemoveItemQuantity(FGuid ItemId, int32 Quantity);
 
 	/** Spawns the generic pickup first, then commits the exact-ID removal on success. */
 	UFUNCTION(BlueprintCallable, Category = "Inventory")
@@ -94,7 +102,7 @@ protected:
 	virtual bool ResolveWorldDropTransform(const APawn* OwningPawn, TSubclassOf<UItemDefinition> DefinitionClass,
 		FTransform& OutTransform) const;
 	virtual AActor* SpawnAndConfigureWorldDrop(APawn* OwningPawn, TSubclassOf<UItemDefinition> DefinitionClass,
-		const FTransform& DropTransform);
+		int32 Quantity, const FTransform& DropTransform);
 	virtual void RollbackWorldDrop(AActor* SpawnedPickup);
 	virtual FInventoryOperationResult CommitWorldDropRemoval(FGuid ItemId);
 

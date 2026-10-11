@@ -55,6 +55,9 @@ protected:
 	TObjectPtr<UTextBlock> CategoryIndicator;
 
 	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> QuantityText;
+
+	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UProgressBar> DurabilityBar;
 
 	UPROPERTY(EditDefaultsOnly, Category = "Inventory|UI")

@@ -193,6 +193,12 @@ void UInventorySlotWidget::RefreshContent()
 		CategoryIndicator->SetText(FText::FromString(CategoryDisplayName.ToString().Left(1).ToUpper()));
 		CategoryIndicator->SetColorAndOpacity(GetCategoryColor());
 	}
+	if (QuantityText)
+	{
+		const int32 Quantity = Definition ? BoundItem->GetQuantity() : 0;
+		QuantityText->SetText(Quantity > 1 ? FText::FromString(FString::Printf(TEXT("x%d"), Quantity)) : FText::GetEmpty());
+		QuantityText->SetVisibility(Quantity > 1 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
 	if (DurabilityBar)
 	{
 		const bool bHasDurability = Definition

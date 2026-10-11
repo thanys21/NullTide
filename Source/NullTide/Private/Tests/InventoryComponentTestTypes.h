@@ -48,6 +48,7 @@ public:
 	int32 SpawnAttempts = 0;
 	int32 RollbackCount = 0;
 	int32 CommitAttempts = 0;
+	int32 LastSpawnedQuantity = 0;
 	TObjectPtr<AActor> LastSpawnedPickup;
 	TObjectPtr<AActor> LastRolledBackPickup;
 
@@ -58,7 +59,7 @@ protected:
 	virtual bool ResolveWorldDropTransform(const APawn* OwningPawn, TSubclassOf<UItemDefinition> DefinitionClass,
 		FTransform& OutTransform) const override;
 	virtual AActor* SpawnAndConfigureWorldDrop(APawn* OwningPawn, TSubclassOf<UItemDefinition> DefinitionClass,
-		const FTransform& DropTransform) override;
+		int32 Quantity, const FTransform& DropTransform) override;
 	virtual void RollbackWorldDrop(AActor* SpawnedPickup) override;
 	virtual FInventoryOperationResult CommitWorldDropRemoval(FGuid ItemId) override;
 };
@@ -82,6 +83,16 @@ UCLASS(Transient, NotBlueprintable)
 class UInventoryTestItemDefinition : public UItemDefinition
 {
 	GENERATED_BODY()
+};
+
+/** Concrete stackable definition used only by native stacking automation tests. */
+UCLASS(Transient, NotBlueprintable)
+class UInventoryStackableTestItemDefinition : public UItemDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UInventoryStackableTestItemDefinition();
 };
 
 /** Dynamic delegate listener used only by native inventory automation tests. */

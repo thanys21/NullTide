@@ -25,6 +25,7 @@ enum class EInventoryOperationResult : uint8
 	InvalidDefinition,
 	InvalidDefinitionData,
 	InvalidItemId,
+	InvalidQuantity,
 	CapacityFull,
 	NotInitialized,
 	Busy
@@ -43,6 +44,10 @@ struct NULLTIDE_API FInventoryOperationResult
 
 	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
 	FGuid ItemId;
+
+	/** Quantity added or removed by this operation. */
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int32 Quantity = 0;
 
 	bool IsSuccess() const
 	{
@@ -79,6 +84,9 @@ struct NULLTIDE_API FInventoryWorldDropResult
 
 	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
 	TObjectPtr<AActor> SpawnedPickup = nullptr;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int32 Quantity = 0;
 
 	bool IsSuccess() const
 	{

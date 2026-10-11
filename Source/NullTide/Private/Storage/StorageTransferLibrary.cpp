@@ -1,6 +1,7 @@
 #include "Storage/StorageTransferLibrary.h"
 
 #include "Inventory/InventoryComponent.h"
+#include "Inventory/InventoryStacking.h"
 #include "Inventory/LegacyInventoryStorage.h"
 #include "Items/ItemInstance.h"
 #include "Storage/StorageComponent.h"
@@ -31,6 +32,7 @@ FInventoryStorageTransferResult TransferExactItem(
 	TArray<TObjectPtr<UItemInstance>>& DestinationItems,
 	UActorComponent* SourceOwner,
 	UActorComponent* DestinationOwner,
+	const int32 DestinationCapacity,
 	FGuid ItemId)
 {
 	if (!ItemId.IsValid())
@@ -56,15 +58,70 @@ FInventoryStorageTransferResult TransferExactItem(
 	}
 
 	UItemInstance* Item = SourceItems[SourceIndex];
-	if (!IsValid(Item) || !Item->Rename(nullptr, DestinationOwner, REN_DontCreateRedirectors | REN_NonTransactional))
+	if (!IsValid(Item))
 	{
 		return MakeTransferResult(EInventoryStorageTransferResult::TransferFailed, ItemId);
 	}
 
-	// Rename is the only fallible commit step. Membership changes follow together on the game thread.
+	FInventoryStackPlan StackPlan;
+	if (!FInventoryStacking::BuildAddPlan(
+		DestinationItems, DestinationCapacity, Item->GetDefinitionClass(), Item->GetQuantity(), StackPlan))
+	{
+		return MakeTransferResult(EInventoryStorageTransferResult::DestinationFull, ItemId);
+	}
+
+	TSet<FGuid> ReservedIds;
+	for (const UItemInstance* SourceItem : SourceItems)
+	{
+		if (IsValid(SourceItem))
+		{
+			ReservedIds.Add(SourceItem->GetInstanceId());
+		}
+	}
+	for (const UItemInstance* DestinationItem : DestinationItems)
+	{
+		if (IsValid(DestinationItem))
+		{
+			ReservedIds.Add(DestinationItem->GetInstanceId());
+		}
+	}
+
+	TArray<TStrongObjectPtr<UItemInstance>> StagedNewStacks;
+	TArray<int32> AdditionalStackQuantities = StackPlan.NewStackQuantities;
+	const bool bMovesSourceIdentity = !AdditionalStackQuantities.IsEmpty();
+	if (bMovesSourceIdentity)
+	{
+		AdditionalStackQuantities.RemoveAt(0);
+	}
+	if (!FInventoryStacking::StageNewStacks(
+		DestinationOwner, Item->GetDefinitionClass(), AdditionalStackQuantities, ReservedIds, StagedNewStacks))
+	{
+		return MakeTransferResult(EInventoryStorageTransferResult::TransferFailed, ItemId);
+	}
+
+	if (bMovesSourceIdentity
+		&& !Item->Rename(nullptr, DestinationOwner, REN_DontCreateRedirectors | REN_NonTransactional))
+	{
+		return MakeTransferResult(EInventoryStorageTransferResult::TransferFailed, ItemId);
+	}
+
+	// Rename is the only fallible commit step. All membership and quantity changes follow together.
+	FInventoryStacking::ApplyMerges(StackPlan);
 	SourceItems.RemoveAt(SourceIndex);
-	DestinationItems.Add(Item);
-	return MakeTransferResult(EInventoryStorageTransferResult::Success, ItemId, Item);
+	if (bMovesSourceIdentity)
+	{
+		check(FInventoryStacking::SetStackQuantity(Item, StackPlan.NewStackQuantities[0]));
+		DestinationItems.Add(Item);
+	}
+	for (const TStrongObjectPtr<UItemInstance>& NewStack : StagedNewStacks)
+	{
+		DestinationItems.Add(NewStack.Get());
+	}
+
+	UItemInstance* ResultItem = bMovesSourceIdentity
+		? Item
+		: (StackPlan.Merges.IsEmpty() ? nullptr : StackPlan.Merges[0].Item.Get());
+	return MakeTransferResult(EInventoryStorageTransferResult::Success, ItemId, ResultItem);
 }
 }
 
@@ -83,11 +140,6 @@ FInventoryStorageTransferResult UStorageTransferLibrary::TransferInventoryToStor
 	{
 		return MakeTransferResult(EInventoryStorageTransferResult::Busy, ItemId);
 	}
-	if (Storage->IsFull())
-	{
-		return MakeTransferResult(EInventoryStorageTransferResult::DestinationFull, ItemId);
-	}
-
 	FArrayProperty* ProjectionArray = nullptr;
 	FClassProperty* ProjectionClass = nullptr;
 	if (!PrepareInventoryProjection(Inventory, ProjectionArray, ProjectionClass))
@@ -98,7 +150,7 @@ FInventoryStorageTransferResult UStorageTransferLibrary::TransferInventoryToStor
 	TGuardValue<bool> InventoryGuard(Inventory->bMutationInProgress, true);
 	TGuardValue<bool> StorageGuard(Storage->bMutationInProgress, true);
 	const FInventoryStorageTransferResult Result = TransferExactItem(
-		Inventory->Items, Storage->Items, Inventory, Storage, ItemId);
+		Inventory->Items, Storage->Items, Inventory, Storage, Storage->Capacity, ItemId);
 	if (!Result.IsSuccess())
 	{
 		return Result;
@@ -129,11 +181,6 @@ FInventoryStorageTransferResult UStorageTransferLibrary::TransferStorageToInvent
 	{
 		return MakeTransferResult(EInventoryStorageTransferResult::Busy, ItemId);
 	}
-	if (Inventory->IsFull())
-	{
-		return MakeTransferResult(EInventoryStorageTransferResult::DestinationFull, ItemId);
-	}
-
 	FArrayProperty* ProjectionArray = nullptr;
 	FClassProperty* ProjectionClass = nullptr;
 	if (!PrepareInventoryProjection(Inventory, ProjectionArray, ProjectionClass))
@@ -144,7 +191,7 @@ FInventoryStorageTransferResult UStorageTransferLibrary::TransferStorageToInvent
 	TGuardValue<bool> StorageGuard(Storage->bMutationInProgress, true);
 	TGuardValue<bool> InventoryGuard(Inventory->bMutationInProgress, true);
 	const FInventoryStorageTransferResult Result = TransferExactItem(
-		Storage->Items, Inventory->Items, Storage, Inventory, ItemId);
+		Storage->Items, Inventory->Items, Storage, Inventory, Inventory->Capacity, ItemId);
 	if (!Result.IsSuccess())
 	{
 		return Result;

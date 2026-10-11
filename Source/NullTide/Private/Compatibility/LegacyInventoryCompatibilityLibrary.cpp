@@ -63,9 +63,21 @@ FInventoryOperationResult ULegacyInventoryCompatibilityLibrary::TryAddDefinition
 	UActorComponent* LegacyInventory,
 	TSubclassOf<UItemDefinition> DefinitionClass)
 {
+	return TryAddDefinitionQuantityToLegacyInventory(LegacyInventory, DefinitionClass, 1);
+}
+
+FInventoryOperationResult ULegacyInventoryCompatibilityLibrary::TryAddDefinitionQuantityToLegacyInventory(
+	UActorComponent* LegacyInventory,
+	TSubclassOf<UItemDefinition> DefinitionClass,
+	const int32 Quantity)
+{
 	if (!IsLegacyReceiverUsable(LegacyInventory))
 	{
 		return MakeLegacyResult(EInventoryOperationResult::NotInitialized);
+	}
+	if (Quantity < 1)
+	{
+		return MakeLegacyResult(EInventoryOperationResult::InvalidQuantity);
 	}
 
 	if (UInventoryComponent* NativeInventory = Cast<UInventoryComponent>(LegacyInventory))
@@ -76,7 +88,7 @@ FInventoryOperationResult ULegacyInventoryCompatibilityLibrary::TryAddDefinition
 			{
 				return MakeLegacyResult(EInventoryOperationResult::NotInitialized);
 			}
-			return NativeInventory->TryAddDefinition(DefinitionClass);
+			return NativeInventory->TryAddDefinitionQuantity(DefinitionClass, Quantity);
 		}
 		if (NativeInventory->ShouldBlockLegacyWrites())
 		{
@@ -87,6 +99,12 @@ FInventoryOperationResult ULegacyInventoryCompatibilityLibrary::TryAddDefinition
 	if (ActiveLegacyMutations.Contains(LegacyInventory))
 	{
 		return MakeLegacyResult(EInventoryOperationResult::Busy);
+	}
+	// The legacy class-array protocol has neither quantities nor a preflight capacity contract.
+	// Refuse multi-unit writes instead of partially emulating a stacked transaction.
+	if (Quantity != 1)
+	{
+		return MakeLegacyResult(EInventoryOperationResult::NotInitialized);
 	}
 
 	if (!IsDefinitionUsable(DefinitionClass))

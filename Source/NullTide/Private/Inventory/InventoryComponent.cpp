@@ -3,6 +3,7 @@
 #include "Inventory/InventoryComponent.h"
 
 #include "Inventory/LegacyInventoryStorage.h"
+#include "Inventory/InventoryStacking.h"
 #include "Storage/StorageComponent.h"
 #include "Storage/StorageTransferLibrary.h"
 #include "Engine/StaticMesh.h"
@@ -22,24 +23,28 @@ namespace
 FInventoryOperationResult MakeInventoryResult(
 	EInventoryOperationResult Result,
 	UItemInstance* Item = nullptr,
-	const FGuid& ItemId = FGuid())
+	const FGuid& ItemId = FGuid(),
+	const int32 Quantity = 0)
 {
 	FInventoryOperationResult OperationResult;
 	OperationResult.Result = Result;
 	OperationResult.Item = Item;
 	OperationResult.ItemId = ItemId;
+	OperationResult.Quantity = Quantity;
 	return OperationResult;
 }
 
 FInventoryWorldDropResult MakeWorldDropResult(
 	const EInventoryWorldDropResult Result,
 	const FGuid& ItemId,
-	AActor* SpawnedPickup = nullptr)
+	AActor* SpawnedPickup = nullptr,
+	const int32 Quantity = 0)
 {
 	FInventoryWorldDropResult DropResult;
 	DropResult.Result = Result;
 	DropResult.ItemId = ItemId;
 	DropResult.SpawnedPickup = SpawnedPickup;
+	DropResult.Quantity = Quantity;
 	return DropResult;
 }
 
@@ -198,6 +203,13 @@ FInventoryOperationResult UInventoryComponent::InitializeFromLegacyInventory()
 FInventoryOperationResult UInventoryComponent::TryAddDefinition(
 	TSubclassOf<UItemDefinition> DefinitionClass)
 {
+	return TryAddDefinitionQuantity(DefinitionClass, 1);
+}
+
+FInventoryOperationResult UInventoryComponent::TryAddDefinitionQuantity(
+	TSubclassOf<UItemDefinition> DefinitionClass,
+	const int32 Quantity)
+{
 	if (!CanOperate())
 	{
 		return MakeInventoryResult(EInventoryOperationResult::NotInitialized);
@@ -206,6 +218,10 @@ FInventoryOperationResult UInventoryComponent::TryAddDefinition(
 	if (bMutationInProgress)
 	{
 		return MakeInventoryResult(EInventoryOperationResult::Busy);
+	}
+	if (Quantity < 1)
+	{
+		return MakeInventoryResult(EInventoryOperationResult::InvalidQuantity);
 	}
 
 	TGuardValue<bool> MutationGuard(bMutationInProgress, true);
@@ -225,10 +241,6 @@ FInventoryOperationResult UInventoryComponent::TryAddDefinition(
 	{
 		return MakeInventoryResult(EInventoryOperationResult::InvalidDefinitionData);
 	}
-	if (IsFull())
-	{
-		return MakeInventoryResult(EInventoryOperationResult::CapacityFull);
-	}
 
 	FArrayProperty* ProjectionArray = nullptr;
 	FClassProperty* ProjectionClass = nullptr;
@@ -244,35 +256,63 @@ FInventoryOperationResult UInventoryComponent::TryAddDefinition(
 		}
 	}
 
-	FGuid NewItemId;
-	do
+	FInventoryStackPlan StackPlan;
+	if (!FInventoryStacking::BuildAddPlan(Items, Capacity, DefinitionClass, Quantity, StackPlan))
 	{
-		NewItemId = FGuid::NewGuid();
+		return MakeInventoryResult(EInventoryOperationResult::CapacityFull);
 	}
-	while (!NewItemId.IsValid() || HasItemId(NewItemId));
 
-	UItemInstance* NewItem = NewObject<UItemInstance>(this);
-	if (!NewItem || !NewItem->Initialize(NewItemId, DefinitionClass))
+	TSet<FGuid> ReservedIds;
+	for (const UItemInstance* ExistingItem : Items)
+	{
+		if (IsValid(ExistingItem))
+		{
+			ReservedIds.Add(ExistingItem->GetInstanceId());
+		}
+	}
+	TArray<TStrongObjectPtr<UItemInstance>> StagedStacks;
+	if (!FInventoryStacking::StageNewStacks(this, DefinitionClass, StackPlan.NewStackQuantities, ReservedIds, StagedStacks))
 	{
 		return MakeInventoryResult(EInventoryOperationResult::InvalidDefinitionData);
 	}
 
-	Items.Add(NewItem);
+	FInventoryStacking::ApplyMerges(StackPlan);
+	for (const TStrongObjectPtr<UItemInstance>& StagedStack : StagedStacks)
+	{
+		Items.Add(StagedStack.Get());
+	}
 	if (ProjectionArray)
 	{
 		RebuildLegacyProjection(ProjectionArray, ProjectionClass);
 	}
 	++Revision;
 
-	const FInventoryOperationResult Result = MakeInventoryResult(
-		EInventoryOperationResult::Success,
-		NewItem,
-		NewItemId);
+	UItemInstance* PrimaryItem = StackPlan.Merges.IsEmpty()
+		? (StagedStacks.IsEmpty() ? nullptr : StagedStacks[0].Get())
+		: StackPlan.Merges[0].Item.Get();
+	const FInventoryOperationResult Result = MakeInventoryResult(EInventoryOperationResult::Success,
+		PrimaryItem, PrimaryItem ? PrimaryItem->GetInstanceId() : FGuid(), Quantity);
 	OnInventoryChanged.Broadcast(Revision);
 	return Result;
 }
 
 FInventoryOperationResult UInventoryComponent::TryRemoveItem(FGuid ItemId)
+{
+	if (!CanOperate())
+	{
+		return MakeInventoryResult(EInventoryOperationResult::NotInitialized, nullptr, ItemId);
+	}
+	if (bMutationInProgress)
+	{
+		return MakeInventoryResult(EInventoryOperationResult::Busy, nullptr, ItemId);
+	}
+	UItemInstance* Item = FindItemById(ItemId);
+	return Item
+		? TryRemoveItemQuantity(ItemId, Item->GetQuantity())
+		: MakeInventoryResult(EInventoryOperationResult::InvalidItemId, nullptr, ItemId);
+}
+
+FInventoryOperationResult UInventoryComponent::TryRemoveItemQuantity(FGuid ItemId, const int32 Quantity)
 {
 	if (!CanOperate())
 	{
@@ -289,6 +329,10 @@ FInventoryOperationResult UInventoryComponent::TryRemoveItem(FGuid ItemId)
 	{
 		return MakeInventoryResult(EInventoryOperationResult::InvalidItemId, nullptr, ItemId);
 	}
+	if (Quantity < 1)
+	{
+		return MakeInventoryResult(EInventoryOperationResult::InvalidQuantity, nullptr, ItemId);
+	}
 
 	const int32 ItemIndex = Items.IndexOfByPredicate(
 		[&ItemId](const TObjectPtr<UItemInstance>& Item)
@@ -300,6 +344,11 @@ FInventoryOperationResult UInventoryComponent::TryRemoveItem(FGuid ItemId)
 	{
 		return MakeInventoryResult(EInventoryOperationResult::InvalidItemId, nullptr, ItemId);
 	}
+	UItemInstance* Item = Items[ItemIndex];
+	if (!IsValid(Item) || Quantity > Item->GetQuantity())
+	{
+		return MakeInventoryResult(EInventoryOperationResult::InvalidQuantity, nullptr, ItemId);
+	}
 
 	FArrayProperty* ProjectionArray = nullptr;
 	FClassProperty* ProjectionClass = nullptr;
@@ -309,9 +358,16 @@ FInventoryOperationResult UInventoryComponent::TryRemoveItem(FGuid ItemId)
 		return MakeInventoryResult(EInventoryOperationResult::NotInitialized, nullptr, ItemId);
 	}
 
-	UItemInstance* RemovedItem = Items[ItemIndex];
-	Items.RemoveAt(ItemIndex);
-	if (ProjectionArray)
+	const bool bRemoveStack = Quantity == Item->GetQuantity();
+	if (bRemoveStack)
+	{
+		Items.RemoveAt(ItemIndex);
+	}
+	else
+	{
+		check(Item->SetQuantity(Item->GetQuantity() - Quantity));
+	}
+	if (ProjectionArray && bRemoveStack)
 	{
 		RebuildLegacyProjection(ProjectionArray, ProjectionClass);
 	}
@@ -319,8 +375,9 @@ FInventoryOperationResult UInventoryComponent::TryRemoveItem(FGuid ItemId)
 
 	const FInventoryOperationResult Result = MakeInventoryResult(
 		EInventoryOperationResult::Success,
-		RemovedItem,
-		ItemId);
+		Item,
+		ItemId,
+		Quantity);
 	OnInventoryChanged.Broadcast(Revision);
 	return Result;
 }
@@ -359,13 +416,14 @@ FInventoryWorldDropResult UInventoryComponent::TryDropItemToWorld(APawn* OwningP
 	{
 		return MakeWorldDropResult(EInventoryWorldDropResult::InvalidDefinitionData, ItemId);
 	}
+	const int32 Quantity = Item->GetQuantity();
 	FTransform DropTransform;
 	if (!ResolveWorldDropTransform(OwningPawn, DefinitionClass, DropTransform))
 	{
 		return MakeWorldDropResult(EInventoryWorldDropResult::NoSafeTransform, ItemId);
 	}
 
-	AActor* SpawnedPickup = SpawnAndConfigureWorldDrop(OwningPawn, DefinitionClass, DropTransform);
+	AActor* SpawnedPickup = SpawnAndConfigureWorldDrop(OwningPawn, DefinitionClass, Quantity, DropTransform);
 	if (!IsValid(SpawnedPickup))
 	{
 		return MakeWorldDropResult(EInventoryWorldDropResult::SpawnFailed, ItemId);
@@ -378,7 +436,7 @@ FInventoryWorldDropResult UInventoryComponent::TryDropItemToWorld(APawn* OwningP
 		return MakeWorldDropResult(EInventoryWorldDropResult::RemovalFailedRolledBack, ItemId);
 	}
 
-	return MakeWorldDropResult(EInventoryWorldDropResult::Success, ItemId, SpawnedPickup);
+	return MakeWorldDropResult(EInventoryWorldDropResult::Success, ItemId, SpawnedPickup, Quantity);
 }
 
 FInventoryStorageTransferResult UInventoryComponent::TryTransferItemToStorage(
@@ -497,10 +555,11 @@ bool UInventoryComponent::ResolveWorldDropTransform(
 AActor* UInventoryComponent::SpawnAndConfigureWorldDrop(
 	APawn* OwningPawn,
 	const TSubclassOf<UItemDefinition> DefinitionClass,
+	const int32 Quantity,
 	const FTransform& DropTransform)
 {
 	UWorld* World = OwningPawn ? OwningPawn->GetWorld() : nullptr;
-	if (!World || !DefinitionClass)
+	if (!World || !DefinitionClass || Quantity < 1)
 	{
 		return nullptr;
 	}
@@ -525,6 +584,13 @@ AActor* UInventoryComponent::SpawnAndConfigureWorldDrop(
 		return nullptr;
 	}
 	DefinitionProperty->SetPropertyValue_InContainer(Pickup, DefinitionClass.Get());
+	FIntProperty* QuantityProperty = FindFProperty<FIntProperty>(Pickup->GetClass(), TEXT("Quantity"));
+	if (!QuantityProperty)
+	{
+		Pickup->Destroy();
+		return nullptr;
+	}
+	QuantityProperty->SetPropertyValue_InContainer(Pickup, Quantity);
 	UGameplayStatics::FinishSpawningActor(Pickup, DropTransform);
 	if (UFunction* RefreshPresentation = Pickup->FindFunction(TEXT("RefreshWorldPresentation")))
 	{

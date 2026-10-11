@@ -6,14 +6,27 @@
 
 bool UItemInstance::Initialize(
 	const FGuid& InInstanceId,
-	TSubclassOf<UItemDefinition> InDefinitionClass)
+	TSubclassOf<UItemDefinition> InDefinitionClass,
+	const int32 InQuantity)
 {
-	if (InstanceId.IsValid() || DefinitionClass || !InInstanceId.IsValid() || !InDefinitionClass)
+	if (InstanceId.IsValid() || DefinitionClass || !InInstanceId.IsValid() || !InDefinitionClass || InQuantity < 1)
 	{
 		return false;
 	}
 
 	InstanceId = InInstanceId;
 	DefinitionClass = InDefinitionClass;
+	Quantity = InQuantity;
+	return true;
+}
+
+bool UItemInstance::SetQuantity(const int32 InQuantity)
+{
+	if (!InstanceId.IsValid() || !DefinitionClass || InQuantity < 1)
+	{
+		return false;
+	}
+
+	Quantity = InQuantity;
 	return true;
 }

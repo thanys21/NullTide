@@ -11,7 +11,7 @@ class UStorageTransferLibrary;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnStorageChanged, int32, NewRevision);
 
-/** Owns ordered, non-stacking runtime item instances for one world container. */
+/** Owns ordered runtime stack instances for one world container. */
 UCLASS(ClassGroup = (Inventory), meta = (BlueprintSpawnableComponent))
 class NULLTIDE_API UStorageComponent : public UActorComponent
 {

@@ -56,7 +56,10 @@ void UStorageSlotWidget::RefreshVisuals()
 	}
 	if (ItemName)
 	{
-		ItemName->SetText(Definition ? Definition->ItemName : FText::GetEmpty());
+		const int32 Quantity = Definition ? BoundItem->GetQuantity() : 0;
+		ItemName->SetText(Definition && Quantity > 1
+			? FText::FromString(FString::Printf(TEXT("%s x%d"), *Definition->ItemName.ToString(), Quantity))
+			: (Definition ? Definition->ItemName : FText::GetEmpty()));
 	}
 	if (SelectionBorder)
 	{

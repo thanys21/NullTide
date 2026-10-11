@@ -112,7 +112,7 @@ bool FInventoryUIIdentityProjectionTest::RunTest(const FString& Parameters)
 	}
 
 	const TStrongObjectPtr<UInventoryComponent> Inventory(NewObject<UInventoryComponent>());
-	const FInventoryOperationResult First = Inventory->TryAddDefinition(WoodClass);
+	const FInventoryOperationResult First = Inventory->TryAddDefinitionQuantity(WoodClass, 50);
 	const FInventoryOperationResult Second = Inventory->TryAddDefinition(WoodClass);
 	if (!TestTrue(TEXT("Two identities acquired"), First.IsSuccess() && Second.IsSuccess() && First.Item && Second.Item))
 	{

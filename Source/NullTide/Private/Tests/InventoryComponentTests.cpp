@@ -44,10 +44,12 @@ bool UInventoryWorldDropTestComponent::ResolveWorldDropTransform(
 AActor* UInventoryWorldDropTestComponent::SpawnAndConfigureWorldDrop(
 	APawn* OwningPawn,
 	const TSubclassOf<UItemDefinition> DefinitionClass,
+	const int32 Quantity,
 	const FTransform& DropTransform)
 {
 	++SpawnAttempts;
-	if (!bSpawnSucceeds || !DefinitionClass)
+	LastSpawnedQuantity = Quantity;
+	if (!bSpawnSucceeds || !DefinitionClass || Quantity < 1)
 	{
 		return nullptr;
 	}

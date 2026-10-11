@@ -9,6 +9,7 @@
 #include "Items/Fragments/ItemFragment_Food.h"
 #include "Items/Fragments/ItemFragment_Healing.h"
 #include "Items/Fragments/ItemFragment_Resource.h"
+#include "Items/Fragments/ItemFragment_Stackable.h"
 #include "Items/Fragments/ItemFragment_Tool.h"
 #include "Items/Fragments/ItemFragment_Weapon.h"
 #include "Engine/Texture2D.h"
@@ -27,6 +28,13 @@ struct FCatalogEntry
 	const TCHAR* Description;
 	int32 FragmentCount;
 };
+
+bool IsStackableCatalogItem(const FString& Id)
+{
+	return Id == TEXT("HealthPotion") || Id == TEXT("Wood") || Id == TEXT("Sandwich")
+		|| Id == TEXT("Stone") || Id == TEXT("Scrap") || Id == TEXT("Meat")
+		|| Id == TEXT("WoodArrow") || Id == TEXT("WaterBottle");
+}
 
 const FCatalogEntry Catalog[] = {
 	{ TEXT("HealthPotion"), TEXT("Health Potion"), TEXT("Restores health."), 2 },
@@ -94,13 +102,20 @@ bool FItemCatalogTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Canonical fragments validate: ") + Diagnostic, bValid);
 	TestTrue(TEXT("No legacy authoring"), Definition->Fragments.IsEmpty());
 	const auto Templates = Definition->GetResolvedFragments();
-	const int32 ExpectedTotalFragmentCount = Entry->FragmentCount + 1;
-	TestEqual(TEXT("Exact G1 capabilities plus world presentation"), Templates.Num(), ExpectedTotalFragmentCount);
+	const bool bStackable = IsStackableCatalogItem(Parameters);
+	const int32 ExpectedTotalFragmentCount = Entry->FragmentCount + 1 + (bStackable ? 1 : 0);
+	TestEqual(TEXT("Exact capabilities, optional stackability, and world presentation"), Templates.Num(), ExpectedTotalFragmentCount);
 	TArray<UObject*> Children;
 	GetObjectsWithOuter(Definition, Children, EGetObjectsFlags::None);
 	int32 OwnedCount = 0;
 	for (const UObject* Child : Children) { if (Child->IsA<UItemFragment>()) { ++OwnedCount; } }
 	TestEqual(TEXT("No orphan or duplicate owned templates"), OwnedCount, ExpectedTotalFragmentCount);
+	const UItemFragment_Stackable* Stackable = Cast<UItemFragment_Stackable>(Definition->FindFragmentByClass(UItemFragment_Stackable::StaticClass()));
+	TestEqual(TEXT("Only intended catalog definitions are stackable"), Stackable != nullptr, bStackable);
+	if (Stackable)
+	{
+		TestEqual(TEXT("Stackable catalog definitions use the prototype cap"), Stackable->MaxStackSize, 50);
+	}
 	TArray<FString> Before;
 	for (const UItemFragment* Fragment : Templates)
 	{
@@ -166,7 +181,12 @@ bool FItemCatalogTest::RunTest(const FString& Parameters)
 	const TStrongObjectPtr<UInventoryComponent> Inventory(NewObject<UInventoryComponent>());
 	const auto First = Inventory->TryAddDefinition(Class);
 	const auto Second = Inventory->TryAddDefinition(Class);
-	if (!TestTrue(TEXT("Two independent acquired instances"), First.IsSuccess() && Second.IsSuccess()
+	if (bStackable)
+	{
+		if (!TestTrue(TEXT("Two units merge into the same runtime stack"), First.IsSuccess() && Second.IsSuccess()
+			&& First.Item && Second.Item && First.ItemId == Second.ItemId && First.Item->GetQuantity() == 2)) { return false; }
+	}
+	else if (!TestTrue(TEXT("Two non-stackable acquisitions remain independent"), First.IsSuccess() && Second.IsSuccess()
 		&& First.Item && Second.Item && First.ItemId.IsValid() && Second.ItemId.IsValid() && First.ItemId != Second.ItemId)) { return false; }
 	TestEqual(TEXT("Instance owned by inventory"), First.Item->GetOuter(), static_cast<UObject*>(Inventory.Get()));
 	TestEqual(TEXT("Instance resolves production definition"), First.Item->GetDefinitionClass().Get(), Class);

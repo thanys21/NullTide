@@ -24,6 +24,14 @@ public:
 		UActorComponent* LegacyInventory,
 		TSubclassOf<UItemDefinition> DefinitionClass);
 
+	/** Quantity-aware adapter for generic world pickups. Native inventories commit the whole quantity atomically. */
+	UFUNCTION(BlueprintCallable, Category = "Inventory|Compatibility",
+		meta = (ToolTip = "Compatibility transaction adapter for quantity-bearing pickups. Native inventories add atomically."))
+	static FInventoryOperationResult TryAddDefinitionQuantityToLegacyInventory(
+		UActorComponent* LegacyInventory,
+		TSubclassOf<UItemDefinition> DefinitionClass,
+		int32 Quantity);
+
 	UFUNCTION(BlueprintPure, Category = "Inventory|Compatibility",
 		meta = (DeprecatedFunction, DeprecationMessage = "Legacy class-array query: use UInventoryComponent::GetItemsSnapshot for new code. Retained for rollback compatibility."))
 	static TArray<TSubclassOf<UItemDefinition>> GetLegacyItemsSnapshot(

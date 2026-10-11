@@ -19,6 +19,13 @@ struct FPresentationEntry
 	int32 G1FragmentCount;
 };
 
+bool IsStackablePresentationItem(const FString& Id)
+{
+	return Id == TEXT("HealthPotion") || Id == TEXT("Wood") || Id == TEXT("Sandwich")
+		|| Id == TEXT("Stone") || Id == TEXT("Scrap") || Id == TEXT("Meat")
+		|| Id == TEXT("WoodArrow") || Id == TEXT("WaterBottle");
+}
+
 const FPresentationEntry PresentationCatalog[] = {
 	{ TEXT("HealthPotion"), TEXT("/Engine/BasicShapes/Sphere.Sphere"), FVector(0.25, 0.25, 0.35), FRotator::ZeroRotator, 2 },
 	{ TEXT("ShortSword"), TEXT("/Engine/BasicShapes/Cube.Cube"), FVector(0.08, 0.08, 0.65), FRotator::ZeroRotator, 3 },
@@ -66,7 +73,8 @@ bool FWorldPresentationCatalogTest::RunTest(const FString& Parameters)
 	FString Diagnostic;
 	TestTrue(TEXT("Complete canonical definition validates: ") + Diagnostic, Definition->ValidateFragments(Diagnostic));
 	const TArray<UItemFragment*> Fragments = Definition->GetResolvedFragments();
-	TestEqual(TEXT("G1 capabilities plus one presentation"), Fragments.Num(), Entry->G1FragmentCount + 1);
+	TestEqual(TEXT("Capabilities, optional stacking, plus one presentation"), Fragments.Num(),
+		Entry->G1FragmentCount + 1 + (IsStackablePresentationItem(Parameters) ? 1 : 0));
 
 	int32 PresentationCount = 0;
 	const UItemFragment_WorldPresentation* Presentation = nullptr;

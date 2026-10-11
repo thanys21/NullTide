@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Crafting C2 (Inventory Quantity Queries) complete, awaiting review. Crafting C3 (Atomic Ingredient Consumption) is next.
+> **Current development state:** Crafting C3/C4 (Atomic Craft Transaction) complete. Crafting C5 (Crafting Authority) is next.
 
 ---
 
@@ -791,10 +791,11 @@ Phase 2 Items & Inventory           ✅
 Phase 3 Resource Gathering          ✅
 Inventory Stacking                  ✅
 Crafting C1 Recipe Data Model       ✅
-Crafting C2 Quantity Queries        ✅ (awaiting review)
+Crafting C2 Quantity Queries        ✅
+Crafting C3/C4 Atomic Transaction   ✅
 
 NEXT:
-Crafting C3 Atomic Ingredient Consumption
+Crafting C5 Crafting Authority
 ```
 
 ---
@@ -919,63 +920,47 @@ Implemented (details in `CRAFTING_PROGRESS.md`):
 
 ---
 
-## C3 — Atomic Ingredient Consumption
+## C3/C4 — Atomic Craft Transaction (one checkpoint)
 
-Crafting must never consume partial ingredients.
+Ingredient consumption (C3) and output commit (C4) are **one atomic inventory transaction**. They are never separate gameplay transactions.
 
 Required contract:
 
 ```text
-preflight all ingredients
-→ preflight output capacity
-→ commit ingredient consumption
-→ commit outputs
+validate all ingredient and output requests
+→ plan deterministic ingredient consumption (inventory order)
+→ project the post-removal inventory
+→ plan all outputs against that projection
+→ commit removals + outputs together
+→ Revision +1, OnInventoryChanged once
 ```
 
 If any stage cannot complete:
 
 ```text
 inventory remains unchanged
+(no quantity change, no ItemId removed or created, no revision, no event)
 ```
-
-Ingredient removal should deterministically consume stacks in inventory order unless another explicit rule is adopted.
 
 Example:
 
 ```text
-Need Wood x12
+Need Wood x12, Wood stacks 5, 10
+→ first stack removed, second stack becomes 3
 
-Wood stacks:
-5
-10
+Wood 50/50, recipe Wood x10 → Wood x5
+→ projected 40/50 → final 45/50 (same stack)
 
-Result:
-first stack removed
-second stack becomes 3
+recipe → WoodArrow x5 with WoodArrow 48/50
+→ merge to 50/50, overflow 3 into a new stack
 ```
 
-All inventory revisions/events should represent one coherent operation if architecture supports it.
+Implemented (details in `CRAFTING_PROGRESS.md`):
 
----
-
-## C4 — Craft Output
-
-Outputs enter the normal inventory stacking authority.
-
-Example:
-
-```text
-recipe → WoodArrow x20
-```
-
-should:
-
-```text
-merge partial arrow stack
-→ overflow to a new stack if needed
-```
-
-Output-capacity preflight must prevent ingredient loss.
+- Generic `UInventoryComponent::TryApplyDefinitionTransaction(Removals, Additions)` (native only). The inventory never depends on crafting types.
+- Projection uses `FInventoryStackEntry { Item, DefinitionClass, Quantity }`; `BuildAddPlan` now wraps `BuildAddPlanForEntries`, the single stacking rule set for normal adds, storage transfers and craft outputs.
+- `FCraftingTransaction::TryCraftRecipeAtomic` is the authoritative craft path; `UCraftingQueryLibrary` checks stay advisory.
+- Exact-class matching is kept for removals, totals and stacking.
 
 ---
 
@@ -1382,22 +1367,22 @@ Do not implement without a dedicated milestone.
 
 # 15. Recommended Next Immediate Checkpoint
 
-## Crafting — C3 Atomic Ingredient Consumption
+## Crafting — C5 Crafting Authority
 
-C2 is complete and awaiting review (see `CRAFTING_PROGRESS.md`). Start C3 only after C2 is approved.
+C3/C4 is complete (see `CRAFTING_PROGRESS.md`). C5 is the next checkpoint.
 
 Claude/Codex instruction:
 
 ```text
-1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md, especially the
-   C2 "Transaction-Design Issues for C3/C4".
-2. Agree the C3 scope with the user and record it in CRAFTING_PLAN.md
-   (C3 alone, or C3+C4 as one transaction).
-3. Keep UInventoryComponent generic: remove-by-definition and batch
-   commits take definitions and quantities, never recipes.
-4. Consume stacks in inventory order inside one mutation guard,
-   one revision, one event; re-run preflight inside the guard.
-5. Do NOT build crafting UI yet (C6).
+1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md (C3/C4 section).
+2. Agree the C5 scope with the user and record it in CRAFTING_PLAN.md
+   (known recipes, instant craft request, what Blueprints may call).
+3. UCraftingComponent owns crafting requests and calls
+   FCraftingTransaction::TryCraftRecipeAtomic; it never edits
+   inventory stacks itself.
+4. Decide whether to expose an exact read-only transaction preflight
+   for UI (C6) instead of the conservative C2 output check.
+5. Do NOT build crafting UI yet (C6); no timed crafting (C7).
 6. Build + focused tests + regression + full suite + cook.
 7. Update CRAFTING_PROGRESS.md and this plan.
 8. STOP for review.
@@ -1439,15 +1424,15 @@ Only then advance the roadmap.
 
 # 17. Current Test Baseline
 
-At the completion of Crafting C2:
+At the completion of Crafting C3/C4:
 
 ```text
-Focused Crafting C2                       5/5
-Regression C1 + Stacking + M1           20/20
-Full permanent suite                  130/130
+Focused Crafting C3C4                          8/8
+Regression C2 + C1 + Stacking + M1           25/25
+Full permanent suite                       138/138
 ```
 
-Previous baselines: Crafting C1 full 125/125; Inventory Stacking full 121/121.
+Previous baselines: Crafting C2 full 130/130; Crafting C1 full 125/125; Inventory Stacking full 121/121.
 
 Future work must preserve these unless test totals intentionally increase.
 
@@ -1554,16 +1539,20 @@ Completed:
 - RG1-RG5
 - Inventory Stacking
 - Crafting C1 Recipe Data Model
-- Crafting C2 Inventory Quantity Queries (awaiting review)
+- Crafting C2 Inventory Quantity Queries
+- Crafting C3/C4 Atomic Craft Transaction
 
 Current crafting:
 - UCraftingRecipeDefinition data-only Blueprint recipes, validated by ValidateRecipe
 - Recipe_Axe (Wood x3 + Stone x5 → Axe x1), Recipe_WoodArrow (Wood x1 → WoodArrow x5)
 - generic inventory queries: GetTotalQuantity, CanRemoveDefinitionQuantity,
   CanAddDefinitionQuantity, CanAddDefinitionQuantities
-- UCraftingQueryLibrary: read-only ingredient / output-capacity checks
+- UCraftingQueryLibrary: advisory read-only ingredient / output-capacity checks
   (output capacity checked before consumption: conservative)
-- no consumption, authority or UI yet
+- UInventoryComponent::TryApplyDefinitionTransaction: atomic remove + add by
+  exact definition class, one revision, one event (native only)
+- FCraftingTransaction::TryCraftRecipeAtomic: authoritative craft path (native only)
+- no UCraftingComponent or UI yet
 
 Current inventory:
 - UInventoryComponent is authority
@@ -1591,12 +1580,12 @@ Current input:
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
-- Crafting C2 5/5
-- regression C1 + Stacking + M1 20/20
-- full 130/130
+- Crafting C3C4 8/8
+- regression C2 + C1 + Stacking + M1 25/25
+- full 138/138
 
 Next:
-Crafting C3 Atomic Ingredient Consumption (after C2 review).
+Crafting C5 Crafting Authority.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1628,10 +1617,10 @@ Phase 3  Resource Gathering                 ✅
 
 Phase 4  Crafting                           ⏭ IN PROGRESS
          C1 Recipe Data Model               ✅
-         C2 Quantity Queries                ✅ (awaiting review)
-         C3 Atomic Ingredient Consumption   ⏭ NEXT
-         C4 Outputs
-         C5 Crafting Authority
+         C2 Quantity Queries                ✅
+         C3/C4 Atomic Craft Transaction     ✅
+                (one transaction: consume + output)
+         C5 Crafting Authority              ⏭ NEXT
          C6 Minimal Crafting UI
          C7 Timed Crafting
          C8 Workstations

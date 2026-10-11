@@ -28,8 +28,37 @@ bool FInventoryStacking::ResolveMaxStackSize(
 	return true;
 }
 
+void FInventoryStacking::MakeEntries(
+	const TArray<TObjectPtr<UItemInstance>>& Items,
+	TArray<FInventoryStackEntry>& OutEntries)
+{
+	OutEntries.Reset(Items.Num());
+	for (UItemInstance* Item : Items)
+	{
+		FInventoryStackEntry& Entry = OutEntries.AddDefaulted_GetRef();
+		if (IsValid(Item))
+		{
+			Entry.Item = Item;
+			Entry.DefinitionClass = Item->GetDefinitionClass();
+			Entry.Quantity = Item->GetQuantity();
+		}
+	}
+}
+
 bool FInventoryStacking::BuildAddPlan(
 	const TArray<TObjectPtr<UItemInstance>>& DestinationItems,
+	const int32 Capacity,
+	const TSubclassOf<UItemDefinition> DefinitionClass,
+	const int32 Quantity,
+	FInventoryStackPlan& OutPlan)
+{
+	TArray<FInventoryStackEntry> Entries;
+	MakeEntries(DestinationItems, Entries);
+	return BuildAddPlanForEntries(Entries, Capacity, DefinitionClass, Quantity, OutPlan);
+}
+
+bool FInventoryStacking::BuildAddPlanForEntries(
+	const TArray<FInventoryStackEntry>& Entries,
 	const int32 Capacity,
 	const TSubclassOf<UItemDefinition> DefinitionClass,
 	const int32 Quantity,
@@ -50,16 +79,17 @@ bool FInventoryStacking::BuildAddPlan(
 	int32 Remaining = Quantity;
 	if (MaxStackSize > 1)
 	{
-		for (UItemInstance* Existing : DestinationItems)
+		for (const FInventoryStackEntry& Existing : Entries)
 		{
-			if (!IsValid(Existing) || Existing->GetDefinitionClass() != DefinitionClass || Existing->GetQuantity() >= MaxStackSize)
+			// Only live stacks can be merge targets; planned stacks do not exist yet.
+			if (!IsValid(Existing.Item) || Existing.DefinitionClass != DefinitionClass || Existing.Quantity >= MaxStackSize)
 			{
 				continue;
 			}
-			const int32 ToAdd = FMath::Min(Remaining, MaxStackSize - Existing->GetQuantity());
+			const int32 ToAdd = FMath::Min(Remaining, MaxStackSize - Existing.Quantity);
 			if (ToAdd > 0)
 			{
-				OutPlan.Merges.Add({ Existing, ToAdd });
+				OutPlan.Merges.Add({ Existing.Item, ToAdd });
 				Remaining -= ToAdd;
 				if (Remaining == 0)
 				{
@@ -76,7 +106,72 @@ bool FInventoryStacking::BuildAddPlan(
 		Remaining -= NewStackQuantity;
 	}
 
-	return DestinationItems.Num() + OutPlan.NewStackQuantities.Num() <= Capacity;
+	return Entries.Num() + OutPlan.NewStackQuantities.Num() <= Capacity;
+}
+
+void FInventoryStacking::ApplyPlanToEntries(
+	const FInventoryStackPlan& Plan,
+	const TSubclassOf<UItemDefinition> DefinitionClass,
+	TArray<FInventoryStackEntry>& InOutEntries)
+{
+	for (const FInventoryStackMerge& Merge : Plan.Merges)
+	{
+		FInventoryStackEntry* Target = InOutEntries.FindByPredicate(
+			[&Merge](const FInventoryStackEntry& Entry) { return Entry.Item == Merge.Item; });
+		check(Target);
+		Target->Quantity += Merge.Quantity;
+	}
+	for (const int32 NewStackQuantity : Plan.NewStackQuantities)
+	{
+		FInventoryStackEntry& Planned = InOutEntries.AddDefaulted_GetRef();
+		Planned.DefinitionClass = DefinitionClass;
+		Planned.Quantity = NewStackQuantity;
+	}
+}
+
+bool FInventoryStacking::PlanRemoval(
+	TArray<FInventoryStackEntry>& InOutEntries,
+	const TSubclassOf<UItemDefinition> DefinitionClass,
+	const int32 Quantity)
+{
+	if (!DefinitionClass || Quantity < 1)
+	{
+		return false;
+	}
+	int64 Available = 0;
+	for (const FInventoryStackEntry& Entry : InOutEntries)
+	{
+		if (Entry.DefinitionClass == DefinitionClass && Entry.Quantity > 0)
+		{
+			Available += Entry.Quantity;
+		}
+	}
+	if (Available < Quantity)
+	{
+		return false;
+	}
+
+	int32 Remaining = Quantity;
+	for (FInventoryStackEntry& Entry : InOutEntries)
+	{
+		if (Remaining == 0)
+		{
+			break;
+		}
+		if (Entry.DefinitionClass != DefinitionClass || Entry.Quantity < 1)
+		{
+			continue;
+		}
+		const int32 Taken = FMath::Min(Remaining, Entry.Quantity);
+		Entry.Quantity -= Taken;
+		Remaining -= Taken;
+	}
+	// Drop only the stacks this removal emptied. RemoveAll keeps the relative order of the rest.
+	InOutEntries.RemoveAll([&DefinitionClass](const FInventoryStackEntry& Entry)
+	{
+		return Entry.DefinitionClass == DefinitionClass && Entry.Quantity < 1;
+	});
+	return true;
 }
 
 bool FInventoryStacking::StageNewStacks(

@@ -20,6 +20,73 @@
 
 namespace
 {
+FInventoryTransactionResult MakeTransactionResult(
+	const EInventoryOperationResult Result,
+	const EInventoryTransactionSide FailedSide = EInventoryTransactionSide::None,
+	const int32 FailedIndex = INDEX_NONE)
+{
+	FInventoryTransactionResult TransactionResult;
+	TransactionResult.Result = Result;
+	TransactionResult.FailedSide = FailedSide;
+	TransactionResult.FailedIndex = FailedIndex;
+	return TransactionResult;
+}
+
+/** One definition's summed quantity within a transaction list, with the first caller index that named it. */
+struct FCombinedDefinitionRequest
+{
+	TSubclassOf<UItemDefinition> DefinitionClass;
+	int32 Quantity = 0;
+	int32 FirstIndex = INDEX_NONE;
+};
+
+bool CombineDefinitionRequests(
+	const TArray<FInventoryDefinitionQuantity>& Requests,
+	const EInventoryTransactionSide Side,
+	TArray<FCombinedDefinitionRequest>& OutCombined,
+	FInventoryTransactionResult& OutFailure)
+{
+	OutCombined.Reset();
+	TArray<int64> Totals;
+	for (int32 Index = 0; Index < Requests.Num(); ++Index)
+	{
+		const FInventoryDefinitionQuantity& Request = Requests[Index];
+		if (Request.Quantity < 1)
+		{
+			OutFailure = MakeTransactionResult(EInventoryOperationResult::InvalidQuantity, Side, Index);
+			return false;
+		}
+		if (!Request.DefinitionClass)
+		{
+			OutFailure = MakeTransactionResult(EInventoryOperationResult::InvalidDefinition, Side, Index);
+			return false;
+		}
+		const int32 Existing = OutCombined.IndexOfByPredicate(
+			[&Request](const FCombinedDefinitionRequest& Entry) { return Entry.DefinitionClass == Request.DefinitionClass; });
+		if (Existing == INDEX_NONE)
+		{
+			FCombinedDefinitionRequest& Combined = OutCombined.AddDefaulted_GetRef();
+			Combined.DefinitionClass = Request.DefinitionClass;
+			Combined.FirstIndex = Index;
+			Totals.Add(Request.Quantity);
+		}
+		else
+		{
+			Totals[Existing] += Request.Quantity;
+		}
+	}
+	for (int32 Index = 0; Index < OutCombined.Num(); ++Index)
+	{
+		if (Totals[Index] > MAX_int32)
+		{
+			OutFailure = MakeTransactionResult(EInventoryOperationResult::InvalidQuantity, Side, OutCombined[Index].FirstIndex);
+			return false;
+		}
+		OutCombined[Index].Quantity = static_cast<int32>(Totals[Index]);
+	}
+	return true;
+}
+
 FInventoryOperationResult MakeInventoryResult(
 	EInventoryOperationResult Result,
 	UItemInstance* Item = nullptr,
@@ -518,50 +585,19 @@ FInventoryOperationResult UInventoryComponent::CanAddDefinitionQuantities(
 		return MakeInventoryResult(EInventoryOperationResult::InvalidQuantity);
 	}
 
-	// Merging only touches stacks of the same definition, so after summing duplicates the requests
-	// compete only for free slots.
-	TArray<TPair<TSubclassOf<UItemDefinition>, int64>> Combined;
+	// An addition-only transaction preflight: the same planning the transaction commit uses.
+	FInventoryTransactionPlan Plan;
+	FArrayProperty* ProjectionArray = nullptr;
+	FClassProperty* ProjectionClass = nullptr;
+	const FInventoryTransactionResult Preflight = PreflightTransaction({}, Requests, Plan, ProjectionArray, ProjectionClass);
+	if (!Preflight.IsSuccess())
+	{
+		return MakeInventoryResult(Preflight.Result);
+	}
+	int64 TotalQuantity = 0;
 	for (const FInventoryDefinitionQuantity& Request : Requests)
 	{
-		if (Request.Quantity < 1)
-		{
-			return MakeInventoryResult(EInventoryOperationResult::InvalidQuantity);
-		}
-		TPair<TSubclassOf<UItemDefinition>, int64>* Existing = Combined.FindByPredicate(
-			[&Request](const TPair<TSubclassOf<UItemDefinition>, int64>& Entry) { return Entry.Key == Request.DefinitionClass; });
-		if (Existing)
-		{
-			Existing->Value += Request.Quantity;
-		}
-		else
-		{
-			Combined.Emplace(Request.DefinitionClass, Request.Quantity);
-		}
-	}
-
-	int64 TotalQuantity = 0;
-	int32 NewStacks = 0;
-	for (const TPair<TSubclassOf<UItemDefinition>, int64>& Entry : Combined)
-	{
-		if (Entry.Value > MAX_int32)
-		{
-			return MakeInventoryResult(EInventoryOperationResult::InvalidQuantity);
-		}
-		FInventoryStackPlan StackPlan;
-		FArrayProperty* ProjectionArray = nullptr;
-		FClassProperty* ProjectionClass = nullptr;
-		const int32 Quantity = static_cast<int32>(Entry.Value);
-		const EInventoryOperationResult Preflight = PreflightAdd(Entry.Key, Quantity, StackPlan, ProjectionArray, ProjectionClass);
-		if (Preflight != EInventoryOperationResult::Success)
-		{
-			return MakeInventoryResult(Preflight);
-		}
-		NewStacks += StackPlan.NewStackQuantities.Num();
-		TotalQuantity += Quantity;
-	}
-	if (Items.Num() + NewStacks > Capacity)
-	{
-		return MakeInventoryResult(EInventoryOperationResult::CapacityFull);
+		TotalQuantity += Request.Quantity;
 	}
 	return MakeInventoryResult(EInventoryOperationResult::Success, nullptr, FGuid(),
 		static_cast<int32>(FMath::Min<int64>(TotalQuantity, MAX_int32)));
@@ -729,7 +765,34 @@ EInventoryOperationResult UInventoryComponent::PreflightAdd(
 		return EInventoryOperationResult::InvalidQuantity;
 	}
 
-	UClass* DefinitionUClass = DefinitionClass.Get();
+	const EInventoryOperationResult DefinitionResult = ValidateAddDefinition(DefinitionClass);
+	if (DefinitionResult != EInventoryOperationResult::Success)
+	{
+		return DefinitionResult;
+	}
+
+	if (InitializationState == EInventoryInitializationState::NativeReady)
+	{
+		if (!LegacyInventoryStorage::FindArray(this, OutProjectionArray, OutProjectionClass))
+		{
+			return EInventoryOperationResult::NotInitialized;
+		}
+		if (!DefinitionClass->IsChildOf(OutProjectionClass->MetaClass))
+		{
+			return EInventoryOperationResult::InvalidDefinition;
+		}
+	}
+
+	if (!FInventoryStacking::BuildAddPlan(Items, Capacity, DefinitionClass, Quantity, OutPlan))
+	{
+		return EInventoryOperationResult::CapacityFull;
+	}
+	return EInventoryOperationResult::Success;
+}
+
+EInventoryOperationResult UInventoryComponent::ValidateAddDefinition(TSubclassOf<UItemDefinition> DefinitionClass) const
+{
+	const UClass* DefinitionUClass = DefinitionClass.Get();
 	if (!DefinitionUClass || DefinitionUClass->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
 	{
 		return EInventoryOperationResult::InvalidDefinition;
@@ -745,24 +808,174 @@ EInventoryOperationResult UInventoryComponent::PreflightAdd(
 	{
 		return EInventoryOperationResult::InvalidDefinitionData;
 	}
-
-	if (InitializationState == EInventoryInitializationState::NativeReady)
-	{
-		if (!LegacyInventoryStorage::FindArray(this, OutProjectionArray, OutProjectionClass))
-		{
-			return EInventoryOperationResult::NotInitialized;
-		}
-		if (!DefinitionUClass->IsChildOf(OutProjectionClass->MetaClass))
-		{
-			return EInventoryOperationResult::InvalidDefinition;
-		}
-	}
-
-	if (!FInventoryStacking::BuildAddPlan(Items, Capacity, DefinitionClass, Quantity, OutPlan))
-	{
-		return EInventoryOperationResult::CapacityFull;
-	}
 	return EInventoryOperationResult::Success;
+}
+
+FInventoryTransactionResult UInventoryComponent::PreflightTransaction(
+	const TArray<FInventoryDefinitionQuantity>& Removals,
+	const TArray<FInventoryDefinitionQuantity>& Additions,
+	FInventoryTransactionPlan& OutPlan,
+	FArrayProperty*& OutProjectionArray,
+	FClassProperty*& OutProjectionClass) const
+{
+	OutPlan = FInventoryTransactionPlan();
+	OutProjectionArray = nullptr;
+	OutProjectionClass = nullptr;
+	if (Removals.IsEmpty() && Additions.IsEmpty())
+	{
+		return MakeTransactionResult(EInventoryOperationResult::InvalidQuantity);
+	}
+	if (InitializationState == EInventoryInitializationState::NativeReady
+		&& !LegacyInventoryStorage::FindArray(this, OutProjectionArray, OutProjectionClass))
+	{
+		return MakeTransactionResult(EInventoryOperationResult::NotInitialized);
+	}
+
+	TArray<FCombinedDefinitionRequest> CombinedRemovals;
+	FInventoryTransactionResult Failure;
+	if (!CombineDefinitionRequests(Removals, EInventoryTransactionSide::Removal, CombinedRemovals, Failure))
+	{
+		return Failure;
+	}
+	TArray<FCombinedDefinitionRequest> CombinedAdditions;
+	if (!CombineDefinitionRequests(Additions, EInventoryTransactionSide::Addition, CombinedAdditions, Failure))
+	{
+		return Failure;
+	}
+	for (const FCombinedDefinitionRequest& Addition : CombinedAdditions)
+	{
+		EInventoryOperationResult DefinitionResult = ValidateAddDefinition(Addition.DefinitionClass);
+		if (DefinitionResult == EInventoryOperationResult::Success && OutProjectionClass
+			&& !Addition.DefinitionClass->IsChildOf(OutProjectionClass->MetaClass))
+		{
+			DefinitionResult = EInventoryOperationResult::InvalidDefinition;
+		}
+		if (DefinitionResult != EInventoryOperationResult::Success)
+		{
+			return MakeTransactionResult(DefinitionResult, EInventoryTransactionSide::Addition, Addition.FirstIndex);
+		}
+	}
+
+	// Removals run on a copy of the live entries; live stacks are only read.
+	TArray<FInventoryStackEntry> Projected;
+	FInventoryStacking::MakeEntries(Items, Projected);
+	for (const FCombinedDefinitionRequest& Removal : CombinedRemovals)
+	{
+		if (!FInventoryStacking::PlanRemoval(Projected, Removal.DefinitionClass, Removal.Quantity))
+		{
+			return MakeTransactionResult(EInventoryOperationResult::InsufficientQuantity,
+				EInventoryTransactionSide::Removal, Removal.FirstIndex);
+		}
+	}
+	OutPlan.SurvivingEntries = Projected;
+
+	// Each addition sees the slots and merges planned by the additions before it.
+	for (const FCombinedDefinitionRequest& Addition : CombinedAdditions)
+	{
+		FInventoryStackPlan StackPlan;
+		if (!FInventoryStacking::BuildAddPlanForEntries(Projected, Capacity, Addition.DefinitionClass, Addition.Quantity, StackPlan))
+		{
+			OutPlan = FInventoryTransactionPlan();
+			return MakeTransactionResult(EInventoryOperationResult::CapacityFull,
+				EInventoryTransactionSide::Addition, Addition.FirstIndex);
+		}
+		FInventoryStacking::ApplyPlanToEntries(StackPlan, Addition.DefinitionClass, Projected);
+		OutPlan.AdditionDefinitions.Add(Addition.DefinitionClass);
+		OutPlan.AdditionPlans.Add(MoveTemp(StackPlan));
+	}
+	return MakeTransactionResult(EInventoryOperationResult::Success);
+}
+
+FInventoryTransactionResult UInventoryComponent::TryApplyDefinitionTransaction(
+	const TArray<FInventoryDefinitionQuantity>& Removals,
+	const TArray<FInventoryDefinitionQuantity>& Additions)
+{
+	if (!CanOperate())
+	{
+		return MakeTransactionResult(EInventoryOperationResult::NotInitialized);
+	}
+	if (bMutationInProgress)
+	{
+		return MakeTransactionResult(EInventoryOperationResult::Busy);
+	}
+
+	TGuardValue<bool> MutationGuard(bMutationInProgress, true);
+	// Always plan from the live contents inside the guard; earlier query results are not trusted.
+	FInventoryTransactionPlan Plan;
+	FArrayProperty* ProjectionArray = nullptr;
+	FClassProperty* ProjectionClass = nullptr;
+	const FInventoryTransactionResult Preflight = PreflightTransaction(Removals, Additions, Plan, ProjectionArray, ProjectionClass);
+	if (!Preflight.IsSuccess())
+	{
+		return Preflight;
+	}
+
+	// Stage every new stack before touching live state, so a staging failure changes nothing.
+	TSet<FGuid> ReservedIds;
+	for (const UItemInstance* ExistingItem : Items)
+	{
+		if (IsValid(ExistingItem))
+		{
+			ReservedIds.Add(ExistingItem->GetInstanceId());
+		}
+	}
+	TArray<TStrongObjectPtr<UItemInstance>> StagedStacks;
+	for (int32 Index = 0; Index < Plan.AdditionPlans.Num(); ++Index)
+	{
+		TArray<TStrongObjectPtr<UItemInstance>> DefinitionStacks;
+		if (!FInventoryStacking::StageNewStacks(this, Plan.AdditionDefinitions[Index],
+			Plan.AdditionPlans[Index].NewStackQuantities, ReservedIds, DefinitionStacks))
+		{
+			return MakeTransactionResult(EInventoryOperationResult::InvalidDefinitionData,
+				EInventoryTransactionSide::Addition, INDEX_NONE);
+		}
+		for (TStrongObjectPtr<UItemInstance>& Staged : DefinitionStacks)
+		{
+			ReservedIds.Add(Staged->GetInstanceId());
+			StagedStacks.Add(MoveTemp(Staged));
+		}
+	}
+
+	// Commit: removals, then output merges against post-removal quantities, then new stacks.
+	TMap<const UItemInstance*, int32> SurvivingQuantities;
+	for (const FInventoryStackEntry& Entry : Plan.SurvivingEntries)
+	{
+		if (IsValid(Entry.Item))
+		{
+			SurvivingQuantities.Add(Entry.Item, Entry.Quantity);
+		}
+	}
+	Items.RemoveAll([&SurvivingQuantities](const TObjectPtr<UItemInstance>& Item)
+	{
+		return IsValid(Item) && !SurvivingQuantities.Contains(Item);
+	});
+	for (UItemInstance* Item : Items)
+	{
+		if (const int32* ProjectedQuantity = IsValid(Item) ? SurvivingQuantities.Find(Item) : nullptr)
+		{
+			if (Item->GetQuantity() != *ProjectedQuantity)
+			{
+				check(Item->SetQuantity(*ProjectedQuantity));
+			}
+		}
+	}
+	for (const FInventoryStackPlan& AdditionPlan : Plan.AdditionPlans)
+	{
+		FInventoryStacking::ApplyMerges(AdditionPlan);
+	}
+	for (const TStrongObjectPtr<UItemInstance>& Staged : StagedStacks)
+	{
+		Items.Add(Staged.Get());
+	}
+	if (ProjectionArray)
+	{
+		RebuildLegacyProjection(ProjectionArray, ProjectionClass);
+	}
+	++Revision;
+
+	const FInventoryTransactionResult Result = MakeTransactionResult(EInventoryOperationResult::Success);
+	OnInventoryChanged.Broadcast(Revision);
+	return Result;
 }
 
 bool UInventoryComponent::IsDefinitionDataValid(const UItemDefinition* Definition) const

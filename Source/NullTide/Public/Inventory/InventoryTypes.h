@@ -71,6 +71,37 @@ struct NULLTIDE_API FInventoryOperationResult
 	}
 };
 
+/** Which request list a failed definition transaction stopped on. */
+UENUM(BlueprintType)
+enum class EInventoryTransactionSide : uint8
+{
+	None,
+	Removal,
+	Addition
+};
+
+/** Result of one atomic remove-and-add definition transaction. */
+USTRUCT(BlueprintType)
+struct NULLTIDE_API FInventoryTransactionResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	EInventoryOperationResult Result = EInventoryOperationResult::NotInitialized;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	EInventoryTransactionSide FailedSide = EInventoryTransactionSide::None;
+
+	/** First caller index (in Removals or Additions) of the definition that failed, or INDEX_NONE. */
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory")
+	int32 FailedIndex = INDEX_NONE;
+
+	bool IsSuccess() const
+	{
+		return Result == EInventoryOperationResult::Success;
+	}
+};
+
 UENUM(BlueprintType, meta = (ScriptName = "InventoryWorldDropResultCode"))
 enum class EInventoryWorldDropResult : uint8
 {

@@ -83,9 +83,32 @@ Baseline: `08ed028` (C1 approved). Read-only checkpoint: nothing is consumed or 
 
 Consuming ingredients, adding outputs, any craft transaction, `UCraftingComponent`, UI, C3.
 
+## C3/C4 - Atomic Craft Transaction (one checkpoint)
+
+Baseline: `b7a2b86` (C2 approved). C3 (ingredient consumption) and C4 (outputs) are delivered as **one** atomic inventory transaction. They are never separate gameplay transactions. Approved and committed after user review.
+
+### Decisions
+
+| Decision | Choice | Reason |
+| --- | --- | --- |
+| Generic primitive | `UInventoryComponent::TryApplyDefinitionTransaction(Removals, Additions)` taking `FInventoryDefinitionQuantity` arrays and returning `FInventoryTransactionResult` (reason, failed side, failed caller index). Native C++ only for now; not a `UFUNCTION`. | Inventory stays generic. Keeping it out of Blueprints until the C5 crafting authority exists stops UI from calling it directly. |
+| Projected state | New planning entry `FInventoryStackEntry { Item, DefinitionClass, Quantity }` in the private `InventoryStacking.h`. `Item` is the live stack (never written during planning) or null for a planned stack that does not exist yet. | Smallest representation that lets one stacking algorithm run on live or projected contents. |
+| One stacking algorithm | `BuildAddPlan` becomes a thin wrapper that builds entries from live items and calls `BuildAddPlanForEntries`. Normal adds, storage transfers and craft outputs all use the same function. | No second stacking algorithm. |
+| Removal planning | `FInventoryStacking::PlanRemoval` works only on a copy of the entries: exact class match, earliest stacks first, partial removal allowed, zero-quantity entries dropped with order preserved. | Deterministic, no live mutation during preflight. |
+| Output planning | Outputs are planned in order against the post-removal entries. Each output plan is applied to the working copy (merged quantities updated, planned new stacks appended) so later outputs see the slots already used. | Exact capacity, including freed slots and ingredient/output overlap. |
+| Aggregation | Duplicate definitions are summed separately for removals and for additions inside the primitive. A failure reports the first caller index of that definition. | Generic callers may send duplicates; recipes cannot (`ValidateRecipe`). |
+| Commit | Inside one mutation guard: stage all new stacks first, then set surviving stack quantities to their projected values, drop fully consumed stacks, apply output merges, append new stacks, rebuild the legacy projection once, `++Revision` once, broadcast once. | No intermediate state is visible; failures before commit change nothing. |
+| Preflight re-run | The commit always plans from the live contents inside the guard. It never trusts an earlier C2 query. | Queries are advisory. |
+| Exact-class semantics | Kept: removal, totals and stacking match the exact definition class. | Same as current stacking; changing it is a separate decision. |
+| Crafting helper | `FCraftingTransaction::TryCraftRecipeAtomic(Inventory, Recipe)` (native C++, not Blueprint) validates the recipe, converts ingredients/outputs to requests and calls the primitive. Returns `FCraftingTransactionResult` (reason, recipe entry index, inventory result, diagnostic). | Smallest crafting-side executor; the C5 `UCraftingComponent` will own it and expose crafting to Blueprints. |
+| Query relationship | `CheckRecipeIngredients` / `CheckRecipeOutputCapacity` stay advisory UI helpers. `TryCraftRecipeAtomic` is authoritative. | C2 output check is conservative; the transaction is exact. |
+
+### Out of scope
+
+`UCraftingComponent` (C5), crafting UI (C6), timed crafting (C7), workstations (C8).
+
 ## Later Checkpoints (summary)
 
-- **C3/C4** One atomic craft transaction: preflight ingredients and output capacity, consume stacks in inventory order, add outputs through the stacking authority, one coherent revision/event. Must resolve the five transaction-design issues recorded under C2 in `CRAFTING_PROGRESS.md`: exact post-removal output simulation, one batch commit with one revision/event, a remove-by-definition commit inside the inventory, preflight re-run inside the mutation guard, and an explicit choice about exact-class matching.
 - **C5** `UCraftingComponent` as the single crafting authority.
 - **C6** Minimal crafting UI that only observes authority state.
 - **C7** Timed crafting; choose reserve-at-start or consume-at-completion before implementing.

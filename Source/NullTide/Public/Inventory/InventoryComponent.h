@@ -16,6 +16,7 @@ class APawn;
 class FArrayProperty;
 class FClassProperty;
 struct FInventoryStackPlan;
+struct FInventoryTransactionPlan;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnInventoryChanged, int32, NewRevision);
 
@@ -41,6 +42,15 @@ public:
 	/** Removes quantity from one exact stack identity. A zero remainder removes that stack entry. */
 	UFUNCTION(BlueprintCallable, Category = "Inventory", meta = (ClampMin = "1"))
 	FInventoryOperationResult TryRemoveItemQuantity(FGuid ItemId, int32 Quantity);
+
+	/**
+	 * Atomically removes and adds quantities by exact definition class. Removals consume the earliest
+	 * stacks first; additions are planned against the post-removal contents with the normal stacking
+	 * rules. On success Revision rises once and OnInventoryChanged fires once; on failure nothing changes.
+	 * Duplicate definitions within one list are summed. Native only until a crafting authority exposes it.
+	 */
+	FInventoryTransactionResult TryApplyDefinitionTransaction(const TArray<FInventoryDefinitionQuantity>& Removals,
+		const TArray<FInventoryDefinitionQuantity>& Additions);
 
 	/** Spawns the generic pickup first, then commits the exact-ID removal on success. */
 	UFUNCTION(BlueprintCallable, Category = "Inventory")
@@ -130,6 +140,12 @@ private:
 	/** Shared add validation and stack plan used by both TryAddDefinitionQuantity and the add queries. */
 	EInventoryOperationResult PreflightAdd(TSubclassOf<UItemDefinition> DefinitionClass, int32 Quantity,
 		FInventoryStackPlan& OutPlan, FArrayProperty*& OutProjectionArray, FClassProperty*& OutProjectionClass) const;
+	/** Definition checks shared by single adds and transaction additions (class flags and fragment data). */
+	EInventoryOperationResult ValidateAddDefinition(TSubclassOf<UItemDefinition> DefinitionClass) const;
+	/** Plans a whole definition transaction from the live contents without changing them. */
+	FInventoryTransactionResult PreflightTransaction(const TArray<FInventoryDefinitionQuantity>& Removals,
+		const TArray<FInventoryDefinitionQuantity>& Additions, FInventoryTransactionPlan& OutPlan,
+		FArrayProperty*& OutProjectionArray, FClassProperty*& OutProjectionClass) const;
 	bool IsDefinitionDataValid(const UItemDefinition* Definition) const;
 	bool HasItemId(const FGuid& ItemId) const;
 	void RebuildLegacyProjection(FArrayProperty* ArrayProperty, FClassProperty* ClassProperty);

@@ -7,9 +7,10 @@ Plan and design decisions: `CRAFTING_PLAN.md`.
 | Checkpoint | Status |
 | --- | --- |
 | C1 Recipe Data Model | COMPLETE |
-| C2 Inventory Quantity Queries | COMPLETE (awaiting review) |
-| C3 Atomic Ingredient Consumption | Next, not started |
-| C4-C8 | Not started |
+| C2 Inventory Quantity Queries | COMPLETE |
+| C3/C4 Atomic Craft Transaction (one checkpoint) | COMPLETE |
+| C5 Crafting Authority | NEXT |
+| C6-C8 | Not started |
 
 ## C1 - Recipe Data Model
 
@@ -114,6 +115,95 @@ C2 checks output capacity against the inventory as it is now, before consumption
 4. **Queries are advisory.** Queries do not report `Busy`, and inventory can change between a query and a commit. The C3 commit must re-run its own preflight inside the mutation guard and never rely on an earlier query result.
 5. **Exact-class matching.** Totals and stacking match the exact definition class. A recipe that names a parent class will not match child item classes. This matches current stacking behaviour; change it only deliberately.
 
+## C3/C4 - Atomic Craft Transaction
+
+C3 (ingredient consumption) and C4 (outputs) are one atomic inventory transaction, delivered as one checkpoint.
+
+### Baseline and Scope
+
+- Baseline: `b7a2b86` (C2 approved).
+- No `UCraftingComponent`, no UI, no timed crafting, no workstations.
+- Content: no change. Tracked `.uasset`/`.umap` packages 308 -> 308; nothing under `Content/` modified.
+- Reviewed and approved by the user; committed as the C3/C4 milestone.
+
+### Generic Inventory Transaction
+
+`UInventoryComponent::TryApplyDefinitionTransaction(Removals, Additions)` takes `FInventoryDefinitionQuantity` arrays and returns `FInventoryTransactionResult` (`Result`, `FailedSide` = None/Removal/Addition, `FailedIndex` = first caller index of the failing definition). It is native C++ only; not a `UFUNCTION`, so UI cannot call it before the C5 authority exists. The inventory still includes no crafting types.
+
+Preflight order (all read-only, inside the mutation guard):
+
+1. `NotInitialized` when native authority is inactive; `Busy` during another mutation.
+2. Both lists empty: `InvalidQuantity`.
+3. Legacy projection lookup when native-ready.
+4. Combine each list separately: per-request `Quantity < 1` -> `InvalidQuantity`, null class -> `InvalidDefinition`; duplicates summed (overflow -> `InvalidQuantity`).
+5. Validate each addition definition with the same checks as single adds (class flags, fragment data, legacy projection class).
+6. Plan removals on a projected copy -> `InsufficientQuantity`.
+7. Plan additions in order on the projection -> `CapacityFull`.
+
+### Removal Planning
+
+`FInventoryStacking::PlanRemoval` works on a copy of the entries: exact definition class only, earliest stacks first, partial removal allowed, emptied entries of that definition dropped with the order of the rest kept. A short total returns false and leaves the copy unchanged. Live stacks are never written during planning.
+
+### Projected Inventory Representation
+
+`FInventoryStackEntry { Item, DefinitionClass, Quantity }` (private `InventoryStacking.h`):
+
+- `Item` is the live stack the entry describes, read but never written during planning; null for a stack a plan would create.
+- `Quantity` is the projected quantity.
+- `MakeEntries` builds entries from live items in inventory order.
+- `BuildAddPlan` (live) is now a thin wrapper over `BuildAddPlanForEntries`, the one stacking rule set used by normal adds, storage transfers, batch add queries and transaction outputs. Only live entries are merge targets; planned entries only take slots.
+- `ApplyPlanToEntries` updates the projection after each addition (merged quantities rise, planned stacks are appended), so later additions see slots already used.
+
+### Output Preflight
+
+Outputs are planned against the post-removal projection, so freed slots, partially consumed stacks and ingredient/output overlap are all exact. `CanAddDefinitionQuantities` (C2) now runs the same transaction preflight with no removals, so the batch add query and the commit share one path.
+
+### Atomic Commit and Event Contract
+
+Inside one mutation guard, after preflight passes:
+
+1. Stage every new output stack (new ItemIds, unique against existing and other staged ids). A staging failure returns before any live change.
+2. Drop fully consumed stacks; set surviving stacks to their projected quantities.
+3. Apply output merges onto the post-removal quantities.
+4. Append the staged stacks in addition order.
+5. Rebuild the legacy projection once (native-ready only).
+6. `++Revision` once; broadcast `OnInventoryChanged` once.
+
+Identity: untouched and partially consumed stacks keep their ItemId; a fully consumed stack's ItemId disappears once; merge destinations keep their ItemId; overflow stacks get new ItemIds; a source stack is never cloned. If an ingredient consumes a whole stack and the same definition is an output, the output becomes a new stack with a new ItemId.
+
+### Crafting-Side Executor
+
+`FCraftingTransaction::TryCraftRecipeAtomic(Inventory, RecipeClass | Recipe)` (native C++, `Public/Crafting/CraftingTransaction.h`):
+
+- validates the inventory pointer and the recipe (`ValidateRecipe`; the diagnostic is returned);
+- converts ingredients to removals and outputs to additions (`ValidateRecipe` forbids duplicates, so request indices are recipe indices; the primitive still sums duplicates for generic callers);
+- calls `TryApplyDefinitionTransaction` and maps the result to `FCraftingTransactionResult`: `Success`, `InvalidInventory`, `InvalidRecipe`, `InsufficientIngredients` (ingredient index), `OutputCapacityFull` (output index), `InventoryBusy`, `InventoryRejected`.
+
+`CheckRecipeIngredients` / `CheckRecipeOutputCapacity` remain advisory UI helpers. `TryCraftRecipeAtomic` is authoritative and never relies on an earlier query.
+
+### Exact-Class Semantics
+
+Kept: removals, totals and stacking match the exact definition class. A recipe naming a parent class does not consume child-class items.
+
+### Ingredient/Output Overlap
+
+Resolved exactly. `Wood 50/50`, recipe `Wood x10 -> Wood x5`, otherwise full inventory: the C2 advisory check still says full; the transaction succeeds and the same stack ends at 45. A full inventory of non-stackables crafting `Single x1 -> Other x1` uses the slot its own ingredient frees.
+
+### Validation
+
+- `NullTideEditor Win64 Development` build: succeeded, no compiler warnings.
+- Focused `NullTide.Crafting.C3C4`: 8/8 passed (`RemovalPlan`, `ProjectedCapacity`, `AtomicSuccess`, `AtomicFailure`, `IngredientOutputOverlap`, `RevisionAndEventContract`, `IdentityPreservation`, `ProductionRecipes`). Every failure case proves contents, ItemIds, revision and event count unchanged; every success proves exactly one revision and one event.
+- Regression `NullTide.Crafting.C2` + `C1` + `Inventory.Stacking` + `Inventory.M1`: 25/25 passed (5 + 4 + 7 + 9).
+- Full permanent automation `NullTide.`: 138/138 passed (130 previous + 8 new).
+- Windows cook: succeeded, 0 errors (613 cooked, 7 platform-skipped, 620 total). Environment warnings only.
+- Tests ran headless through `UnrealEditor-Cmd` with `-NullRHI`; the editor was closed.
+- Rendered PIE: not run. No gameplay-visible behaviour was added (nothing in game calls the transaction yet).
+
+### Notes for C5
+
+- The transaction and the craft executor are native only. C5 decides what `UCraftingComponent` exposes to Blueprints.
+- An exact read-only craft preflight (the transaction preflight without commit) would let C6 enable the Craft button exactly; today only the conservative C2 output check is exposed.
+
 ## Next Checkpoint
 
-C3 - Atomic Ingredient Consumption. Do not start it until C2 is reviewed.
+C5 - Crafting Authority. NEXT; not started.

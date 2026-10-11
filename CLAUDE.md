@@ -46,7 +46,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Inventory.{M1..M6,G7,Stacking}`
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
-- `NullTide.Crafting.{C1,C2}`
+- `NullTide.Crafting.{C1,C2,C3C4}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -71,9 +71,10 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - Every operation is a `Try*` call (add, remove, quantity, drop to world, transfer to storage). Each one returns a result struct with a reason code from `InventoryTypes.h` and is atomic. Failures roll back, for example a world drop spawns the pickup first and only removes the item if the spawn succeeded.
 - Each successful change increments `Revision` and broadcasts `OnInventoryChanged`.
 - UI and other callers read data through `GetItemsSnapshot`. They never mutate items locally.
-- Read-only queries (`GetTotalQuantity`, `CanRemoveDefinitionQuantity`, `CanAddDefinitionQuantity`, `CanAddDefinitionQuantities`) return the same reason codes as the `Try*` calls and never change `Revision` or broadcast. Add commits and add queries share one private `PreflightAdd`; do not add a second capacity algorithm.
+- Read-only queries (`GetTotalQuantity`, `CanRemoveDefinitionQuantity`, `CanAddDefinitionQuantity`, `CanAddDefinitionQuantities`) return the same reason codes as the `Try*` calls and never change `Revision` or broadcast. They are advisory; commits always re-run their own preflight inside the mutation guard.
+- `TryApplyDefinitionTransaction(Removals, Additions)` (native only) is the atomic multi-definition commit: removals consume the earliest stacks of the exact class, additions are planned against the post-removal projection, and success bumps `Revision` once and broadcasts once. Crafting uses it; do not build a craft out of several `Try*` calls.
 - The inventory stays generic: it must not include or depend on crafting types.
-- Stack planning lives in the private `InventoryStacking.*` files.
+- Stack planning lives in the private `InventoryStacking.*` files. `BuildAddPlanForEntries` over `FInventoryStackEntry` (live or projected stacks) is the only stacking rule set; `BuildAddPlan` wraps it for live stacks. Do not add a second capacity or stacking algorithm.
 
 **Legacy compatibility (`Compatibility/`, `Inventory/LegacyInventoryStorage.*`)**
 - `InventoryManagerComponent.uasset` is an older Blueprint inventory component. It now inherits from `UInventoryComponent` but still has its own Blueprint array of definition classes.
@@ -93,7 +94,8 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 **Crafting (`Crafting/`)**
 - `UCraftingRecipeDefinition` is an abstract, const UObject, the same pattern as `UItemDefinition`. Each recipe is a data-only Blueprint subclass in `Content/LevelPrototyping/CraftingSystem/Recipes/Recipe_*`, referenced by `TSubclassOf` and read from its class default object.
 - A recipe has `Ingredients` and `Outputs` (`FCraftingItemQuantity`: item definition class + quantity) and `CraftDuration`. `ValidateRecipe` returns an indexed diagnostic, and `IsDataValid` reports the same error in the editor.
-- Recipes hold static data only. Recipe-specific inventory checks live in `UCraftingQueryLibrary` (read-only ingredient and output-capacity checks built on the generic inventory queries). Its output check runs before consumption, so it is conservative.
+- Recipes hold static data only. Recipe-specific inventory checks live in `UCraftingQueryLibrary` (advisory read-only ingredient and output-capacity checks; the output check runs before consumption, so it is conservative).
+- `FCraftingTransaction::TryCraftRecipeAtomic` (native only) is the authoritative craft path: it validates the recipe and runs one `TryApplyDefinitionTransaction`. There is no `UCraftingComponent` yet (C5).
 - Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. Consumption, a crafting authority and UI come in later checkpoints.
 
 **UI (`UI/`)**

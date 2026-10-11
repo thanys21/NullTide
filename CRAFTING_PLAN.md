@@ -196,7 +196,97 @@ Baseline: `d831079` (C6A approved and committed; manual PIE 12/12 user-confirmed
 
 Timed crafting (C7), workstations (C8), new hotkeys, layout changes, split stacks.
 
+## C7 - Timed Crafting
+
+Baseline: `94dceff` (C6B complete; manual PIE 12/12 user-confirmed). Full automation 159/159. Design and implementation approved by the user (manual rendered PIE: 12 PASS, 1 NOT TESTED - click-to-move, deferred) and committed.
+
+### User Decisions
+
+- **Ingredients are consumed at completion**, never reserved at start. Start requires the exact read-only preflight (`CanCraftRecipe`). Completion re-validates and runs the existing C3/C4 atomic transaction (`FCraftingTransaction::TryCraftRecipeAtomic`). If the inventory changed and completion cannot succeed, it fails atomically: no partial consumption, no output.
+- **Cancellation**: explicit Cancel, movement and jump cancel. Closing the inventory UI, storage interaction and inventory quantity changes do not cancel. Owner/component `EndPlay` clears the timer and state. Damage is deferred until combat exists.
+- **Concurrency**: one active craft per player; a second start returns `CraftInProgress`; no queue.
+- **Compatibility**: duration-0 recipes stay instant; timed recipes cannot bypass the timer through `TryCraftRecipe`; `UCraftingComponent` stays the only crafting authority; successful completion keeps one revision and one inventory event.
+
+### Audit
+
+- **Crafting API (C5/C6B)**: `UCraftingComponent::TryCraftRecipe` validates (recipe, registration, inventory) and runs one atomic transaction; a craft guard makes reentrant calls return `CraftInProgress`; `OnCraftingResult` fires once per non-reentrant call. `CanCraftRecipe` is the exact preflight. The C6B panel calls `TryCraftRecipe` from CRAFT and shows feedback from `OnCraftingResult`. `CraftDuration` already exists on recipes; both production recipes are 0.
+- **Gathering cancel**: `AResourceNodeActor` keeps a static interactor -> node map. `BP_TopDownCharacter`'s IA_Move and IA_Jump graph paths call `CancelActiveGatherForInteractor` before their normal behaviour. That is input-intent based: it only sees those two actions (not the controller's click-to-move path) and lives in a Blueprint graph.
+- **UI input flow**: the inventory screen sets UI-only input while open, so movement/jump input cannot reach the pawn while it is open; closing it restores game input. Crafting must keep running after the screen closes.
+- **Test fixtures**: `UCraftingTestRecipeDefinition` has `CraftDuration = 1.5` and is used through `UCraftingComponent::TryCraftRecipe` by the C5, C6A and C6B tests. Under C7 rules those calls would be refused, so the fixture must become instant (see Test impact).
+
+### Movement and Jump Detection (recommended)
+
+Detect movement natively in `UCraftingComponent`, from the owner's character movement, instead of adding more calls to the IA_Move/IA_Jump Blueprint paths:
+
+- While a timed craft is active and the owner is an `ACharacter`, bind `OnCharacterMovementUpdated` and `MovementModeChangedDelegate`; unbind when the craft ends.
+- **Movement**: cancel when the owner's horizontal distance from the start location exceeds a small tolerance (`MovementCancelTolerance`, default 10 cm). This catches WASD, click-to-move and being pushed, and ignores tiny jitter.
+- **Jump**: cancel when the movement mode becomes `Falling` (jumping or walking off a ledge).
+- Owners that are not characters get no automatic movement cancel (explicit Cancel and `EndPlay` still work).
+
+Why this is safest: no change to `BP_TopDownCharacter`'s graph, `AResourceNodeActor`, the gathering static map or input assets, so gathering behaviour cannot regress. Both systems cancel independently on the same physical movement. Trade-off: any displacement cancels (also external pushes), which matches "movement cancels".
+
+### State, API and Events (proposed)
+
+State on `UCraftingComponent` (no tick; one world timer):
+
+- `ActiveRecipe` (class), `ActiveCraftStartLocation`, `CraftTimerHandle`. `IsCrafting()` is true while a timed craft runs.
+
+Blueprint API:
+
+| API | Behaviour |
+| --- | --- |
+| `TryStartCraft(RecipeClass)` (callable, new; UI entry point) | Validates like `TryCraftRecipe` and runs the exact preflight. Duration 0: crafts immediately (same as `TryCraftRecipe`, result `Success`). Duration > 0: starts the timer and returns `Started`; ingredients untouched. While a craft is active: `CraftInProgress`. |
+| `TryCraftRecipe(RecipeClass)` (existing) | Unchanged for duration-0 recipes. Timed recipes return `TimedCraftRequired` without mutation, so the timer cannot be bypassed. While a timed craft is active: `CraftInProgress`. |
+| `CancelCraft()` (callable, new) | Cancels the active timed craft (reason `Explicit`); no inventory change. |
+| `CanCraftRecipe(RecipeClass)` (existing) | Same exact preflight; additionally returns `CraftInProgress` while a timed craft is active (a persistent state, unlike a transient busy). |
+| `IsCrafting()`, `GetActiveCraftRecipe()`, `GetActiveCraftProgress()` (0..1), `GetActiveCraftRemainingSeconds()` (pure, new) | Read-only progress for UI; derived from the world timer, no stored copies. |
+
+Result codes appended to `ECraftingTransactionResult`: `Started`, `TimedCraftRequired`.
+
+Events:
+
+- `OnCraftStarted(RecipeClass, Duration)` (new).
+- `OnCraftCancelled(RecipeClass, ECraftCancelReason)` (new; reasons `Explicit`, `Movement`, `Jump`). Not broadcast on `EndPlay`.
+- `OnCraftingResult(RecipeClass, Result)` (existing): instant crafts as today; timed crafts **once at completion** with the transaction result (success, or the atomic failure reason such as `InsufficientIngredients`/`OutputCapacityFull` when the inventory changed). A refused start (failed preflight, `CraftInProgress`) also notifies once, as in C5.
+
+Completion order: the timer fires -> active state is cleared and movement unbound -> inside the craft guard, re-validate (recipe still registered, inventory present) and run `FCraftingTransaction::TryCraftRecipeAtomic` -> broadcast `OnCraftingResult`. Listeners therefore see `IsCrafting() == false` and may start the next craft.
+
+`EndPlay`: clear the timer, unbind movement, clear state; no inventory change, no broadcast.
+
+### UI (C6B panel, minimal)
+
+- CRAFT calls `TryStartCraft`. While crafting, the same button reads **CANCEL** and calls `CancelCraft`; a progress bar under the status line shows `GetActiveCraftProgress()`; the status reads "Crafting Axe... 1.4 s".
+- Feedback: start refusals and completion results reuse the C6B messages; cancel shows "Crafting cancelled." (or "Crafting cancelled: you moved."). Completion while the screen is closed has no HUD toast in C7 (deferred).
+- Panel reacts to `OnCraftStarted`/`OnCraftCancelled`/`OnCraftingResult`; progress is read in the panel's existing `NativeTick`.
+
+### Proposed Scope
+
+- Source: `Crafting/CraftingComponent.h/.cpp` (state, timer, events, movement binding, `TryStartCraft`, `CancelCraft`, `EndPlay`, progress queries), `Crafting/CraftingTransaction.h` (two result codes, cancel-reason enum), `UI/CraftingViewLibrary` (status/feedback text for started/cancelled/progress), `UI/CraftingPanelWidget` (start/cancel button mode, progress, new event bindings), tests.
+- Assets (through Unreal MCP):
+  - `W_CraftingPanel`: add one `ProgressBar` (`CraftProgressBar`); bind the existing `CraftButtonText` for the CRAFT/CANCEL label.
+  - One production timed recipe for PIE (decision needed, see below).
+- Not touched: `BP_TopDownCharacter` graph, `BP_TopDownController`, `IMC_Default`, `AResourceNodeActor`, maps.
+
+### Test Impact
+
+- Make `UCraftingTestRecipeDefinition` instant (`CraftDuration = 0`) so the existing C5/C6 tests keep testing instant crafting; update the C1 `RecipeContract` expectation; add separate timed fixtures for C7.
+- New `NullTide.Crafting.C7.*`: start/complete, consume-at-completion, inventory changed during craft (atomic failure), explicit/movement/jump cancel, closing UI not cancelling, `CraftInProgress` for a second start, `TimedCraftRequired` from `TryCraftRecipe`, instant recipes unchanged, `EndPlay` cleanup, one revision/event on completion, panel start/cancel/progress. Movement and jump tests use a character in a transient world (`SetActorLocation` + movement update, `SetMovementMode(MOVE_Falling)`).
+
+### Approved Decisions (user, all four approved)
+
+1. **Production timed recipe**: new `Recipe_Pickaxe` (Wood x2 + Stone x3 -> Pickaxe x1, `CraftDuration = 3.0`), registered third on `BP_TopDownCharacter`. `Recipe_Axe` and `Recipe_WoodArrow` stay instant.
+2. **API shape**: `TryStartCraft` is the unified UI entry point; `TryCraftRecipe` stays instant-only and returns `TimedCraftRequired` for timed recipes.
+3. **`CanCraftRecipe`** returns `CraftInProgress` while a timed craft is active.
+4. **Movement detection**: native, through the owner's character movement (`OnCharacterMovementUpdated` displacement beyond 10 cm -> `Movement`; movement mode `Falling` -> `Jump`). No Blueprint movement/jump graph, controller, input or gathering change.
+
+Re-entrancy (user requirement): on completion the active timed state, timer and movement bindings are cleared before feedback; the transaction and `OnCraftingResult` run inside the existing craft guard, so a synchronous callback gets `CraftInProgress` without an extra notification; a later independent action can start a new craft normally.
+
+### Out of scope
+
+Crafting queue, multiple simultaneous crafts, workstations (C8), HUD toast while the screen is closed, damage cancel, save/load of an active craft.
+
 ## Later Checkpoints (summary)
 
-- **C7** Timed crafting; choose reserve-at-start or consume-at-completion before implementing.
 - **C8** Workstations.
+- **Crafting queue (deferred, user request after C7 PIE)**: queue up to 5 crafts per player that run one after another; each queued entry can be cancelled with a button or right-click. Needs its own design: whether ingredients are checked per entry at start or at completion (C7 consumes at completion), what happens to later entries when one fails or is cancelled, and how movement cancellation applies to the queue. Not started; must not be mixed into C8 without approval.
+- **Inventory/crafting UI/UX pass (deferred, user request after C7 PIE)**: make the combined screen more convenient. Known items from C7 PIE: keep the last craft result and selected recipe across closing/reopening the screen; remove the occasional quantity flicker after a result message disappears; show crafting progress or completion while the screen is closed (HUD); review layout density and the empty Item Details state. Not started.

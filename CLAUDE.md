@@ -46,7 +46,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Inventory.{M1..M6,G7,Stacking}`
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
-- `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B}`
+- `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -96,7 +96,8 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - A recipe has `Ingredients` and `Outputs` (`FCraftingItemQuantity`: item definition class + quantity) and `CraftDuration`. `ValidateRecipe` returns an indexed diagnostic, and `IsDataValid` reports the same error in the editor.
 - Recipes hold static data only. Recipe-specific inventory checks live in `UCraftingQueryLibrary` (advisory read-only ingredient and output-capacity checks; the output check runs before consumption, so it is conservative).
 - `FCraftingTransaction::TryCraftRecipeAtomic` (native only) is the authoritative craft path: it validates the recipe and runs one `TryApplyDefinitionTransaction`.
-- `UCraftingComponent` on `BP_TopDownCharacter` is the player's crafting authority. It holds the registered recipes (`AvailableRecipes`, currently `Recipe_Axe`, `Recipe_WoodArrow`), resolves the owner's inventory, and exposes `GetAvailableRecipes`, `CanCraftRecipe` (exact read-only preflight), `TryCraftRecipe` and `OnCraftingResult`. UI and Blueprints call this component, never the inventory transaction.
+- `UCraftingComponent` on `BP_TopDownCharacter` is the player's crafting authority. It holds the registered recipes (`AvailableRecipes`, currently `Recipe_Axe`, `Recipe_WoodArrow`, `Recipe_Pickaxe`), resolves the owner's inventory, and exposes `GetAvailableRecipes`, `CanCraftRecipe` (exact read-only preflight; `CraftInProgress` while a timed craft runs), `TryStartCraft` (UI entry: instant recipes craft now, timed recipes start), `TryCraftRecipe` (instant only; timed recipes return `TimedCraftRequired`), `CancelCraft`, progress queries and `OnCraftStarted`/`OnCraftCancelled`/`OnCraftingResult`. UI and Blueprints call this component, never the inventory transaction.
+- Timed crafting (C7) consumes ingredients only at completion: start runs the exact preflight, a world timer runs (no tick), completion re-validates and runs one atomic transaction. One active craft per player. Movement (more than 10 cm horizontally) and jump/fall cancel through native `ACharacter` movement delegates bound only while crafting; do not add crafting cancel calls to Blueprint input graphs. Closing the UI does not cancel; `EndPlay` clears state silently.
 - Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. Crafting UI, timed crafting and workstations come in later checkpoints.
 
 **UI (`UI/`)**

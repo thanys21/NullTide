@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Crafting C6B (Craft Execution from UI) complete (manual rendered PIE 12/12 PASS, user-confirmed). Crafting C7 (Timed Crafting) is next.
+> **Current development state:** Crafting C7 (Timed Crafting) complete and approved (manual rendered PIE: 12 PASS, 1 NOT TESTED). Crafting C8 (Workstations) is next; crafting queue and the inventory/crafting UI-UX pass are deferred.
 
 ---
 
@@ -770,6 +770,7 @@ BP_TopDownCharacter
     AvailableRecipes:
       Recipe_Axe        Wood x3 + Stone x5 → Axe x1
       Recipe_WoodArrow  Wood x1 → WoodArrow x5
+      Recipe_Pickaxe    Wood x2 + Stone x3 → Pickaxe x1 (timed, 3 s)
 ```
 
 Crafting is the right column of the inventory screen (I or Tab). Since C6B the CRAFT button crafts the selected recipe through UCraftingComponent and shows a result message.
@@ -808,9 +809,10 @@ Crafting C3/C4 Atomic Transaction   ✅
 Crafting C5 Crafting Authority      ✅
 Crafting C6A Crafting UI Foundation  ✅
 Crafting C6B Craft Execution from UI ✅
+Crafting C7 Timed Crafting          ✅
 
 NEXT:
-Crafting C7 Timed Crafting
+Crafting C8 Workstations
 ```
 
 ---
@@ -1073,6 +1075,14 @@ before implementation.
 
 Do not mix approaches.
 
+Implemented (complete; manual rendered PIE 12 PASS, 1 NOT TESTED; details in `CRAFTING_PROGRESS.md`):
+
+- **Consume at completion.** Start runs the exact preflight only; completion re-validates and runs the C3/C4 atomic transaction; an inventory change during the craft makes completion fail atomically.
+- One active craft per player (`CraftInProgress` for a second start); no queue, no reservations.
+- `UCraftingComponent::TryStartCraft` is the UI entry (instant recipes craft immediately, timed recipes return `Started`); `TryCraftRecipe` stays instant-only (`TimedCraftRequired`); `CancelCraft`, `IsCrafting`, `GetActiveCraftRecipe`, `GetActiveCraftProgress`, `GetActiveCraftRemainingSeconds`; events `OnCraftStarted`, `OnCraftCancelled` (Explicit, Movement, Jump), `OnCraftingResult` at completion.
+- Cancellation: explicit, movement (more than 10 cm horizontally, detected natively from character movement, including click-to-move) and jump/fall. Closing the UI, storage and inventory changes do not cancel. `EndPlay` clears everything silently.
+- Production timed recipe `Recipe_Pickaxe` (Wood x2 + Stone x3 → Pickaxe x1, 3 s); Axe and WoodArrow stay instant.
+
 ---
 
 ## C8 — Workstations
@@ -1324,6 +1334,29 @@ weight capacity
 
 They are separate concepts.
 
+## Crafting Queue (user request after C7 PIE)
+
+Needed later, not part of C7 or C8 unless approved:
+
+```text
+queue up to 5 crafts per player
+→ they run one after another
+→ each queued entry can be cancelled (button or right-click)
+```
+
+Needs its own design: when each entry's ingredients are checked (C7 consumes at completion), what happens to later entries when one fails or is cancelled, and how movement cancellation applies to the whole queue.
+
+## Inventory / Crafting UI-UX Pass (user request after C7 PIE)
+
+Make the combined inventory + character + crafting screen more convenient. Known items:
+
+```text
+keep last craft result + selected recipe across close/reopen
+remove the occasional quantity flicker after a result message clears
+show crafting progress/completion while the screen is closed (HUD)
+review layout density and the empty Item Details state
+```
+
 ---
 
 # 13. Tool / Equipment Future
@@ -1395,24 +1428,23 @@ Do not implement without a dedicated milestone.
 
 # 15. Recommended Next Immediate Checkpoint
 
-## Crafting — C7 Timed Crafting
+## Crafting — C8 Workstations
 
-C6B is complete (see `CRAFTING_PROGRESS.md`). C7 is the next checkpoint; not started.
+C7 is complete and approved (see `CRAFTING_PROGRESS.md`). C8 is the next checkpoint; not started.
 
 Claude/Codex instruction:
 
 ```text
-1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md (C6B section).
-2. Decide with the user, before any code: reserve ingredients at start,
-   or validate/consume at completion. Do not mix approaches.
-3. Agree cancellation semantics (movement, closing the screen, damage)
-   and record the C7 scope in CRAFTING_PLAN.md.
-4. UCraftingComponent stays the only crafting authority; completion
-   still commits through FCraftingTransaction / the inventory transaction.
-5. No workstations (C8), no new hotkeys without approval.
-6. Build + focused tests + regression + full suite + rendered PIE + cook.
-7. Update CRAFTING_PROGRESS.md and this plan.
-8. STOP for review.
+1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md (C7 section).
+2. Agree the C8 scope with the user and record it in CRAFTING_PLAN.md
+   (workstation types, how a recipe declares one, how the player
+   uses a station, whether stations own their own crafting component).
+3. Keep UCraftingComponent the crafting authority; reuse
+   UCraftingPanelWidget::SetCraftingSource for station UI.
+4. No crafting queue, no save/load of active crafts unless approved.
+5. Build + focused tests + regression + full suite + rendered PIE + cook.
+6. Update CRAFTING_PROGRESS.md and this plan.
+7. STOP for review.
 ```
 
 This keeps Crafting incremental and prevents inventory authority from becoming coupled to UI.
@@ -1451,17 +1483,17 @@ Only then advance the roadmap.
 
 # 17. Current Test Baseline
 
-At the completion of Crafting C6B:
+At the completion of Crafting C7:
 
 ```text
-Focused Crafting C6B                                                   6/6
-Regression C6A + C1-C5 + Stacking + M1 + G4/G5/G6 + G7               70/70
-Full permanent suite                                              159/159
+Focused Crafting C7                                                              9/9
+Regression C1-C6B + Stacking + M1 + G4/G5/G6 + G7 + ResourceGathering         95/95
+Full permanent suite                                                       169/169
 ```
 
-Manual rendered PIE for C6B: 12/12 checklist cases PASS, performed and confirmed by the user.
+Manual rendered PIE for C7 (performed and reported by the user): 12 PASS, 1 NOT TESTED. The click-to-move cancel case could not be run (cursor hidden in game mode) and remains a deferred manual verification; displacement cancel is covered by automation. Final pre-commit Windows cook: `Done!`, 0 errors (619/7/626).
 
-Previous baselines: Crafting C6A full 153/153 (manual rendered PIE 12/12 PASS, user-confirmed); Crafting C5 full 147/147; Crafting C3/C4 full 138/138; Crafting C2 full 130/130; Crafting C1 full 125/125; Inventory Stacking full 121/121.
+Previous baselines: Crafting C6B full 159/159 (manual rendered PIE 12/12 PASS, user-confirmed); Crafting C6A full 153/153 (manual rendered PIE 12/12 PASS, user-confirmed); Crafting C5 full 147/147; Crafting C3/C4 full 138/138; Crafting C2 full 130/130; Crafting C1 full 125/125; Inventory Stacking full 121/121.
 
 Future work must preserve these unless test totals intentionally increase.
 
@@ -1573,6 +1605,7 @@ Completed:
 - Crafting C5 Crafting Authority
 - Crafting C6A Crafting UI Foundation
 - Crafting C6B Craft Execution from UI
+- Crafting C7 Timed Crafting (manual PIE 12 PASS, 1 NOT TESTED)
 
 Current crafting:
 - UCraftingRecipeDefinition data-only Blueprint recipes, validated by ValidateRecipe
@@ -1590,6 +1623,9 @@ Current crafting:
   inventory left, character middle; CRAFT enabled by exact CanCraftRecipe
 - C6B: CRAFT calls UCraftingComponent::TryCraftRecipe once; result message from
   OnCraftingResult (kept 3 s); duplicate/reentrant requests ignored
+- C7: TryStartCraft (timed recipes run on a world timer and consume at completion),
+  CancelCraft; movement > 10 cm / jump cancel; closing UI does not cancel;
+  CRAFT becomes CANCEL with a progress bar; Recipe_Pickaxe is timed (3 s)
 
 Current inventory:
 - UInventoryComponent is authority
@@ -1617,12 +1653,12 @@ Current input:
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
-- Crafting C6B 6/6
-- regression C6A + C1-C5 + Stacking + M1 + G4/G5/G6/G7 70/70
-- full 159/159
+- Crafting C7 9/9
+- regression C1-C6B + Stacking + M1 + G4/G5/G6/G7 + ResourceGathering 95/95
+- full 169/169
 
 Next:
-Crafting C7 Timed Crafting.
+Crafting C8 Workstations.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1660,8 +1696,8 @@ Phase 4  Crafting                           ⏭ IN PROGRESS
          C5 Crafting Authority              ✅
          C6A Crafting UI Foundation         ✅
          C6B Craft Execution from UI        ✅
-         C7 Timed Crafting                  ⏭ NEXT
-         C8 Workstations
+         C7 Timed Crafting                  ✅
+         C8 Workstations                    ⏭ NEXT
 
 Phase 5  Building
 

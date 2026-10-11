@@ -22,8 +22,12 @@ enum class ECraftingTransactionResult : uint8
 	InventoryRejected,
 	/** The recipe is valid but not registered on the crafting component. */
 	RecipeNotAvailable,
-	/** The crafting component is already processing a craft (reentrant call). */
-	CraftInProgress
+	/** The crafting component is already processing a craft (reentrant call) or a timed craft is active. */
+	CraftInProgress,
+	/** A timed craft started; ingredients are consumed only when it completes. */
+	Started,
+	/** The recipe has a craft duration and must be started with TryStartCraft. */
+	TimedCraftRequired
 };
 
 /** Result of one atomic craft. */

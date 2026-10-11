@@ -3,6 +3,7 @@
 #include "Components/Button.h"
 #include "Components/Image.h"
 #include "Components/PanelWidget.h"
+#include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
 #include "Crafting/CraftingComponent.h"
 #include "Crafting/CraftingRecipeDefinition.h"
@@ -57,6 +58,10 @@ void UCraftingPanelWidget::NativeTick(const FGeometry& MyGeometry, const float I
 	{
 		RefreshDetails();
 	}
+	if (ObservedCrafting && ObservedCrafting->IsCrafting())
+	{
+		RefreshCraftProgress();
+	}
 	if (ExplicitCrafting)
 	{
 		if (ExplicitCrafting != ObservedCrafting || ExplicitCrafting->GetInventory() != ObservedInventory)
@@ -105,6 +110,8 @@ void UCraftingPanelWidget::RebindToCrafting(APawn* Pawn, UCraftingComponent* Cra
 	if (ObservedCrafting)
 	{
 		ObservedCrafting->OnCraftingResult.AddUniqueDynamic(this, &UCraftingPanelWidget::HandleCraftingResult);
+		ObservedCrafting->OnCraftStarted.AddUniqueDynamic(this, &UCraftingPanelWidget::HandleCraftStarted);
+		ObservedCrafting->OnCraftCancelled.AddUniqueDynamic(this, &UCraftingPanelWidget::HandleCraftCancelled);
 	}
 	RefreshCraftingView();
 }
@@ -118,6 +125,8 @@ void UCraftingPanelWidget::ReleaseBindings()
 	if (ObservedCrafting)
 	{
 		ObservedCrafting->OnCraftingResult.RemoveDynamic(this, &UCraftingPanelWidget::HandleCraftingResult);
+		ObservedCrafting->OnCraftStarted.RemoveDynamic(this, &UCraftingPanelWidget::HandleCraftStarted);
+		ObservedCrafting->OnCraftCancelled.RemoveDynamic(this, &UCraftingPanelWidget::HandleCraftCancelled);
 	}
 	ObservedInventory = nullptr;
 	ObservedCrafting = nullptr;
@@ -136,8 +145,28 @@ void UCraftingPanelWidget::HandleCraftingResult(TSubclassOf<UCraftingRecipeDefin
 	RefreshCraftingView();
 }
 
+void UCraftingPanelWidget::HandleCraftStarted(TSubclassOf<UCraftingRecipeDefinition> RecipeClass, float Duration)
+{
+	// Progress replaces feedback while a timed craft runs; no success message until it completes.
+	bHasFeedback = false;
+	FeedbackText = FText::GetEmpty();
+	RefreshCraftingView();
+}
+
+void UCraftingPanelWidget::HandleCraftCancelled(TSubclassOf<UCraftingRecipeDefinition> RecipeClass, ECraftCancelReason Reason)
+{
+	ShowFeedback(UCraftingViewLibrary::GetCraftCancelledText(Reason), false);
+	RefreshCraftingView();
+}
+
 void UCraftingPanelWidget::HandleCraftButtonClicked()
 {
+	// The same button cancels while a timed craft runs.
+	if (ObservedCrafting && ObservedCrafting->IsCrafting())
+	{
+		ObservedCrafting->CancelCraft();
+		return;
+	}
 	RequestCraftSelectedRecipe();
 }
 
@@ -167,7 +196,7 @@ void UCraftingPanelWidget::RequestCraftSelectedRecipe()
 			CraftButton->SetIsEnabled(false);
 		}
 		// Feedback comes from OnCraftingResult; the returned result is intentionally not displayed.
-		ObservedCrafting->TryCraftRecipe(SelectedRecipe);
+		ObservedCrafting->TryStartCraft(SelectedRecipe);
 	}
 	RefreshDetails();
 }
@@ -219,6 +248,12 @@ void UCraftingPanelWidget::RefreshCraftingView()
 	const TArray<TSubclassOf<UCraftingRecipeDefinition>> Recipes = ObservedCrafting
 		? ObservedCrafting->GetAvailableRecipes()
 		: TArray<TSubclassOf<UCraftingRecipeDefinition>>();
+	// While a timed craft runs (also after reopening the screen), show the recipe being crafted.
+	const TSubclassOf<UCraftingRecipeDefinition> ActiveRecipe = ObservedCrafting ? ObservedCrafting->GetActiveCraftRecipe() : nullptr;
+	if (ActiveRecipe && Recipes.Contains(ActiveRecipe))
+	{
+		SelectedRecipe = ActiveRecipe;
+	}
 	if (!Recipes.Contains(SelectedRecipe))
 	{
 		SelectedRecipe = Recipes.IsEmpty() ? nullptr : Recipes[0];
@@ -313,6 +348,35 @@ void UCraftingPanelWidget::RefreshDetails()
 	if (CraftButton)
 	{
 		CraftButton->SetIsEnabled(bHasRecipe && SelectedView.bCanCraft && !bCraftRequestInProgress);
+	}
+	RefreshCraftProgress();
+}
+
+void UCraftingPanelWidget::RefreshCraftProgress()
+{
+	const bool bCrafting = ObservedCrafting && ObservedCrafting->IsCrafting();
+	if (CraftProgressBar)
+	{
+		CraftProgressBar->SetPercent(bCrafting ? ObservedCrafting->GetActiveCraftProgress() : 0.f);
+		CraftProgressBar->SetVisibility(bCrafting ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Hidden);
+	}
+	if (CraftButtonText)
+	{
+		CraftButtonText->SetText(bCrafting ? LOCTEXT("CancelLabel", "CANCEL") : LOCTEXT("CraftLabel", "CRAFT"));
+	}
+	if (!bCrafting)
+	{
+		return;
+	}
+	// While crafting, the button cancels and the status shows authoritative progress (unless a message is up).
+	if (CraftButton)
+	{
+		CraftButton->SetIsEnabled(!bCraftRequestInProgress);
+	}
+	if (CraftStatusText && !bHasFeedback)
+	{
+		CraftStatusText->SetText(UCraftingViewLibrary::GetActiveCraftStatusText(ObservedCrafting));
+		CraftStatusText->SetColorAndOpacity(FSlateColor(StatusTextColor));
 	}
 }
 

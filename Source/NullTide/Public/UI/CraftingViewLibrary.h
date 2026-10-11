@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Crafting/CraftingComponent.h"
 #include "Crafting/CraftingTransaction.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "CraftingViewLibrary.generated.h"
@@ -100,4 +101,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
 	static FText GetCraftFeedbackText(const UCraftingComponent* Crafting, TSubclassOf<UCraftingRecipeDefinition> RecipeClass,
 		const FCraftingTransactionResult& Result);
+
+	/** Message for a cancelled timed craft: "Crafting cancelled.", "... you moved.", "... you jumped." */
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	static FText GetCraftCancelledText(ECraftCancelReason Reason);
+
+	/** "Crafting Pickaxe... 1.4 s" for the component's active timed craft; empty when idle. */
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	static FText GetActiveCraftStatusText(const UCraftingComponent* Crafting);
 };

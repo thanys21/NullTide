@@ -94,6 +94,10 @@ FText UCraftingViewLibrary::GetCraftStatusText(const FCraftingRecipeView& View)
 	case ECraftingTransactionResult::InventoryBusy:
 	case ECraftingTransactionResult::CraftInProgress:
 		return LOCTEXT("StatusBusy", "Busy. Try again.");
+	case ECraftingTransactionResult::Started:
+		return LOCTEXT("StatusStarted", "Crafting...");
+	case ECraftingTransactionResult::TimedCraftRequired:
+		return LOCTEXT("StatusTimed", "This recipe takes time to craft.");
 	case ECraftingTransactionResult::InventoryRejected:
 		return LOCTEXT("StatusRejected", "The inventory cannot accept this craft.");
 	case ECraftingTransactionResult::InvalidRecipe:
@@ -137,10 +141,42 @@ FText UCraftingViewLibrary::GetCraftFeedbackText(const UCraftingComponent* Craft
 		return LOCTEXT("FeedbackBusy", "Inventory is busy.");
 	case ECraftingTransactionResult::InvalidInventory:
 		return LOCTEXT("FeedbackNoInventory", "No inventory available.");
+	case ECraftingTransactionResult::Started:
+		return FText::Format(LOCTEXT("FeedbackStarted", "Crafting {0}..."), View.RecipeName);
+	case ECraftingTransactionResult::TimedCraftRequired:
+		return LOCTEXT("FeedbackTimed", "This recipe takes time to craft.");
 	case ECraftingTransactionResult::InventoryRejected:
 	default:
 		return LOCTEXT("FeedbackFailed", "Crafting failed.");
 	}
+}
+
+FText UCraftingViewLibrary::GetCraftCancelledText(const ECraftCancelReason Reason)
+{
+	switch (Reason)
+	{
+	case ECraftCancelReason::Movement:
+		return LOCTEXT("CancelledMovement", "Crafting cancelled: you moved.");
+	case ECraftCancelReason::Jump:
+		return LOCTEXT("CancelledJump", "Crafting cancelled: you jumped.");
+	case ECraftCancelReason::Explicit:
+	default:
+		return LOCTEXT("CancelledExplicit", "Crafting cancelled.");
+	}
+}
+
+FText UCraftingViewLibrary::GetActiveCraftStatusText(const UCraftingComponent* Crafting)
+{
+	if (!IsValid(Crafting) || !Crafting->IsCrafting())
+	{
+		return FText::GetEmpty();
+	}
+	const FCraftingRecipeView View = BuildRecipeView(Crafting, Crafting->GetActiveCraftRecipe());
+	FNumberFormattingOptions OneDecimal;
+	OneDecimal.MinimumFractionalDigits = 1;
+	OneDecimal.MaximumFractionalDigits = 1;
+	return FText::Format(LOCTEXT("StatusCraftingTimed", "Crafting {0}... {1} s"),
+		View.RecipeName, FText::AsNumber(Crafting->GetActiveCraftRemainingSeconds(), &OneDecimal));
 }
 
 #undef LOCTEXT_NAMESPACE

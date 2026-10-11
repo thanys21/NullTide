@@ -29,7 +29,7 @@ UCraftingTestRecipeDefinition::UCraftingTestRecipeDefinition()
 	Ingredients.Add(MakeEntry(UInventoryStackableTestItemDefinition::StaticClass(), 3));
 	Ingredients.Add(MakeEntry(UInventoryTestItemDefinition::StaticClass(), 2));
 	Outputs.Add(MakeEntry(UInventoryOtherTestItemDefinition::StaticClass(), 1));
-	CraftDuration = 1.5f;
+	CraftDuration = 0.f;
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -56,6 +56,7 @@ struct FProductionRecipe
 	TArray<TPair<const TCHAR*, int32>> Ingredients;
 	TArray<TPair<const TCHAR*, int32>> Outputs;
 	const TCHAR* IconId;
+	float CraftDuration = 0.f;
 };
 
 const TArray<FProductionRecipe>& ProductionRecipes()
@@ -64,7 +65,9 @@ const TArray<FProductionRecipe>& ProductionRecipes()
 		{ TEXT("Axe"), TEXT("Axe"), TEXT("Craft a basic woodcutting tool."),
 			{ { TEXT("Wood"), 3 }, { TEXT("Stone"), 5 } }, { { TEXT("Axe"), 1 } }, TEXT("Axe") },
 		{ TEXT("WoodArrow"), TEXT("Wood Arrow"), TEXT("Craft basic ammunition for bows."),
-			{ { TEXT("Wood"), 1 } }, { { TEXT("WoodArrow"), 5 } }, TEXT("WoodArrow") }
+			{ { TEXT("Wood"), 1 } }, { { TEXT("WoodArrow"), 5 } }, TEXT("WoodArrow") },
+		{ TEXT("Pickaxe"), TEXT("Pickaxe"), TEXT("Craft a basic rock-breaking tool."),
+			{ { TEXT("Wood"), 2 }, { TEXT("Stone"), 3 } }, { { TEXT("Pickaxe"), 1 } }, TEXT("Pickaxe"), 3.f }
 	};
 	return Recipes;
 }
@@ -119,7 +122,7 @@ bool FCraftingRecipeContractTest::RunTest(const FString& Parameters)
 			UInventoryOtherTestItemDefinition::StaticClass());
 		TestEqual(TEXT("Output quantity"), Recipe->Outputs[0].Quantity, 1);
 	}
-	TestEqual(TEXT("Craft duration"), Recipe->CraftDuration, 1.5f);
+	TestEqual(TEXT("Craft duration (instant fixture; timed fixtures are covered by C7)"), Recipe->CraftDuration, 0.f);
 
 	FCraftingItemQuantity DefaultEntry;
 	TestNull(TEXT("Default entry has no item"), DefaultEntry.ItemDefinition.Get());
@@ -222,7 +225,7 @@ bool FCraftingProductionRecipesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Recipe icon reuses the output item icon"), Recipe->RecipeIcon.Get(), LoadObject<UTexture2D>(nullptr, *IconPath));
 	TestEntries(*this, TEXT("Ingredients"), Recipe->Ingredients, Entry->Ingredients);
 	TestEntries(*this, TEXT("Outputs"), Recipe->Outputs, Entry->Outputs);
-	TestEqual(TEXT("Instant craft until timed crafting"), Recipe->CraftDuration, 0.f);
+	TestEqual(TEXT("Authored craft duration (Axe and WoodArrow instant, Pickaxe 3 s)"), Recipe->CraftDuration, Entry->CraftDuration);
 	return true;
 }
 

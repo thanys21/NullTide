@@ -12,8 +12,8 @@ Plan and design decisions: `CRAFTING_PLAN.md`.
 | C5 Crafting Authority | COMPLETE |
 | C6A Crafting UI Foundation | COMPLETE (approved; manual rendered PIE 12/12 PASS, user-confirmed) |
 | C6B Craft Execution from UI | COMPLETE (manual rendered PIE 12/12 PASS, user-confirmed) |
-| C7 Timed Crafting | NEXT (not started) |
-| C8 Workstations | Not started |
+| C7 Timed Crafting | COMPLETE / APPROVED (manual rendered PIE: 12 PASS, 1 NOT TESTED; user-confirmed) |
+| C8 Workstations | NEXT (not started) |
 
 ## C1 - Recipe Data Model
 
@@ -382,6 +382,91 @@ All five were approved by the user without changes:
 - Windows cook with the editor closed: succeeded, 0 errors (618 cooked, 7 platform-skipped, 625 total).
 - Rendered PIE: manual acceptance performed by the user, **12/12 checklist cases PASS (user-confirmed)**. The agent did not run or observe PIE itself.
 
+## C7 - Timed Crafting
+
+### Baseline and Scope
+
+- Baseline: `94dceff` (C6B committed; manual PIE 12/12 user-confirmed). Previous full automation 159/159.
+- Design approved by the user, including all four decisions (see `CRAFTING_PLAN.md`, C7).
+- Approved by the user and committed as the C7 milestone (manual rendered PIE: 12 PASS, 1 NOT TESTED).
+
+### Source Files
+
+- Changed: `Public/Crafting/CraftingComponent.h` + `Private/Crafting/CraftingComponent.cpp` (timed lifecycle, events, movement detection), `Public/Crafting/CraftingTransaction.h` (result codes `Started`, `TimedCraftRequired`), `Public/UI/CraftingViewLibrary.h` + `.cpp` (started/cancelled/progress text), `Public/UI/CraftingPanelWidget.h` + `.cpp` (CRAFT/CANCEL, progress, new event bindings, reopen state), `Private/Tests/CraftingTestTypes.h` (timed fixtures and listener), `Private/Tests/CraftingRecipeTests.cpp` (instant fixture, Pickaxe production entry, per-recipe duration), `Private/Tests/CraftingComponentTests.cpp` (three production registrations).
+- New: `Private/Tests/CraftingTimedTests.cpp`.
+
+### Lifecycle (consume at completion)
+
+- `TryStartCraft(RecipeClass)`: same validation as `TryCraftRecipe`. Duration 0 crafts immediately (`OnCraftingResult`). Duration > 0 runs the exact preflight (`FCraftingTransaction::CanCraftRecipe`); on success it stores the active recipe and start location, sets one world timer, binds movement, broadcasts `OnCraftStarted(Recipe, Duration)` and returns `Started`. Nothing is consumed or reserved. A refused start broadcasts `OnCraftingResult` once.
+- Completion: the timer fires; the active state, timer and movement bindings are cleared first; inside the craft guard the request is re-validated (registered, valid, inventory present) and `FCraftingTransaction::TryCraftRecipeAtomic` runs; `OnCraftingResult` is broadcast once. If the inventory changed so the craft no longer fits or ingredients are short, completion fails atomically (no consumption, no output, no revision, no inventory event).
+- One active craft per player: while crafting, `TryStartCraft` and `TryCraftRecipe` return `CraftInProgress` (one notification each) and `CanCraftRecipe` returns `CraftInProgress`.
+- `TryCraftRecipe` on a timed recipe returns `TimedCraftRequired` without mutation, so the timer cannot be bypassed. Instant recipes behave as before.
+- `CancelCraft()` cancels with reason `Explicit` (returns false when idle). `EndPlay` clears the timer, bindings and state without any notification.
+- Progress queries `IsCrafting`, `GetActiveCraftRecipe`, `GetActiveCraftProgress` (0..1), `GetActiveCraftRemainingSeconds` read the world timer; no copies are stored and the component does not tick.
+
+### Re-entrancy
+
+- `OnCraftStarted`, `OnCraftCancelled` and `OnCraftingResult` are broadcast inside the component's craft guard. A synchronous `TryStartCraft`/`TryCraftRecipe` from any of them returns `CraftInProgress` with no extra notification. On completion listeners already see `IsCrafting() == false`. A later independent request starts normally; no guard or binding is left behind.
+
+### Movement and Jump Cancellation
+
+- While a timed craft runs and the owner is an `ACharacter`, the component binds `OnCharacterMovementUpdated` and `MovementModeChangedDelegate` (unbound on completion, cancellation and `EndPlay`).
+- Horizontal distance from the start location above `MovementCancelTolerance` (10 cm) cancels with `Movement`. Any displacement source counts, including click-to-move path following. Vertical-only movement does not cancel.
+- Movement mode `Falling` cancels with `Jump`.
+- No change to `BP_TopDownCharacter` movement graphs, `BP_TopDownController`, `IMC_Default` or the gathering cancel code.
+
+### UI
+
+- CRAFT calls `TryStartCraft`. While a timed craft runs the same button reads CANCEL and calls `CancelCraft`; `CraftProgressBar` shows authoritative progress; the status reads "Crafting Pickaxe... 1.4 s".
+- Closing the inventory screen does not cancel. Reopening shows the active recipe selected, the current progress, remaining time and CANCEL.
+- Feedback: instant crafts as in C6B; a timed start shows progress (no success message); completion shows the C6B success or the correct failure message; cancellation shows "Crafting cancelled.", "Crafting cancelled: you moved." or "Crafting cancelled: you jumped.". Messages are not overwritten by inventory refreshes.
+
+### Content (through Unreal MCP)
+
+- New `/Game/LevelPrototyping/CraftingSystem/Recipes/Recipe_Pickaxe`: Wood x2 + Stone x3 -> Pickaxe x1, `CraftDuration = 3.0`, icon `T_Icon_Pickaxe`.
+- `BP_TopDownCharacter`: `CraftingComponent.AvailableRecipes = [Recipe_Axe, Recipe_WoodArrow, Recipe_Pickaxe]`.
+- `W_CraftingPanel`: one `ProgressBar` named `CraftProgressBar` (green fill, hidden while idle) between `CraftStatusText` and `CraftButton`; the existing `CraftButtonText` is now bound for the CRAFT/CANCEL label.
+- `Recipe_Pickaxe`, `BP_TopDownCharacter`, `W_CraftingPanel` and `W_Inventory` compiled with warnings as errors; only the three changed assets were saved; save-time validation reported no errors. No other asset was dirty.
+- Content delta: tracked packages 311, 2 modified, 1 added (on disk 312). No map, `__ExternalActors__` or `__ExternalObjects__` change.
+
+### Test Fixture Correction
+
+- `UCraftingTestRecipeDefinition` is now instant (`CraftDuration = 0`), so the C5/C6 tests still test instant crafting through `TryCraftRecipe`/`TryStartCraft`; the C1 contract asserts 0. New timed fixtures `UCraftingTimedTestRecipe` (2 s) and `UCraftingTimedHeavyTestRecipe` (1 s, two outputs).
+- The C1 production test now covers `Recipe_Pickaxe` (including its 3 s duration) and checks each recipe's authored duration; the C5 registration test expects all three production recipes in order.
+
+### Validation
+
+- `NullTideEditor Win64 Development` clean build (editor closed): succeeded, no compiler warnings.
+- Focused `NullTide.Crafting.C7`: 9/9 passed (`StartAndTimedCompletion`, `InventoryChangedDuringCraft`, `ExplicitCancel`, `MovementAndJumpCancel`, `RejectionsAndInstantRegression`, `EndPlayCleanup`, `ReentrancyProtection`, `ProductionPickaxe`, `PanelCloseAndReopen`). Tests run on a spawned `ACharacter` in a transient world and advance the world timer manually.
+- Regression `NullTide.Crafting.C1`-`C6B` + `Inventory.Stacking` + `Inventory.M1` + `Gameplay.G4`/`G5`/`G6` + `Inventory.G7` + `ResourceGathering`: 95/95 passed.
+- Full permanent automation `NullTide.`: 169/169 passed (159 previous + 9 C7 + 1 new C1 `ProductionRecipes.Pickaxe` case).
+- Windows cook with the editor closed: succeeded, 0 errors (619 cooked, 7 platform-skipped, 626 total).
+- Final pre-commit Windows cook (editor closed, after the icon reimport): `Done!`, 0 errors, 2 environment warnings (NTFS journal on `D:`, MCP licence notice); 619 cooked, 7 platform-skipped, 626 total; `T_Icon_Axe`, `T_Icon_Pickaxe` and `Recipe_Pickaxe` are in the cooked asset registry.
+- Rendered PIE (performed and reported by the user; the agent did not run or observe PIE): **12 PASS, 1 NOT TESTED**. Cases 1-7 and 9-13 passed. Case 8 (click-to-move cancel) was NOT TESTED because the mouse cursor is hidden in game mode; it remains a deferred manual verification. The displacement cancel path itself is covered by automation (`MovementAndJumpCancel`).
+- User observations to follow up (not blocking):
+  - Case 4: occasionally a quantity briefly flickers to another number and back after the result message disappears; no resources are lost. Cosmetic; to investigate in the inventory/crafting UI/UX pass.
+  - Case 7: after closing the screen, moving and reopening, the cancellation message is not shown and the first recipe (Axe) is selected, because the message and selection live in the panel instance that was destroyed when the screen closed. To address in the UI/UX pass (for example a component-held "last craft outcome").
+  - Instant recipes (Axe, Wood Arrow) craft without a progress bar, as designed.
+
+### Development Notes
+
+- One C7 test first called `EndPlay` on a component that had never begun play and hit the engine's `bHasBegunPlay` assertion; the test now calls `BeginPlay` first, matching the real lifecycle.
+- `FTimerManager` ticks once per frame and activates timers set before a frame's tick only after advancing, so the C7 tests advance `GFrameCounter` and tick a zero-length frame before each simulated time step.
+
+### Known Limitations
+
+- No HUD indicator or toast while the inventory screen is closed; completion feedback appears when the screen is open.
+- Non-character owners get no automatic movement cancellation (explicit Cancel and `EndPlay` still apply).
+- Damage cancellation is deferred until combat exists; an active craft is not saved.
+
+### Tool Icon Refresh (user request after C7 PIE)
+
+- New 1254 x 1254 source images supplied by the user for Axe and Pickaxe, copied to `Content/Items/Icons/T_Icon_Axe.png` and `Content/Items/Icons/T_Icon_Pickaxe.png` (next to the other icon source PNGs).
+- The MCP texture import refuses to overwrite existing assets, so the user reimported `T_Icon_Axe` and `T_Icon_Pickaxe` in the editor (Reimport With New File) and saved them. This keeps the asset paths, so `Item_Axe`, `Item_Pickaxe`, `Recipe_Axe`, `Recipe_Pickaxe` and the icon-path tests need no change.
+- Verified through Unreal MCP: both textures are still 1254 x 1254 with `TC_EditorIcon`, no mipmaps, sRGB; not dirty; referenced only by their item and recipe; the item `ItemIcon` and recipe `RecipeIcon` still point at them.
+- Tests after the reimport: `NullTide.Gameplay.G1` + `G2` + `Crafting.C1` + `C6A` + `C7` + `ResourceGathering.RG3`: 54/54 passed. The final pre-commit cook (editor closed) succeeded with both icons cooked.
+- Content delta for this request: `T_Icon_Axe.uasset`, `T_Icon_Pickaxe.uasset` modified; `T_Icon_Axe.png`, `T_Icon_Pickaxe.png` added as source images.
+
 ## Next Checkpoint
 
-C7 - Timed Crafting. NEXT; not started. Decide reserve-at-start or consume-at-completion with the user first.
+C8 - Workstations. NEXT; not started. Crafting queue and the inventory/crafting UI-UX pass remain deferred.

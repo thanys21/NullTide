@@ -308,9 +308,10 @@ bool FCraftingC5RegistrationTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("Production player has exactly one CraftingComponent"), Templates.Num(), 1)) { return false; }
 	UClass* RecipeAxe = C5LoadRecipe(TEXT("Axe"));
 	UClass* RecipeWoodArrow = C5LoadRecipe(TEXT("WoodArrow"));
-	TestTrue(TEXT("Production recipes load"), RecipeAxe && RecipeWoodArrow);
-	TestTrue(TEXT("Production registration is Recipe_Axe, Recipe_WoodArrow in that order"),
-		Templates[0]->GetAvailableRecipes() == FC5RecipeList({ RecipeAxe, RecipeWoodArrow }));
+	UClass* RecipePickaxe = C5LoadRecipe(TEXT("Pickaxe"));
+	TestTrue(TEXT("Production recipes load"), RecipeAxe && RecipeWoodArrow && RecipePickaxe);
+	TestTrue(TEXT("Production registration is Recipe_Axe, Recipe_WoodArrow, Recipe_Pickaxe in that order"),
+		Templates[0]->GetAvailableRecipes() == FC5RecipeList({ RecipeAxe, RecipeWoodArrow, RecipePickaxe }));
 	return true;
 }
 

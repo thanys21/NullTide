@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Crafting/CraftingRecipeDefinition.h"
+#include "Crafting/CraftingComponent.h"
 #include "Crafting/CraftingTransaction.h"
 #include "Inventory/InventoryTypes.h"
 #include "Items/ItemDefinition.h"
@@ -135,4 +136,60 @@ public:
 	int32 InventoryEvents = 0;
 	int32 CraftingEvents = 0;
 	FCraftingTransactionResult LastResult;
+};
+
+/** Valid timed recipe (2 s): Stackable x3 + Single x1 -> Other x1. */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingTimedTestRecipe : public UCraftingRecipeDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UCraftingTimedTestRecipe();
+};
+
+/** Records timed-craft notifications and can attempt nested starts from inside them. */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingTimedTestListener : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UFUNCTION()
+	void HandleStarted(TSubclassOf<UCraftingRecipeDefinition> RecipeClass, float Duration);
+
+	UFUNCTION()
+	void HandleCancelled(TSubclassOf<UCraftingRecipeDefinition> RecipeClass, ECraftCancelReason Reason);
+
+	UFUNCTION()
+	void HandleResult(TSubclassOf<UCraftingRecipeDefinition> RecipeClass, const FCraftingTransactionResult& Result);
+
+	UFUNCTION()
+	void HandleInventoryChanged(int32 NewRevision);
+
+	UPROPERTY()
+	TObjectPtr<UCraftingComponent> Crafting;
+
+	TSubclassOf<UCraftingRecipeDefinition> NestedRecipe;
+	bool bStartFromResult = false;
+	bool bStartFromStarted = false;
+	TArray<FCraftingTransactionResult> NestedResults;
+	int32 StartedEvents = 0;
+	int32 CancelledEvents = 0;
+	int32 ResultEvents = 0;
+	int32 InventoryEvents = 0;
+	float LastDuration = 0.f;
+	ECraftCancelReason LastCancelReason = ECraftCancelReason::Explicit;
+	FCraftingTransactionResult LastResult;
+	bool bWasCraftingDuringResult = false;
+};
+
+/** Valid timed recipe (1 s) whose outputs need two new slots: Stackable x1 -> Other x2. */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingTimedHeavyTestRecipe : public UCraftingRecipeDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UCraftingTimedHeavyTestRecipe();
 };

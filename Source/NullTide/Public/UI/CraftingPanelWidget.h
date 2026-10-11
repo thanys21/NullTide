@@ -14,6 +14,7 @@ class UCraftingRequirementRowWidget;
 class UImage;
 class UInventoryComponent;
 class UPanelWidget;
+class UProgressBar;
 class UTextBlock;
 
 /**
@@ -99,6 +100,14 @@ protected:
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UButton> CraftButton;
 
+	/** CRAFT or CANCEL, depending on whether a timed craft is active. */
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> CraftButtonText;
+
+	/** Authoritative progress of the active timed craft; hidden while idle. */
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UProgressBar> CraftProgressBar;
+
 	UPROPERTY(EditDefaultsOnly, Category = "Crafting|UI")
 	TSubclassOf<UCraftingRecipeEntryWidget> RecipeEntryClass;
 
@@ -116,11 +125,19 @@ private:
 	void RebindToCrafting(APawn* Pawn, UCraftingComponent* Crafting);
 	void ShowFeedback(const FText& Text, bool bSuccess);
 	bool ExpireFeedback();
+	/** Lightweight per-tick update of progress, remaining time and the CANCEL label. */
+	void RefreshCraftProgress();
 	UFUNCTION()
 	void HandleInventoryChanged(int32 NewRevision);
 
 	UFUNCTION()
 	void HandleCraftingResult(TSubclassOf<UCraftingRecipeDefinition> RecipeClass, const FCraftingTransactionResult& Result);
+
+	UFUNCTION()
+	void HandleCraftStarted(TSubclassOf<UCraftingRecipeDefinition> RecipeClass, float Duration);
+
+	UFUNCTION()
+	void HandleCraftCancelled(TSubclassOf<UCraftingRecipeDefinition> RecipeClass, ECraftCancelReason Reason);
 
 	UFUNCTION()
 	void HandleRecipeEntrySelected(TSubclassOf<UCraftingRecipeDefinition> RecipeClass);

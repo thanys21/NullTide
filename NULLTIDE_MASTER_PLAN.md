@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Crafting C5 (Crafting Authority) complete. Crafting C6 (Minimal Crafting UI) is next.
+> **Current development state:** Crafting C6A (Crafting UI Foundation) complete and approved. Crafting C6B (Craft Execution from UI) is next.
 
 ---
 
@@ -318,13 +318,13 @@ Interact(Interactor)
 Inventory input:
 
 ```text
-I → IA_OpeningInventory
+I or Tab → IA_OpeningInventory
    → IMC_Default
    → BP_TopDownController
-   → W_Inventory
+   → W_Inventory (inventory + character + crafting)
 ```
 
-`Tab` does not open inventory.
+`Tab` opens the same screen as `I` (approved in C6A; the old rule "Tab does not open inventory" is retired). While the screen is open, `I`, `Tab` or `Esc` closes it (`UInventoryScreenWidget::NativeOnKeyDown`).
 
 Tool Equip/Unequip is NOT Enhanced Input.
 
@@ -772,7 +772,7 @@ BP_TopDownCharacter
       Recipe_WoodArrow  Wood x1 → WoodArrow x5
 ```
 
-No crafting UI or input binding yet (C6).
+C6A shows crafting as the right column of the inventory screen (I or Tab). The CRAFT button is not wired until C6B.
 
 Generic pickups exist for production/test catalog items.
 
@@ -806,9 +806,10 @@ Crafting C1 Recipe Data Model       ✅
 Crafting C2 Quantity Queries        ✅
 Crafting C3/C4 Atomic Transaction   ✅
 Crafting C5 Crafting Authority      ✅
+Crafting C6A Crafting UI Foundation  ✅
 
 NEXT:
-Crafting C6 Minimal Crafting UI
+Crafting C6B Craft Execution from UI
 ```
 
 ---
@@ -1035,6 +1036,11 @@ enabled only when recipe can craft
 ```
 
 UI observes crafting/inventory authority.
+
+C6 is split into two checkpoints:
+
+- **C6A — Crafting UI Foundation** (complete; manual rendered PIE 12/12 PASS, user-confirmed): crafting shown inside the inventory screen as the right column (inventory left, character middle, crafting right); read-only data binding; CRAFT enabled only when the exact `CanCraftRecipe` succeeds, but not wired; `Tab` added as an inventory key.
+- **C6B — Craft Execution from UI**: wire CRAFT to `UCraftingComponent::TryCraftRecipe`, feedback from `OnCraftingResult`, rendered PIE acceptance.
 
 ---
 
@@ -1388,22 +1394,22 @@ Do not implement without a dedicated milestone.
 
 # 15. Recommended Next Immediate Checkpoint
 
-## Crafting — C6 Minimal Crafting UI
+## Crafting — C6B Craft Execution from UI
 
-C5 is complete (see `CRAFTING_PROGRESS.md`). C6 is the next checkpoint.
+C6A is complete and approved (see `CRAFTING_PROGRESS.md`). C6B is the next checkpoint; not started.
 
 Claude/Codex instruction:
 
 ```text
-1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md (C5 section).
-2. Agree the C6 scope with the user and record it in CRAFTING_PLAN.md
-   (where the UI opens, layout, input).
-3. UI observes UCraftingComponent only: GetAvailableRecipes,
-   CanCraftRecipe (exact), TryCraftRecipe, OnCraftingResult,
-   plus inventory OnInventoryChanged for refresh.
+1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md (C6A section).
+2. Agree the C6B scope with the user and record it in CRAFTING_PLAN.md
+   (feedback style for success and each failure reason).
+3. CRAFT calls UCraftingComponent::TryCraftRecipe only; feedback uses
+   OnCraftingResult; the panel refreshes from OnInventoryChanged.
 4. UI never calls inventory mutation or transaction primitives and
    never depends on specific recipe/item assets.
-5. No timed crafting (C7), no workstations (C8).
+5. No timed crafting (C7), no workstations (C8), no new hotkeys
+   without approval.
 6. Build + focused tests + regression + full suite + rendered PIE
    (UI is gameplay-visible) + cook.
 7. Update CRAFTING_PROGRESS.md and this plan.
@@ -1446,15 +1452,17 @@ Only then advance the roadmap.
 
 # 17. Current Test Baseline
 
-At the completion of Crafting C5:
+At the completion of Crafting C6A:
 
 ```text
-Focused Crafting C5                                 9/9
-Regression C1 + C2 + C3C4 + Stacking + M1         33/33
-Full permanent suite                            147/147
+Focused Crafting C6A                                           6/6
+Regression C1 + C2 + C3C4 + C5 + Stacking + M1 + G4/G5/G6    61/61
+Full permanent suite                                      153/153
 ```
 
-Previous baselines: Crafting C3/C4 full 138/138; Crafting C2 full 130/130; Crafting C1 full 125/125; Inventory Stacking full 121/121.
+Manual rendered PIE for C6A: 12/12 checklist cases PASS, performed and confirmed by the user. C6A intentionally leaves the CRAFT button unwired (C6B).
+
+Previous baselines: Crafting C5 full 147/147; Crafting C3/C4 full 138/138; Crafting C2 full 130/130; Crafting C1 full 125/125; Inventory Stacking full 121/121.
 
 Future work must preserve these unless test totals intentionally increase.
 
@@ -1564,6 +1572,7 @@ Completed:
 - Crafting C2 Inventory Quantity Queries
 - Crafting C3/C4 Atomic Craft Transaction
 - Crafting C5 Crafting Authority
+- Crafting C6A Crafting UI Foundation
 
 Current crafting:
 - UCraftingRecipeDefinition data-only Blueprint recipes, validated by ValidateRecipe
@@ -1577,7 +1586,8 @@ Current crafting:
 - FCraftingTransaction::TryCraftRecipeAtomic: authoritative craft path (native only)
 - UCraftingComponent on BP_TopDownCharacter (Recipe_Axe, Recipe_WoodArrow):
   GetAvailableRecipes, CanCraftRecipe (exact), TryCraftRecipe, OnCraftingResult
-- no crafting UI yet
+- C6A crafting UI (read-only): right column of W_Inventory (W_CraftingPanel),
+  inventory left, character middle; CRAFT enabled by exact CanCraftRecipe, not wired yet
 
 Current inventory:
 - UInventoryComponent is authority
@@ -1601,16 +1611,16 @@ Current tools:
 
 Current input:
 - F interact
-- I inventory
+- I or Tab inventory (inventory + character + crafting screen)
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
-- Crafting C5 9/9
-- regression C1 + C2 + C3C4 + Stacking + M1 33/33
-- full 147/147
+- Crafting C6A 6/6
+- regression C1 + C2 + C3C4 + C5 + Stacking + M1 + G4/G5/G6 61/61
+- full 153/153
 
 Next:
-Crafting C6 Minimal Crafting UI.
+Crafting C6B Craft Execution from UI.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1646,7 +1656,8 @@ Phase 4  Crafting                           ⏭ IN PROGRESS
          C3/C4 Atomic Craft Transaction     ✅
                 (one transaction: consume + output)
          C5 Crafting Authority              ✅
-         C6 Minimal Crafting UI             ⏭ NEXT
+         C6A Crafting UI Foundation         ✅
+         C6B Craft Execution from UI        ⏭ NEXT
          C7 Timed Crafting
          C8 Workstations
 

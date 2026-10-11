@@ -136,8 +136,42 @@ Baseline: `e042232` (C3/C4 approved and committed). Full automation 138/138. App
 
 Crafting UI (C6), hotkeys, timed crafting (C7), workstations (C8), recipe unlock progression.
 
+## C6A - Crafting UI Foundation
+
+Baseline: `0851c96` (C5 approved and committed). Full automation 147/147. Approved by the user (manual rendered PIE 12/12 PASS, user-confirmed) and committed. C6B is next.
+
+### Agreed Layout (user decisions)
+
+- Crafting is shown together with the inventory in one player screen, opened and closed with the inventory keys.
+- `W_Inventory` becomes three columns (window about 1680 x 760):
+  - Left: BACKPACK grid and ITEM DETAILS (existing widgets, including the Equip Tool action).
+  - Middle: CHARACTER: the existing `EquipmentPanel` (Head/Body/MainHand/OffHand placeholders and the Axe/Pickaxe tool slots). No stats: the game has no stats system yet.
+  - Right: CRAFTING: an embedded `W_CraftingPanel`, a self-contained widget that can later be reused (for example by workstations).
+- Crafting panel content: registered recipe list with icon and name, recipe selection, selected recipe icon/name/description, ingredients as owned / required (missing ones highlighted), outputs as xN, the exact `CanCraftRecipe` status text, and a CRAFT button that is enabled only when `CanCraftRecipe` succeeds.
+- Input: `I` keeps opening and closing the screen; **`Tab` is added** (approved by the user) to open and close the same screen. `Esc` still closes. This replaces the master-plan rule "Tab does not open inventory".
+
+### Decisions
+
+| Decision | Choice | Reason |
+| --- | --- | --- |
+| Authority | The panel reads only `UCraftingComponent` (`GetAvailableRecipes`, `CanCraftRecipe`) and the inventory (`GetTotalQuantity`, `OnInventoryChanged`) of the owning pawn. It keeps no inventory or crafting state besides the selected recipe class. | Single crafting authority. |
+| C6A scope | Read-only binding. The CRAFT button's enabled state follows `CanCraftRecipe`, but clicking it does nothing until C6B wires `TryCraftRecipe`. | User scope for C6A. |
+| Code shape | Same pattern as the inventory UI: C++ base widgets (`UCraftingPanelWidget`, `UCraftingRecipeEntryWidget`, `UCraftingRequirementRowWidget`) with `BindWidgetOptional` members; UMG assets only lay out. A pure view builder (`UCraftingViewLibrary::BuildRecipeView`) turns a recipe and the component into display data, so the logic is testable without widgets. | Matches existing architecture; testable. |
+| Inventory screen | All widget names bound by `UInventoryScreenWidget` stay unchanged. The only C++ change there is closing on `Tab` as well as `I`/`Esc`. | No regression for inventory, drag/drop and tools. |
+| Tab binding | Add a `Tab` key mapping for the existing `IA_OpeningInventory` action in `IMC_Default` through Unreal MCP. The controller logic is not changed. | Smallest change that reuses the existing open path. |
+
+### Asset scope
+
+- New: `/Game/LevelPrototyping/CraftingSystem/UI/W_CraftingPanel`, `W_CraftingRecipeEntry`, `W_CraftingRequirementRow`.
+- Modified: `/Game/LevelPrototyping/InventorySystem/UI/Widgets/W_Inventory` (layout, embedded crafting panel), `/Game/TopDown/Input/IMC_Default` (Tab mapping).
+- Not modified: `BP_TopDownController`, `BP_TopDownCharacter`, maps, World Partition actors, item and recipe assets.
+
+### Out of scope
+
+Executing crafts from the UI (C6B), crafting feedback/toasts (C6B), timed crafting (C7), workstations (C8), character stats.
+
 ## Later Checkpoints (summary)
 
-- **C6** Minimal crafting UI that only observes authority state.
+- **C6B** Wire CRAFT to `UCraftingComponent::TryCraftRecipe` with feedback from `OnCraftingResult` (C6A delivered the read-only UI foundation).
 - **C7** Timed crafting; choose reserve-at-start or consume-at-completion before implementing.
 - **C8** Workstations.

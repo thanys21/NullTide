@@ -60,7 +60,7 @@ void UInventoryScreenWidget::NativeTick(const FGeometry& MyGeometry, const float
 
 FReply UInventoryScreenWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
-	if (InKeyEvent.GetKey() == EKeys::I || InKeyEvent.GetKey() == EKeys::Escape)
+	if (InKeyEvent.GetKey() == EKeys::I || InKeyEvent.GetKey() == EKeys::Tab || InKeyEvent.GetKey() == EKeys::Escape)
 	{
 		CloseInventory();
 		return FReply::Handled();

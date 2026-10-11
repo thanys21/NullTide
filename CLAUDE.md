@@ -46,7 +46,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Inventory.{M1..M6,G7,Stacking}`
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
-- `NullTide.Crafting.{C1,C2,C3C4,C5}`
+- `NullTide.Crafting.{C1,C2,C3C4,C5,C6A}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -102,10 +102,11 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.
 - Widgets only show inventory data and send requests to the components. They must not depend on specific item assets.
+- Crafting UI: `UCraftingPanelWidget` (with `UCraftingRecipeEntryWidget` and `UCraftingRequirementRowWidget`) is a self-contained panel that observes the owning pawn's `UCraftingComponent` and inventory. Display data comes from `UCraftingViewLibrary::BuildRecipeView` (read-only, uses the exact `CanCraftRecipe`). UMG assets are in `Content/LevelPrototyping/CraftingSystem/UI/`. `W_Inventory` embeds `W_CraftingPanel` as its right column (inventory left, character middle, crafting right). Keep every widget name that `UInventoryScreenWidget` binds when editing `W_Inventory`.
 
 **Content**
 - The main map is `/Game/TopDown/Lvl_TopDown`.
-- `BP_TopDownCharacter` holds the components and `BP_TopDownController` opens the inventory UI.
+- `BP_TopDownCharacter` holds the components and `BP_TopDownController` opens the inventory UI on `IA_OpeningInventory` (`I` or `Tab` in `IMC_Default`). The open screen closes on `I`, `Tab` or `Esc`.
 - `BP_PickUpItem` is the generic world pickup.
 
 ## Milestone docs

@@ -10,7 +10,8 @@ Plan and design decisions: `CRAFTING_PLAN.md`.
 | C2 Inventory Quantity Queries | COMPLETE |
 | C3/C4 Atomic Craft Transaction (one checkpoint) | COMPLETE |
 | C5 Crafting Authority | COMPLETE |
-| C6 Minimal Crafting UI | NEXT |
+| C6A Crafting UI Foundation | COMPLETE (approved; manual rendered PIE 12/12 PASS, user-confirmed) |
+| C6B Craft Execution from UI | NEXT (not started) |
 | C7-C8 | Not started |
 
 ## C1 - Recipe Data Model
@@ -281,6 +282,58 @@ All five were approved by the user without changes:
 
 - Crafting UI (C6), hotkeys, timed crafting and craft cancellation (C7), workstations (C8), recipe unlock progression.
 
+## C6A - Crafting UI Foundation
+
+### Baseline and Scope
+
+- Baseline: `0851c96` (C5 committed). Previous full automation 147/147.
+- Read-only crafting UI. The CRAFT button reflects the exact `CanCraftRecipe` result but is not wired; crafting from the UI is C6B.
+- Reviewed and approved by the user; committed as the C6A milestone.
+
+### Audit Summary
+
+- Inventory UI pattern: C++ base widgets hold the logic through `BindWidgetOptional` members; UMG assets only lay out; slots are separate widget classes created at runtime.
+- Open/close: `BP_TopDownController` creates `W_Inventory` on `IA_OpeningInventory` (`IMC_Default`), shows the cursor and sets UI-only input; the widget closes itself on key presses. It binds to the possessed pawn's components and refreshes from `OnInventoryChanged`.
+- Unreal MCP can create widget Blueprints with a native parent, add/move/wrap widgets, set properties and compile, so no `.uasset` was edited directly.
+
+### User Decisions
+
+- Crafting shares the inventory screen: inventory (backpack + item details) left, CHARACTER (existing equipment/tool loadout panel) middle, CRAFTING right. No character stats (no stats system exists).
+- `Tab` is added to open and close the same screen as `I`.
+
+### Source Files
+
+- New: `Public/UI/CraftingViewLibrary.h` + `Private/UI/CraftingViewLibrary.cpp`, `Public/UI/CraftingPanelWidget.h` + `.cpp`, `Public/UI/CraftingRecipeEntryWidget.h` + `.cpp`, `Public/UI/CraftingRequirementRowWidget.h` + `.cpp`, `Private/Tests/CraftingUITests.cpp`.
+- Changed: `Private/UI/InventoryScreenWidget.cpp` (close on `Tab` as well as `I`/`Esc`).
+
+### Implementation
+
+- `UCraftingViewLibrary::BuildRecipeView(Crafting, RecipeClass)` builds `FCraftingRecipeView`: recipe name, description, icon (falls back to the first output icon), ingredient and output lines (`FCraftingRequirementView`: item name/icon, owned total from `GetTotalQuantity`, required quantity, satisfied flag), the exact `UCraftingComponent::CanCraftRecipe` result, `bCanCraft` and a status line (`GetCraftStatusText`, for example "Missing Stone (2 / 5).", "Ready to craft.", "Not enough inventory space for the output."). It never crafts or changes inventory.
+- `UCraftingPanelWidget` binds to the owning pawn's `UCraftingComponent` and its inventory (rebinding when the pawn or components change), refreshes on `OnInventoryChanged` and `OnCraftingResult`, lists `GetAvailableRecipes` as entries, keeps only the selected recipe class (defaulting to the first recipe), fills ingredient/output rows, and sets the CRAFT button enabled state from `bCanCraft`. Entries are rebuilt only when the registered recipe set changes, never from inside an entry click.
+- `UCraftingRecipeEntryWidget`: button, icon, name and a READY marker; selected entries use the inventory accent colour. `UCraftingRequirementRowWidget`: icon, name and "owned / required" (ingredients) or "xN" (outputs); missing ingredients are tinted red.
+
+### Content (created or changed through Unreal MCP)
+
+- New `/Game/LevelPrototyping/CraftingSystem/UI/W_CraftingRequirementRow` (parent `UCraftingRequirementRowWidget`), `W_CraftingRecipeEntry` (parent `UCraftingRecipeEntryWidget`), `W_CraftingPanel` (parent `UCraftingPanelWidget`; defaults `RecipeEntryClass = W_CraftingRecipeEntry`, `RequirementRowClass = W_CraftingRequirementRow`). Colours and font sizes follow `W_Inventory`.
+- `W_Inventory`: window 1180 x 720 -> 1680 x 760; `CenterPanel` and `DetailsOuter` wrapped in a new `InventorySection` (left column); `EquipmentPanel` moved to the middle with a new `CharacterTitle` ("CHARACTER") above the existing "TOOL LOADOUT" heading; `CraftingPanel` (a `W_CraftingPanel` instance) added as the right column. Every widget name bound by `UInventoryScreenWidget` is unchanged.
+- `IMC_Default`: one mapping added, `IA_OpeningInventory` on `Tab`; the eight existing mappings (including modifier subobjects) are unchanged.
+- All four widget Blueprints compiled with warnings as errors; save-time data validation reported no errors. Only these five assets were saved.
+- Content delta: tracked packages 308 modified 2 (`W_Inventory`, `IMC_Default`), 3 added (on disk 311). No map, `__ExternalActors__`, `__ExternalObjects__`, controller, character, item or recipe change.
+
+### Validation
+
+- `NullTideEditor Win64 Development` build: succeeded, no compiler warnings (one missing include was fixed during development).
+- Focused `NullTide.Crafting.C6A`: 6/6 passed (`RecipeView`, `ExactStatus`, `ViewIsReadOnly`, `WidgetAssets`, `InventoryLayout`, `InputMapping`).
+- Regression `NullTide.Crafting.C1` + `C2` + `C3C4` + `C5` + `Inventory.Stacking` + `Inventory.M1` + `Gameplay.G4` + `G5` + `G6`: 61/61 passed.
+- Full permanent automation `NullTide.`: 153/153 passed (147 previous + 6 new).
+- Windows cook with the editor closed: succeeded, 0 errors (618 cooked, 7 platform-skipped, 625 total; the three new widgets are now cooked through `W_Inventory`).
+- Rendered PIE: manual acceptance performed by the user, **12/12 checklist cases PASS (user-confirmed)**. The agent did not run or observe PIE itself.
+
+### Notes for C6B
+
+- `CraftButton` has no click binding yet; C6B binds it to `UCraftingComponent::TryCraftRecipe` and adds result feedback.
+- The panel recreates requirement rows on each refresh; fine for the current recipe sizes.
+
 ## Next Checkpoint
 
-C6 - Minimal Crafting UI. NEXT; not started.
+C6B - Craft Execution from UI. NEXT; not started.

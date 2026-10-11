@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Null Tide is an Unreal Engine 5.8 top-down game project (single runtime module `NullTide`, Windows). The C++ work so far is mostly about inventory, items, storage and resource gathering. Blueprints and UMG widgets are built on top of that code.
+Null Tide is an Unreal Engine 5.8 top-down game project (single runtime module `NullTide`, Windows). The C++ work so far is mostly about inventory, items, storage, resource gathering and (starting) crafting. Blueprints and UMG widgets are built on top of that code.
 
 ## Project roadmap
 
@@ -25,14 +25,14 @@ Do not start the next milestone until the current milestone is validated and com
 
 ## Build
 
-The engine is installed at `D:/game/Unreal Engine/UE_5.8`.
+The engine is installed at `D:/game/epic/UE_5.8`.
 
 ```bash
 # Editor build (the usual target)
-"D:/game/Unreal Engine/UE_5.8/Engine/Build/BatchFiles/Build.bat" NullTideEditor Win64 Development -Project="C:/Users/loithienly/Documents/Unreal Projects/NullTide/NullTide.uproject" -WaitMutex
+"D:/game/epic/UE_5.8/Engine/Build/BatchFiles/Build.bat" NullTideEditor Win64 Development -Project="C:/Users/loithienly/Documents/Unreal Projects/NullTide/NullTide.uproject" -WaitMutex
 
 # Regenerate VS Code project files / compile databases
-"D:/game/Unreal Engine/UE_5.8/Engine/Build/BatchFiles/Build.bat" -projectfiles -project="<path>/NullTide.uproject" -game -engine -vscode
+"D:/game/epic/UE_5.8/Engine/Build/BatchFiles/Build.bat" -projectfiles -project="<path>/NullTide.uproject" -game -engine -vscode
 ```
 
 - If the editor is running, linking fails with `LNK1104` because the editor has the DLL locked. Ask the user to close the editor normally. Never force-kill an editor that has unsaved work.
@@ -46,6 +46,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Inventory.{M1..M6,G7,Stacking}`
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
+- `NullTide.Crafting.{C1}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -87,6 +88,11 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - Each node has a limited yield and is depleted when the yield runs out. The yield is added through the interactor's `UInventoryComponent`.
 - `UGatherProgressPresenterComponent` and `UGatherProgressWidget` display progress.
 
+**Crafting (`Crafting/`)**
+- `UCraftingRecipeDefinition` is an abstract, const UObject, the same pattern as `UItemDefinition`. Each recipe is a data-only Blueprint subclass in `Content/LevelPrototyping/CraftingSystem/Recipes/Recipe_*`, referenced by `TSubclassOf` and read from its class default object.
+- A recipe has `Ingredients` and `Outputs` (`FCraftingItemQuantity`: item definition class + quantity) and `CraftDuration`. `ValidateRecipe` returns an indexed diagnostic, and `IsDataValid` reports the same error in the editor.
+- Recipes hold static data only. Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. Consumption, a crafting authority and UI come in later checkpoints.
+
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.
 - Widgets only show inventory data and send requests to the components. They must not depend on specific item assets.
@@ -99,3 +105,11 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 ## Milestone docs
 
 The `*_PLAN.md`, `*_REPORT.md` and `*_PROGRESS.md` files in the repo root record each milestone's design decisions and validation. Read the matching report before you change that area. `INVENTORY_V2_PLAN.md` explains the core item architecture.
+
+Keep these docs current as work happens, not only at the end:
+
+- Before you start a milestone or checkpoint, write or update its `*_PLAN.md` with the agreed scope and the user's design decisions.
+- After each checkpoint, update the matching `*_PROGRESS.md` (or `*_REPORT.md`) with what was implemented, the validation results that actually ran, and anything deferred.
+- Update the status, roadmap and test baseline in `NULLTIDE_MASTER_PLAN.md` when a checkpoint completes or a design decision changes it.
+- When a new area or test group is added, update the Architecture and Tests sections of this file.
+- Commit the doc updates together with the code they describe.

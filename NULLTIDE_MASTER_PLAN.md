@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Inventory Stacking complete. Crafting Foundation is next.
+> **Current development state:** Crafting C1 (Recipe Data Model) complete. Crafting C2 (Inventory Quantity Queries) is next.
 
 ---
 
@@ -790,9 +790,10 @@ Phase 1 Foundation                  ✅
 Phase 2 Items & Inventory           ✅
 Phase 3 Resource Gathering          ✅
 Inventory Stacking                  ✅
+Crafting C1 Recipe Data Model       ✅
 
 NEXT:
-Crafting Foundation
+Crafting C2 Inventory Quantity Queries
 ```
 
 ---
@@ -871,6 +872,12 @@ recipe data model
 + tests
 + no production UI yet
 ```
+
+Agreed decisions (details in `CRAFTING_PLAN.md`):
+
+- Recipes are data-only Blueprint subclasses of an abstract, const `UCraftingRecipeDefinition`, referenced by `TSubclassOf`, the same pattern as `UItemDefinition`.
+- No workstation field in C1; it is designed in C8.
+- First production recipes: `Recipe_Axe` (Wood x3 + Stone x5 → Axe x1) and `Recipe_WoodArrow` (Wood x1 → WoodArrow x5).
 
 ---
 
@@ -1319,6 +1326,17 @@ Accessory
 
 Do not force tools into a general equipment architecture prematurely.
 
+Planned hand / weapon model (user direction, not yet designed):
+
+```text
+Primary weapon slot
+Secondary weapon slot
+Two-handed weapons occupy both hands
+Torch is held in the free (unused) hand
+```
+
+Item and recipe definitions stay class-based data-only Blueprints so these capabilities can be added as fragments later.
+
 Potential future additions:
 
 ```text
@@ -1356,21 +1374,24 @@ Do not implement without a dedicated milestone.
 
 # 15. Recommended Next Immediate Checkpoint
 
-## Crafting Foundation — C1
+## Crafting — C2 Inventory Quantity Queries
 
-Start with audit + data model only.
+C1 is complete (see `CRAFTING_PROGRESS.md`). C2 adds read-only quantity queries to the existing inventory authority.
 
 Claude/Codex instruction:
 
 ```text
-1. Audit current item/inventory/stack quantity APIs.
-2. Design the minimal static recipe representation.
-3. Implement recipe data types/assets.
-4. Add recipe validation tests.
-5. Do NOT consume inventory yet.
-6. Do NOT build crafting UI yet.
-7. Build + focused tests + full regression.
-8. Create CRAFTING_PROGRESS.md.
+1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md.
+2. Add the C2 scope and decisions to CRAFTING_PLAN.md before coding.
+3. Add read-only queries to UInventoryComponent:
+   total quantity per definition across stacks,
+   can-consume recipe ingredients,
+   can-add recipe outputs (stack-aware capacity preflight).
+4. No mutation, no revision change, no event from queries.
+5. Do NOT consume inventory yet (C3).
+6. Do NOT build crafting UI yet (C6).
+7. Build + focused tests + regression + full suite + cook.
+8. Update CRAFTING_PROGRESS.md and this plan.
 9. STOP for review.
 ```
 
@@ -1410,13 +1431,15 @@ Only then advance the roadmap.
 
 # 17. Current Test Baseline
 
-At the completion of Inventory Stacking:
+At the completion of Crafting C1:
 
 ```text
-Focused Stacking             7/7
-Requested regression matrix 33/33
-Full permanent suite       121/121
+Focused Crafting C1                  4/4
+Regression Stacking + G1           20/20
+Full permanent suite             125/125
 ```
+
+Previous baseline (Inventory Stacking): Stacking 7/7, regression matrix 33/33, full 121/121.
 
 Future work must preserve these unless test totals intentionally increase.
 
@@ -1522,6 +1545,12 @@ Completed:
 - Phase 3 Resource Gathering
 - RG1-RG5
 - Inventory Stacking
+- Crafting C1 Recipe Data Model
+
+Current crafting:
+- UCraftingRecipeDefinition data-only Blueprint recipes, validated by ValidateRecipe
+- Recipe_Axe (Wood x3 + Stone x5 → Axe x1), Recipe_WoodArrow (Wood x1 → WoodArrow x5)
+- no consumption, authority or UI yet
 
 Current inventory:
 - UInventoryComponent is authority
@@ -1549,12 +1578,12 @@ Current input:
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
-- Stacking 7/7
-- regression 33/33
-- full 121/121
+- Crafting C1 4/4
+- regression Stacking + G1 20/20
+- full 125/125
 
 Next:
-Crafting Foundation C1.
+Crafting C2 Inventory Quantity Queries.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1584,9 +1613,9 @@ Phase 3  Resource Gathering                 ✅
 
          Inventory Stacking                 ✅
 
-Phase 4  Crafting                           ⏭ NEXT
-         C1 Recipe Data Model
-         C2 Quantity Queries
+Phase 4  Crafting                           ⏭ IN PROGRESS
+         C1 Recipe Data Model               ✅
+         C2 Quantity Queries                ⏭ NEXT
          C3 Atomic Ingredient Consumption
          C4 Outputs
          C5 Crafting Authority

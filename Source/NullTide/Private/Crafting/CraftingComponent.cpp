@@ -4,6 +4,8 @@
 #include "Crafting/CraftingComponent.h"
 
 #include "Crafting/CraftingRecipeDefinition.h"
+#include "Crafting/CraftingStationComponent.h"
+#include "Crafting/CraftingStationDefinition.h"
 #include "Inventory/InventoryComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
@@ -74,8 +76,73 @@ UInventoryComponent* UCraftingComponent::GetInventory() const
 	return IsValid(Owner) ? Owner->FindComponentByClass<UInventoryComponent>() : nullptr;
 }
 
+TArray<TSubclassOf<UCraftingRecipeDefinition>> UCraftingComponent::GetRecipesForStation(UCraftingStationComponent* Station) const
+{
+	const TArray<TSubclassOf<UCraftingRecipeDefinition>> Registered = GetAvailableRecipes();
+	const UClass* StationClass = IsValid(Station) && Station->IsStationUsable() ? Station->GetStationDefinition().Get() : nullptr;
+	TArray<TSubclassOf<UCraftingRecipeDefinition>> Recipes;
+	if (StationClass)
+	{
+		for (const TSubclassOf<UCraftingRecipeDefinition>& RecipeClass : Registered)
+		{
+			if (RecipeClass->GetDefaultObject<UCraftingRecipeDefinition>()->RequiredStation.Get() == StationClass)
+			{
+				Recipes.Add(RecipeClass);
+			}
+		}
+	}
+	for (const TSubclassOf<UCraftingRecipeDefinition>& RecipeClass : Registered)
+	{
+		if (!RecipeClass->GetDefaultObject<UCraftingRecipeDefinition>()->RequiredStation)
+		{
+			Recipes.Add(RecipeClass);
+		}
+	}
+	return Recipes;
+}
+
+UCraftingStationComponent* UCraftingComponent::GetActiveCraftStation() const
+{
+	UCraftingStationComponent* Station = ActiveCraftStation.Get();
+	return IsValid(Station) ? Station : nullptr;
+}
+
+bool UCraftingComponent::ValidateStationAccess(
+	const UCraftingRecipeDefinition& Recipe,
+	const UCraftingStationComponent* Station,
+	FCraftingTransactionResult& OutFailure) const
+{
+	const UClass* RequiredClass = Recipe.RequiredStation.Get();
+	if (!RequiredClass)
+	{
+		return true;
+	}
+	if (!IsValid(Station) || !Station->IsStationUsable())
+	{
+		OutFailure = MakeCraftingRequestResult(ECraftingTransactionResult::StationRequired,
+			FString::Printf(TEXT("%s requires station %s; no usable station was given."),
+				*GetNameSafe(Recipe.GetClass()), *GetNameSafe(RequiredClass)));
+		return false;
+	}
+	if (Station->GetStationDefinition().Get() != RequiredClass)
+	{
+		OutFailure = MakeCraftingRequestResult(ECraftingTransactionResult::StationRequired,
+			FString::Printf(TEXT("%s requires station %s, but the given station is %s."),
+				*GetNameSafe(Recipe.GetClass()), *GetNameSafe(RequiredClass), *GetNameSafe(Station->GetStationDefinition().Get())));
+		return false;
+	}
+	if (!Station->IsActorInUseRange(GetOwner()))
+	{
+		OutFailure = MakeCraftingRequestResult(ECraftingTransactionResult::StationOutOfRange,
+			FString::Printf(TEXT("The crafter is outside the use range of station %s."), *GetNameSafe(RequiredClass)));
+		return false;
+	}
+	return true;
+}
+
 bool UCraftingComponent::ValidateRequest(
 	TSubclassOf<UCraftingRecipeDefinition> RecipeClass,
+	const UCraftingStationComponent* Station,
 	const UCraftingRecipeDefinition*& OutRecipe,
 	UInventoryComponent*& OutInventory,
 	FCraftingTransactionResult& OutFailure) const
@@ -93,6 +160,10 @@ bool UCraftingComponent::ValidateRequest(
 			FString::Printf(TEXT("%s is not registered on this crafting component."), *GetNameSafe(RecipeClass.Get())));
 		return false;
 	}
+	if (!ValidateStationAccess(*OutRecipe, Station, OutFailure))
+	{
+		return false;
+	}
 	OutInventory = GetInventory();
 	if (!IsValid(OutInventory))
 	{
@@ -105,10 +176,16 @@ bool UCraftingComponent::ValidateRequest(
 
 FCraftingTransactionResult UCraftingComponent::CanCraftRecipe(TSubclassOf<UCraftingRecipeDefinition> RecipeClass) const
 {
+	return CanCraftRecipeAtStation(RecipeClass, nullptr);
+}
+
+FCraftingTransactionResult UCraftingComponent::CanCraftRecipeAtStation(TSubclassOf<UCraftingRecipeDefinition> RecipeClass,
+	UCraftingStationComponent* Station) const
+{
 	const UCraftingRecipeDefinition* Recipe = nullptr;
 	UInventoryComponent* Inventory = nullptr;
 	FCraftingTransactionResult Failure;
-	if (!ValidateRequest(RecipeClass, Recipe, Inventory, Failure))
+	if (!ValidateRequest(RecipeClass, Station, Recipe, Inventory, Failure))
 	{
 		return Failure;
 	}
@@ -133,7 +210,7 @@ FCraftingTransactionResult UCraftingComponent::TryCraftRecipe(TSubclassOf<UCraft
 	const UCraftingRecipeDefinition* Recipe = nullptr;
 	UInventoryComponent* Inventory = nullptr;
 	FCraftingTransactionResult Result;
-	if (ValidateRequest(RecipeClass, Recipe, Inventory, Result))
+	if (ValidateRequest(RecipeClass, nullptr, Recipe, Inventory, Result))
 	{
 		if (IsCrafting())
 		{
@@ -156,6 +233,12 @@ FCraftingTransactionResult UCraftingComponent::TryCraftRecipe(TSubclassOf<UCraft
 
 FCraftingTransactionResult UCraftingComponent::TryStartCraft(TSubclassOf<UCraftingRecipeDefinition> RecipeClass)
 {
+	return TryStartCraftAtStation(RecipeClass, nullptr);
+}
+
+FCraftingTransactionResult UCraftingComponent::TryStartCraftAtStation(TSubclassOf<UCraftingRecipeDefinition> RecipeClass,
+	UCraftingStationComponent* Station)
+{
 	if (bCraftInProgress)
 	{
 		return MakeCraftingRequestResult(ECraftingTransactionResult::CraftInProgress,
@@ -166,7 +249,7 @@ FCraftingTransactionResult UCraftingComponent::TryStartCraft(TSubclassOf<UCrafti
 	const UCraftingRecipeDefinition* Recipe = nullptr;
 	UInventoryComponent* Inventory = nullptr;
 	FCraftingTransactionResult Result;
-	if (!ValidateRequest(RecipeClass, Recipe, Inventory, Result))
+	if (!ValidateRequest(RecipeClass, Station, Recipe, Inventory, Result))
 	{
 		OnCraftingResult.Broadcast(RecipeClass, Result);
 		return Result;
@@ -205,6 +288,11 @@ FCraftingTransactionResult UCraftingComponent::TryStartCraft(TSubclassOf<UCrafti
 	World->GetTimerManager().SetTimer(CraftTimerHandle, this, &UCraftingComponent::HandleCraftTimerCompleted,
 		Recipe->CraftDuration, false);
 	BindOwnerMovement();
+	if (Recipe->RequiredStation)
+	{
+		// Only station recipes depend on the station's lifetime; ValidateRequest proved it usable.
+		BindActiveStation(Station);
+	}
 	Result = MakeCraftingRequestResult(ECraftingTransactionResult::Started, TEXT("Timed craft started."));
 	OnCraftStarted.Broadcast(RecipeClass, Recipe->CraftDuration);
 	return Result;
@@ -232,15 +320,17 @@ void UCraftingComponent::CancelActiveCraft(const ECraftCancelReason Reason)
 void UCraftingComponent::HandleCraftTimerCompleted()
 {
 	const TSubclassOf<UCraftingRecipeDefinition> RecipeClass = ActiveRecipe;
+	const TWeakObjectPtr<UCraftingStationComponent> Station = ActiveCraftStation;
 	// Clear the active state and bindings before any feedback, so listeners see an idle component.
 	ClearActiveCraft();
 	TGuardValue<bool> CraftGuard(bCraftInProgress, true);
 
-	// Re-validate: registration and inventory may have changed while the timer ran.
+	// Re-validate: registration, station access and inventory may have changed while the timer ran.
+	// A station that is gone resolves to null here and fails as StationRequired.
 	const UCraftingRecipeDefinition* Recipe = nullptr;
 	UInventoryComponent* Inventory = nullptr;
 	FCraftingTransactionResult Result;
-	if (ValidateRequest(RecipeClass, Recipe, Inventory, Result))
+	if (ValidateRequest(RecipeClass, Station.Get(), Recipe, Inventory, Result))
 	{
 		Result = FCraftingTransaction::TryCraftRecipeAtomic(Inventory, Recipe);
 	}
@@ -279,7 +369,48 @@ void UCraftingComponent::ClearActiveCraft()
 	}
 	CraftTimerHandle.Invalidate();
 	UnbindOwnerMovement();
+	UnbindActiveStation();
 	ActiveRecipe = nullptr;
+}
+
+void UCraftingComponent::BindActiveStation(UCraftingStationComponent* Station)
+{
+	UnbindActiveStation();
+	ActiveCraftStation = Station;
+	AActor* StationActor = IsValid(Station) ? Station->GetOwner() : nullptr;
+	if (IsValid(StationActor))
+	{
+		BoundStationActor = StationActor;
+		StationActor->OnEndPlay.AddUniqueDynamic(this, &UCraftingComponent::HandleActiveStationEndPlay);
+	}
+}
+
+void UCraftingComponent::UnbindActiveStation()
+{
+	// The station actor may already be marked for destruction; unbind from it anyway.
+	if (AActor* StationActor = BoundStationActor.Get(/*bEvenIfPendingKill*/ true))
+	{
+		StationActor->OnEndPlay.RemoveDynamic(this, &UCraftingComponent::HandleActiveStationEndPlay);
+	}
+	BoundStationActor.Reset();
+	ActiveCraftStation.Reset();
+}
+
+void UCraftingComponent::HandleActiveStationEndPlay(AActor* Actor, EEndPlayReason::Type EndPlayReason)
+{
+	if (!IsCrafting() || Actor != BoundStationActor.Get(/*bEvenIfPendingKill*/ true))
+	{
+		return;
+	}
+	if (EndPlayReason == EEndPlayReason::Destroyed || EndPlayReason == EEndPlayReason::RemovedFromWorld)
+	{
+		CancelActiveCraft(ECraftCancelReason::StationLost);
+	}
+	else
+	{
+		// The whole world is ending (PIE end, quit, level transition): clear silently, as the crafter's own EndPlay does.
+		ClearActiveCraft();
+	}
 }
 
 void UCraftingComponent::BindOwnerMovement()

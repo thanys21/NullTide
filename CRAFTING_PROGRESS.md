@@ -13,7 +13,7 @@ Plan and design decisions: `CRAFTING_PLAN.md`.
 | C6A Crafting UI Foundation | COMPLETE (approved; manual rendered PIE 12/12 PASS, user-confirmed) |
 | C6B Craft Execution from UI | COMPLETE (manual rendered PIE 12/12 PASS, user-confirmed) |
 | C7 Timed Crafting | COMPLETE / APPROVED (manual rendered PIE: 12 PASS, 1 NOT TESTED; user-confirmed) |
-| C8 Workstations | NEXT (not started) |
+| C8 Workstations | IN PROGRESS: design approved; C8A COMPLETE / APPROVED (full automation 180/180, cook 0 errors; no PIE required); C8B and C8C not started |
 
 ## C1 - Recipe Data Model
 
@@ -467,6 +467,111 @@ All five were approved by the user without changes:
 - Tests after the reimport: `NullTide.Gameplay.G1` + `G2` + `Crafting.C1` + `C6A` + `C7` + `ResourceGathering.RG3`: 54/54 passed. The final pre-commit cook (editor closed) succeeded with both icons cooked.
 - Content delta for this request: `T_Icon_Axe.uasset`, `T_Icon_Pickaxe.uasset` modified; `T_Icon_Axe.png`, `T_Icon_Pickaxe.png` added as source images.
 
+## C8A - Workstation Data Model and Authority
+
+### Baseline and Scope
+
+- Baseline: `0cf655f` (C7 complete, approved and pushed). Previous full automation 169/169.
+- The user approved the C8 design with all nine decisions unchanged, plus `Recipe_ShortSword` as the Workbench recipe (see `CRAFTING_PLAN.md`, C8).
+- C8A scope: station data model, station-aware validation in `UCraftingComponent`, station lifetime handling and completion re-validation, two data assets, tests. No station actor, no UI change, no map change, no registration on the player.
+- COMPLETE / APPROVED by the user: all implementation decisions accepted, full automation 180/180 and the Windows cook (0 errors) accepted, no manual PIE required. Committed as the C8A milestone.
+
+### Source Files
+
+- New:
+  - `Public/Crafting/CraftingStationDefinition.h` + `Private/Crafting/CraftingStationDefinition.cpp`
+  - `Public/Crafting/CraftingStationComponent.h` + `Private/Crafting/CraftingStationComponent.cpp`
+  - `Private/Tests/CraftingStationTests.cpp`
+- Changed:
+  - `Public/Crafting/CraftingRecipeDefinition.h` + `.cpp` (`RequiredStation` and its validation rule)
+  - `Public/Crafting/CraftingTransaction.h` (result codes `StationRequired`, `StationOutOfRange`)
+  - `Public/Crafting/CraftingComponent.h` + `.cpp` (cancel reason `StationLost`, station-aware validation, new API, station lifetime binding)
+  - `Private/Tests/CraftingTestTypes.h` (station fixtures)
+  - `Private/Tests/CraftingRecipeTests.cpp` (`RecipeContract` checks that `RequiredStation` defaults to null)
+
+### Data Model
+
+- `UCraftingStationDefinition`: abstract, const, data-only Blueprint subclasses, read from the CDO (the same pattern as items and recipes).
+  - Fields: `StationName`, `StationDescription`, `StationIcon`, `UseRange` (cm, default 300).
+  - `ValidateStation` requires `UseRange > 0`. `IsDataValid` reports the same.
+  - `ResolveValidStation(Class)` returns the CDO of a concrete, valid station class, or null with a diagnostic.
+- `UCraftingStationComponent`: context only; no tick, no state besides `StationDefinition` (`EditDefaultsOnly`).
+  - `GetStationDefinition`.
+  - `IsStationUsable`: the owner is valid, not being destroyed, and the definition is valid.
+  - `IsActorInUseRange`: 2D distance between actor locations is at most `UseRange`.
+  - `IsDataValid` requires a valid definition.
+- `UCraftingRecipeDefinition::RequiredStation`: null means a hand recipe. `ValidateRecipe` rejects an abstract or invalid station class, with a diagnostic that names `RequiredStation`.
+
+### Authority (UCraftingComponent stays the only crafting authority)
+
+- New API:
+  - `GetRecipesForStation(Station)`: registered valid recipes. A usable station lists the recipes for that exact station kind first (authored order), then hand recipes. A null, destroyed or invalid station lists hand recipes only. Range is not considered when listing.
+  - `CanCraftRecipeAtStation(Recipe, Station)`: exact read-only preflight.
+  - `TryStartCraftAtStation(Recipe, Station)`: same instant/timed/notification behaviour as `TryStartCraft`.
+  - `GetActiveCraftStation()`: the station the active timed station recipe depends on, or null.
+- The existing `CanCraftRecipe` / `TryStartCraft` / `TryCraftRecipe` are the hand context (station = null). A station recipe returns `StationRequired` with no mutation and one notification.
+- Validation order in `ValidateRequest`:
+  1. recipe valid (`InvalidRecipe`);
+  2. registered (`RecipeNotAvailable`);
+  3. station access: null, destroyed, unusable or wrong kind -> `StationRequired`; out of range -> `StationOutOfRange`; hand recipes skip this step;
+  4. inventory (`InvalidInventory`);
+  5. active craft (`CraftInProgress`);
+  6. exact transaction preflight.
+- Station pointers are always checked with `IsValid`. The active station is a weak pointer read with `Get()`, so a stale station resolves to null and is rejected as `StationRequired`.
+- No second crafting authority, inventory or transaction: the craft still runs `FCraftingTransaction::TryCraftRecipeAtomic` once.
+
+### Station Lifetime and Completion
+
+- A timed **station** recipe records the station (weak pointer) and binds the station actor's `OnEndPlay` for the duration of the craft. Hand recipes started from a station context record nothing and bind nothing.
+- Station actor `EndPlay`:
+  - reason `Destroyed` or `RemovedFromWorld`: the craft is cancelled immediately with `StationLost` (one `OnCraftCancelled`, no `OnCraftingResult`, no inventory change);
+  - any other reason (PIE end, quit, level transition, meaning the whole world ends): the craft is cleared silently, like the crafter's own `EndPlay`.
+- Completion clears the active state and all bindings first, then re-validates registration, station access (kind, lifetime, range) and inventory inside the craft guard, then runs one atomic transaction. A station that moved out of range, changed kind, lost its definition, or whose component was destroyed (the actor still alive, so no `OnEndPlay`) fails the completion atomically, with no consumption, no revision and no inventory event.
+- Cancel (explicit, movement, jump, `StationLost`), completion and `EndPlay` all clear the timer, the movement bindings, the station binding and the active station.
+- One active craft per player across all contexts: hand and station crafts block each other, and a second station of the same kind is refused with `CraftInProgress`.
+
+### Content (through Unreal MCP)
+
+- New `/Game/LevelPrototyping/CraftingSystem/Stations/Station_Workbench` (parent `UCraftingStationDefinition`): `StationName` "Workbench", `StationDescription` "A sturdy bench for crafting tools and weapons.", `UseRange` 300, `StationIcon` empty (no art yet).
+- New `/Game/LevelPrototyping/CraftingSystem/Recipes/Recipe_ShortSword`:
+  - Wood x2 + Scrap x4 -> ShortSword x1, `CraftDuration = 4.0`, `RequiredStation = Station_Workbench`.
+  - Name "Short Sword", description "Forge a light one-handed sword at a workbench.", icon `T_Icon_ShortSword`.
+- Both compiled with warnings as errors and saved by explicit path. Nothing else was dirty (checked: existing recipes, `BP_TopDownCharacter`, `Lvl_TopDown`, the referenced items, `W_CraftingPanel`, `W_Inventory`).
+- `Recipe_ShortSword` is **not** registered on `BP_TopDownCharacter`; `ProductionStationAssets` checks this.
+- Content delta: 312 tracked packages, 0 modified, 2 added (314 on disk). No map, `__ExternalActors__` or `__ExternalObjects__` change.
+
+### Validation
+
+- `NullTideEditor Win64 Development` build with the editor closed: succeeded, no compiler warnings. The final build includes a comment-only header change made after the first full run; every result below is from the final binary unless noted.
+- Focused `NullTide.Crafting.C8A`: 11/11 passed:
+  - `StationDefinitionContract`
+  - `RecipeStationValidation`
+  - `RecipeFiltering`
+  - `HandContextRejectsStationRecipe`
+  - `StationMismatchAndRange`
+  - `StationInstantAndTimedCraft`
+  - `StationLostCancels`
+  - `CompletionRevalidatesStation`
+  - `OneActiveCraftAcrossContexts`
+  - `MovementCancelAtStation`
+  - `ProductionStationAssets`
+- Crafting regression `NullTide.Crafting` (C1 5, C2 5, C3C4 8, C5 9, C6A 6, C6B 6, C7 9, C8A 11): 59/59 passed.
+- Full permanent automation `NullTide`: 180/180 passed (169 previous + 11 C8A), on both the first build and the final build. No test warnings; only environment warnings in the log.
+- Windows cook with the editor closed: `Done!`, `Success - 0 error(s), 2 warning(s)` (environment only: NTFS journal on `D:`, MCP licence notice); 619 cooked, 7 platform-skipped, 626 total, the same as C7. `Station_Workbench` and `Recipe_ShortSword` are not cooked yet, because nothing cooked references them until C8C registers the recipe. A first cook attempt from Git Bash had its `-Map=/Game/...` argument rewritten into a Windows path by MSYS; it was rerun with `MSYS_NO_PATHCONV=1`.
+- No rendered PIE: C8A has no station actor or UI path.
+
+### Development Notes
+
+- The first `StationLostCancels` run failed: the C7-style transient world has no world context and uninitialized actors, so `RouteEndPlay` never ran `EndPlay` on the station actor. The C8A fixture now uses the engine's CQTest `ActorTestSpawner` setup (`CreateNewWorldContext`, `InitializeActorsForPlay`; teardown routes `EndPlay`, then destroys the world and its context). This also removed the "World has no context" warnings from the earlier run. No production code changed for this.
+- A freshly created recipe Blueprint fails a warnings-as-errors compile while it is still empty (an invalid recipe), so the recipe data is set on the CDO before the first compile.
+
+### Known Limitations / Deferred
+
+- Hand-context UI text for the new codes (`StationRequired`, `StationOutOfRange`, `StationLost`) comes in C8C. Until then the generic fallback text would show, but no UI path can produce these codes in C8A because the station recipe is not registered on the player.
+- If a station component is destroyed alone (its actor alive), the craft is not cancelled immediately; completion fails atomically with `StationRequired`. The user accepted this for C8A and asked not to redesign component lifetime. Requirement carried to C8C: the station UI must close or become unusable when its station component is invalid.
+- `Station_Workbench` and `Recipe_ShortSword` are not cooked yet (nothing cooked references them). The user expects this; the final C8C cook must verify both are cooked.
+- C8B (`ACraftingStationActor`, `BP_Workbench`, placed bench) and C8C (UI integration, registering `Recipe_ShortSword`, PIE) are not started.
+
 ## Next Checkpoint
 
-C8 - Workstations. NEXT; not started. Crafting queue and the inventory/crafting UI-UX pass remain deferred.
+C8B - Workbench actor and interaction: NEXT, not started (needs explicit go-ahead). Crafting queue and the inventory/crafting UI-UX pass remain deferred.

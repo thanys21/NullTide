@@ -27,7 +27,11 @@ enum class ECraftingTransactionResult : uint8
 	/** A timed craft started; ingredients are consumed only when it completes. */
 	Started,
 	/** The recipe has a craft duration and must be started with TryStartCraft. */
-	TimedCraftRequired
+	TimedCraftRequired,
+	/** The recipe needs a station, and no usable station of that exact kind was given. */
+	StationRequired,
+	/** The right station was given, but the crafter is outside its UseRange. */
+	StationOutOfRange
 };
 
 /** Result of one atomic craft. */

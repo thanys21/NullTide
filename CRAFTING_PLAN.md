@@ -285,8 +285,278 @@ Re-entrancy (user requirement): on completion the active timed state, timer and 
 
 Crafting queue, multiple simultaneous crafts, workstations (C8), HUD toast while the screen is closed, damage cancel, save/load of an active craft.
 
+## C8 - Workstations (design APPROVED; C8A COMPLETE / APPROVED)
+
+Baseline: `0cf655f` (C7 complete and approved; pushed). Full automation 169/169. The user approved all nine design decisions below without changes, with `Recipe_ShortSword` as the production Workbench recipe. C8 is implemented one checkpoint at a time: C8A first, then C8B and C8C only after review.
+
+### Goal
+
+- Hand crafting keeps working with no station.
+- A Workbench unlocks recipes that need it.
+- Campfire and Forge can be added later as data and content, without new crafting logic.
+- The player uses a station with `F`.
+- These rules stay as they are: one active craft per player, consume at completion, timed crafting and cancellation.
+- Stations never become inventory or crafting authorities.
+
+### Audit
+
+| Area | What exists | Reuse / conflict for C8 |
+| --- | --- | --- |
+| `UCraftingComponent` | The player's authority. `AvailableRecipes`, `ValidateRequest` (recipe -> registration -> inventory), `CanCraftRecipe`, `TryCraftRecipe` (instant only), `TryStartCraft`, one world timer, `ActiveRecipe`, a craft guard. Movement and jump cancel through `ACharacter` delegates that are bound only while crafting. Completion clears state, then re-validates, then runs one atomic transaction. | **Reuse.** `ValidateRequest` is the single place to add a station check. The C7 completion re-validation already exists, so the station check joins it. Movement cancel (more than 10 cm) already covers "the player walks away" during a craft. |
+| `UCraftingRecipeDefinition` | Abstract, const, data-only BP subclasses. `ValidateRecipe` and `IsDataValid`. C1 deliberately left out a workstation field. | **Extend** with one optional field. A null value means hand crafting, so `Recipe_Axe`, `Recipe_WoodArrow` and `Recipe_Pickaxe` stay unchanged. |
+| `FCraftingTransaction` / inventory | `TryCraftRecipeAtomic`, `CanCraftRecipe`, and the generic `TryApplyDefinitionTransaction`. | **Unchanged.** The station check runs before the transaction, in the crafting component. The inventory never learns about stations. |
+| `BPI_Interactable` / `PlayerInteractionComponent` | `F` (`IA_Interact`). Capsule overlap finds actors that implement `BPI_Interactable`. `GetActiveInteractable` returns the last actor that was overlapped. `Interact(Interactor)` uses Press/Hold through `E_InteractionType`. | **Reuse unchanged.** The workbench implements the interface the same way `BP_StorageContainer` does. Known limitation: when several interactables overlap, the last one overlapped wins. |
+| `AStorageContainerActor` | C++ actor: mesh, `InteractionBounds` and one authority component. `OpenStorageForInteractor` resolves the PlayerController, creates and caches its screen widget, sets UI-only input and shows the cursor. The screen closes itself when its source becomes invalid (`NativeTick`). It has no range check. | **Pattern to copy** for `ACraftingStationActor`. Unlike storage, crafting at a station adds a range check in the authority. |
+| `UCraftingPanelWidget` | Follows the owning pawn's crafting component. `SetCraftingSource(UCraftingComponent*)` swaps which component it observes. It lists `GetAvailableRecipes()`. `BuildRecipeView` uses `CanCraftRecipe`. On reopen it selects the active recipe if that recipe is listed. | **Reuse.** C6B planned `SetCraftingSource` for "a workstation's" component, but under this design stations own no crafting component. The panel instead gets a separate *station context*: it keeps observing the player's component and passes the station along with each query and request. `SetCraftingSource` stays as it is, for tests. |
+| `W_Inventory` / input | `BP_TopDownController` creates `W_Inventory` on `I`/`Tab`, sets UI-only input and shows the cursor. `UInventoryScreenWidget` closes on `I`/`Tab`/`Esc`. While any screen is open, game input (move, jump, `F`) does not reach the pawn. | **Reuse.** The player cannot move while a station screen is open. After it closes, any movement cancels the craft (C7). |
+
+Conflicts found:
+
+1. The C6B comment and the master plan assumed stations might own a crafting component. That would create a second crafting authority and a second "one active craft" state. **Rejected.** Stations are context only.
+2. `GetAvailableRecipes()` is used by the panel and by C5 tests as "everything registered". Changing its meaning would break callers. It stays "all registered". A new context-filtered query is added instead.
+3. `CanCraftRecipe` / `TryStartCraft` / `TryCraftRecipe` have no station parameter. They become the **hand context**. Station recipes called through them return a new `StationRequired` code.
+
+### Recommended Workstation Model
+
+**Requirement representation: a station definition class (recommended).**
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| C++ enum `ECraftingStationType` | Smallest. Blueprint-friendly. Trivial matching. | A C++ change and recompile for every new station. No place for a display name, icon or range. Enum renames break saved data. |
+| Gameplay tag `Crafting.Station.Workbench` | Data-driven. Hierarchical matching is possible later. | The project does not use GameplayTags yet, so it would need a new module dependency and an ini tag table. A display name and icon still need a separate lookup. Tags are easy to mistype. |
+| **`UCraftingStationDefinition` class** (abstract, const, data-only BP subclasses, referenced by `TSubclassOf`, read from the CDO) | Same pattern as `UItemDefinition` and `UCraftingRecipeDefinition`. Adding Campfire or Forge is a new asset with no C++. It carries a display name, icon and use range. `IsDataValid` works. No new module. | One more asset type. Matching is by class identity, so renaming an asset needs a redirect, as for items. |
+
+New types (all in `Crafting/`):
+
+- `UCraftingStationDefinition`: `StationName`, `StationDescription`, `StationIcon`, `UseRange` (cm, default 300, must be greater than 0), and `IsDataValid`.
+- `UCraftingRecipeDefinition::RequiredStation` (`TSubclassOf<UCraftingStationDefinition>`):
+  - null means a hand recipe;
+  - `ValidateRecipe` rejects an abstract station class.
+- `UCraftingStationComponent` (actor component, no tick, no state other than data):
+  - `StationDefinition`;
+  - `GetStationDefinition()`;
+  - `IsActorInUseRange(const AActor*)`: 2D distance between actor locations is at most `UseRange`.
+
+  Being a component lets a later Building-phase actor (a placed Campfire with light and fuel) become a station by adding the component.
+- `ACraftingStationActor` (C8B): the same shape as `AStorageContainerActor`, with a mesh, `InteractionBounds`, a `UCraftingStationComponent`, a `CraftingScreenClass` and `OpenCraftingForInteractor(Interactor)`.
+
+**Matching rule:**
+- A recipe can be crafted in a context when `RequiredStation` is null (a hand recipe, allowed anywhere, including at a station).
+- Otherwise the context's station definition must be **exactly** `RequiredStation`. Exact class only: no `IsChildOf` tiers in C8.
+
+**Recipe registration (recommended):**
+- All recipes, including Workbench recipes, stay registered on the player's `UCraftingComponent::AvailableRecipes`.
+- The station decides *where* a recipe can be crafted. The player's registry decides *which* recipes the player knows.
+- Stations hold no recipe lists, so later unlock or progression work has one registry to extend.
+- Alternative: station-owned recipe lists. Rejected because they duplicate registration and make the player authority accept recipes it does not own.
+
+**Future Campfire / Forge:**
+- Each new station is a `Station_Campfire` definition asset, a BP subclass of `ACraftingStationActor` (or any actor with `UCraftingStationComponent`), and recipes that set `RequiredStation`.
+- No crafting code changes.
+- Later per-station rules (fuel, "fire is lit", a craft-speed multiplier) belong in one `ValidateStationAccess` hook. Deferred.
+
+### Workstation Authority (UCraftingComponent stays the authority)
+
+Recommended API: the station is passed explicitly with each request. The component keeps no "current station" between requests, so closing the UI never leaves stale state.
+
+| API | Behaviour |
+| --- | --- |
+| `GetRecipesForStation(UCraftingStationComponent* Station)` (pure, new) | Registered valid recipes usable in this context, in authored order. Null station: hand recipes only. Valid station: the recipes for that station, then hand recipes. |
+| `CanCraftRecipeAtStation(Recipe, Station)` (pure, new) | `CanCraftRecipe` plus the station check. Exact read-only preflight. |
+| `TryStartCraftAtStation(Recipe, Station)` (callable, new) | `TryStartCraft` plus the station check. Same instant / timed / notification behaviour. A timed station craft records `ActiveCraftStation` (a weak pointer). |
+| `CanCraftRecipe` / `TryStartCraft` / `TryCraftRecipe` (existing) | Unchanged signatures. Act as the hand context (station = null). A station recipe returns `StationRequired` without mutation. |
+| `GetActiveCraftStation()` (pure, new) | The station the active craft was started at, or null. |
+
+Validation order (`ValidateRequest` with a station):
+1. Recipe valid -> `InvalidRecipe`.
+2. Registered -> `RecipeNotAvailable`.
+3. Station: if the recipe needs one and the context has none or the wrong definition -> `StationRequired`; if out of range -> `StationOutOfRange`. Hand recipes skip the station check.
+4. Inventory -> `InvalidInventory`.
+5. Active craft -> `CraftInProgress`.
+6. Exact transaction preflight.
+
+Result codes are **appended** to `ECraftingTransactionResult`: `StationRequired`, `StationOutOfRange`. The cancel reason `StationLost` is appended to `ECraftCancelReason`. Appending keeps existing Blueprint enum values.
+
+| Question | Proposed behaviour |
+| --- | --- |
+| How the active workstation is tracked | Only while a craft runs: `ActiveCraftStation` (a weak pointer captured at start), cleared by `ClearActiveCraft`. The "station being used" for listing is UI context in the panel, not authority state. |
+| How requests validate access | Every station query and request runs the station check inside `ValidateRequest`. Timed completion re-runs the same `ValidateRequest` with `ActiveCraftStation`, so a lost or out-of-range station fails atomically with the same codes. |
+| Interaction distance | `UseRange` on the station definition (default 300 cm, 2D, actor origin to actor origin). This covers the 130 cm `InteractionBounds` extent plus the capsule radius with some slack. Checked at query, start and completion. No polling. |
+| Player moves away | Already handled by the C7 movement cancel (more than 10 cm -> `Movement`) before any range limit is reached. While the station screen is open, input is UI-only, so the player cannot walk away. No new range-based cancel. |
+| Station destroyed | While a *station* recipe is crafting, the component binds the station actor's `OnEndPlay`. On that event the craft is cancelled immediately with `StationLost` (no inventory change; `OnCraftCancelled` fires). Completion re-validation is the backstop. Hand recipes started from a station screen do not depend on the station and are not cancelled. |
+| UI closes | Does not cancel (same as C7). The craft keeps running on the player's component and completes against the captured station. |
+| Station crafting while another craft is active | Not allowed. One active craft per player across all contexts (`CraftInProgress`). Stations have no occupancy lock in C8: two users could use one bench, but only the player uses stations today. |
+
+### UI Integration
+
+Recommended: **reuse `W_Inventory`.** The station opens the same three-column screen (inventory, character, crafting), with the crafting column in station context.
+
+- **F opens it.** `BP_Workbench` implements `BPI_Interactable`, and `Interact` calls `ACraftingStationActor::OpenCraftingForInteractor(Interactor)`. That function copies `OpenStorageForInteractor`:
+  - resolve the PlayerController;
+  - reject the request when the player is out of `UseRange`;
+  - create and cache its own `CraftingScreenClass` instance (`W_Inventory`);
+  - call `OpenForCraftingStation(StationComponent)`;
+  - set UI-only input, show the cursor and set keyboard focus.
+- **Filtering.**
+  - `UInventoryScreenWidget` gains an optional `CraftingPanel` binding (the existing widget name in `W_Inventory`) and `OpenForCraftingStation(Station)`, which forwards to the new `UCraftingPanelWidget::SetCraftingStation(Station)`.
+  - The panel lists `GetRecipesForStation(Station)`, builds views with `CanCraftRecipeAtStation`, and CRAFT calls `TryStartCraftAtStation`.
+  - An optional `CraftingTitleText` shows "CRAFTING" by hand or the station name ("WORKBENCH").
+  - The `I`/`Tab` screen keeps a null station, so it shows hand recipes only.
+- **The inventory stays available.**
+  - The station screen *is* the inventory screen, so backpack, details, equip and drag/drop all work.
+  - `I`/`Tab`/`Esc` close it, as today.
+  - `I`/`Tab` from game input still opens the controller's own hand-context screen. No change to `BP_TopDownController`.
+- **Progress and cancel.**
+  - These read the player's component (`IsCrafting`, `GetActiveCraftProgress`, `CancelCraft`), so they work the same in both screens.
+  - If the hand screen is opened while a station craft runs, the active recipe is not in the hand list. The panel still shows the progress bar, status and CANCEL for the active craft. C8C must test and, if needed, fix this, because the C7 code selected the active recipe only when it is listed.
+- **Station disappears while its screen is open.** The screen closes, as the storage screen does for invalid storage.
+- **On close.** The station context on the panel is cleared, so the reused widget instance never keeps a stale station.
+- **Separation.**
+  - The panel stores only a weak station pointer as context and passes it to the component.
+  - Range, definition matching and inventory are validated only in `UCraftingComponent`.
+  - The station actor only opens the screen and answers range and definition queries.
+
+Alternative: a dedicated small `W_CraftingStationScreen` containing only `W_CraftingPanel`. It is more isolated, but adds a new layout, hides the backpack while at the bench, and does not reuse the inventory screen. Not recommended.
+
+### Checkpoints
+
+**C8A - Workstation data model and authority validation** (source, tests and data assets; no map change)
+- Source:
+  - New `Crafting/CraftingStationDefinition.h/.cpp` and `Crafting/CraftingStationComponent.h/.cpp`.
+  - `CraftingRecipeDefinition` (`RequiredStation` and its validation rule).
+  - `CraftingTransaction.h` (two result codes).
+  - `CraftingComponent` (cancel reason, station-aware `ValidateRequest`, `GetRecipesForStation`, `CanCraftRecipeAtStation`, `TryStartCraftAtStation`, `GetActiveCraftStation`, the station `OnEndPlay` binding, completion re-validation).
+  - Tests and fixtures in `CraftingTestTypes.h`: a test station definition, a station recipe, and a helper actor with a station component.
+- Assets (through MCP):
+  - `/Game/LevelPrototyping/CraftingSystem/Stations/Station_Workbench`.
+  - The Workbench production recipe (see decision 8), **not registered yet**, so the C6/C7 screens do not change in C8A.
+- Tests `NullTide.Crafting.C8A.*`:
+  - `StationDefinitionContract`
+  - `RecipeStationValidation` (null = hand; abstract station rejected)
+  - `RecipeFiltering` (null -> hand only; station -> station plus hand recipes; mismatched station excluded; `GetAvailableRecipes` unchanged)
+  - `HandContextRejectsStationRecipe` (`StationRequired` from all three existing APIs; no mutation; one notification)
+  - `StationMismatchAndRange`
+  - `StationInstantAndTimedCraft` (consume at completion; one revision and one event)
+  - `StationLostCancels` (and a hand recipe started at a station is not cancelled)
+  - `CompletionRevalidatesStation` (station moved out of range -> atomic `StationOutOfRange`)
+  - `OneActiveCraftAcrossContexts`
+  - `MovementCancelAtStation`
+  - `ProductionStationAssets`
+- Regression: C1-C7. `RecipeContract` gets the `RequiredStation` default.
+
+**C8B - Workbench actor and interaction** (source and assets; one new placed actor)
+- Source: new `Crafting/CraftingStationActor.h/.cpp`. `OpenCraftingForInteractor` validates the interactor and range and returns false while `CraftingScreenClass` is unset. The screen is wired in C8C.
+- Assets:
+  - `/Game/LevelPrototyping/CraftingSystem/Stations/BP_Workbench` (parent `ACraftingStationActor`, `StationDefinition = Station_Workbench`, implements `BPI_Interactable` with Press, `Interact` -> `OpenCraftingForInteractor`, placeholder mesh like the storage cube).
+  - One `BP_Workbench` placed in `Lvl_TopDown` near the spawn. This is one new World Partition external actor package, saved by the user in the editor.
+- Tests `NullTide.Crafting.C8B.*`:
+  - `ActorContract`
+  - `OpenRejectsInvalidInteractor` (null, no controller, out of range, no screen class)
+  - `ProductionWorkbench` (asset loads, definition set, implements `BPI_Interactable`)
+- PIE (user):
+  - the `F` prompt appears at the bench;
+  - storage, door and gathering still work;
+  - the bench does not block click-to-move pathing badly.
+- Cook.
+
+**C8C - Workstation crafting UI and PIE**
+- Source:
+  - `UCraftingPanelWidget` (`SetCraftingStation`, filtered list, station-aware view and request, optional title, active-craft display when the active recipe is not listed).
+  - `UCraftingViewLibrary` (`BuildRecipeView` station overload; texts "Requires Workbench.", "Too far from the Workbench.", "Crafting cancelled: the Workbench is gone.").
+  - `UInventoryScreenWidget` (optional `CraftingPanel` binding, `OpenForCraftingStation`, context cleared on close, close when the station is lost).
+  - `ACraftingStationActor` (opens the screen).
+- Assets:
+  - `BP_Workbench` (`CraftingScreenClass = W_Inventory`).
+  - `BP_TopDownCharacter` (register the Workbench recipe fourth).
+  - `W_CraftingPanel` (optional `CraftingTitleText`, only if no suitable named text exists).
+- Tests `NullTide.Crafting.C8C.*`:
+  - station panel lists station plus hand recipes;
+  - hand panel hides the station recipe;
+  - CRAFT routes through `TryStartCraftAtStation`;
+  - new feedback texts;
+  - the screen closes on station loss;
+  - the hand screen shows active station-craft progress and CANCEL works;
+  - the context is cleared on close.
+- C5 registration and the C6A list expectations are updated for the fourth recipe.
+- Manual rendered PIE checklist (user-run), about 12 items:
+  - `F` opens the workbench screen;
+  - only the correct recipes are listed;
+  - a timed station craft completes;
+  - cancel by button;
+  - moving cancels;
+  - the craft keeps running after closing the screen;
+  - Tab during a station craft;
+  - the bench recipe is absent from Tab;
+  - hand recipes at the bench;
+  - an out-of-range attempt;
+  - storage still works;
+  - gathering still works.
+- Full suite and cook.
+
+Each checkpoint follows the usual rules:
+- build with the editor closed;
+- focused tests, then regression, then the full suite;
+- Blueprint compile with warnings as errors;
+- save only intentionally changed assets;
+- update `CRAFTING_PROGRESS.md`, `NULLTIDE_MASTER_PLAN.md` and `CLAUDE.md`;
+- commit only after user review; no push.
+
+### Approved Decisions (user, all nine approved)
+
+1. **Requirement representation:** a `UCraftingStationDefinition` class (recommended), versus an enum or a gameplay tag.
+2. **Registration:** all recipes on the player's `AvailableRecipes`, with stations as context only (recommended), versus station-owned recipe lists.
+3. **Hand recipes at a station:** the station screen lists station recipes and then hand recipes (recommended), versus station recipes only.
+4. **Matching:** exact station class only in C8 (recommended). Tiers (a Forge also doing Workbench recipes) are deferred.
+5. **Range:** `UseRange` on the definition, default 300 cm, 2D, checked at query, start and completion. No range polling, because movement cancel covers walking away.
+6. **Station destroyed:** immediate cancel with the new reason `StationLost` (station recipes only), and an open station screen closes.
+7. **UI:** reuse `W_Inventory` opened by the station with a station context on the crafting panel (recommended), versus a new dedicated station screen.
+8. **Production content:**
+   - `Station_Workbench`, plus `BP_Workbench` with a placeholder cube mesh, placed near the spawn.
+   - Proposed Workbench recipe: `Recipe_ShortSword` (Wood x2 + Scrap x4 -> ShortSword x1, `CraftDuration = 4.0`). It gives Scrap a use and exercises timed station crafting.
+   - Approved: `Recipe_ShortSword`. The `Recipe_WoodBow` alternative was not chosen.
+9. **API shape:** an explicit station parameter on new `...AtStation` functions; the existing functions become the hand context (recommended), versus persistent "active station" state set on the component when the screen opens.
+
+### C8A Implementation Notes (additions to the approved design; for review)
+
+C8A is complete and approved (details in `CRAFTING_PROGRESS.md`, C8A). The user accepted all of these implementation choices, which fill gaps the design did not spell out:
+
+1. **Station `EndPlay` reason.** `Destroyed` and `RemovedFromWorld` cancel a dependent craft with `StationLost`. Every other reason (PIE end, quit, level transition, meaning the whole world ends) clears it silently, matching the C7 rule that the crafter's own `EndPlay` sends no notification.
+2. **Station component destroyed alone** (its actor still alive) sends no `OnEndPlay`. The craft is not cancelled immediately; completion re-validation fails it atomically with `StationRequired`. The same applies to a station actor that never began play.
+3. **Listing ignores range.** `GetRecipesForStation` lists station recipes for a usable station even when the crafter is out of range. `CanCraftRecipeAtStation` reports `StationOutOfRange`, so C8C can show "Too far" instead of hiding the recipe.
+4. **Validation order** puts station access after registration and before inventory, so "out of range" is reported before missing ingredients.
+5. **`Station_Workbench` has no icon** (no art yet). `StationIcon` stays empty until art exists.
+
+Carried into C8C from the C8A review:
+
+- The station UI must close or become unusable when its station component is invalid, not only when the station actor is destroyed (see note 2).
+- The final C8C cook must verify that `Station_Workbench` and `Recipe_ShortSword` are cooked once the recipe is registered.
+
+### Risks and Edge Cases
+
+- **Interaction target selection:** `PlayerInteractionComponent` picks the last overlapped interactable. A bench placed next to storage or a resource node may target the wrong actor. Mitigation: place the bench apart from other interactables. Changing the target selection is out of scope.
+- **Two `W_Inventory` instances:** the controller's and the station's. Both use UI-only input, so only one can be focused and open from game input. PIE must confirm that `I`/`Tab`/`Esc` close the station screen and that the controller can reopen its own screen afterwards.
+- **Active craft not in the listed recipes:** a station craft viewed from the hand screen (see UI). Needs explicit tests.
+- **Station moved or destroyed between start and completion:** covered by the `OnEndPlay` cancel and completion re-validation. Both are atomic, with no partial consumption.
+- **Hand recipe started at a station, then the station is destroyed:** not cancelled, by design.
+- **Enum appends:** new values only at the end. Existing Blueprint switch nodes keep their pins.
+- **World Partition:** the placed bench is a new external actor package. MCP `save_assets` cannot save it, so the user saves it with Ctrl+S in the editor. Never Save All.
+- **Navigation:** a blocking mesh changes the nav mesh near the spawn. Place it away from the main paths and check click-to-move in PIE.
+- **Test count changes:** registering a fourth recipe changes the C5 and C6A expectations in C8C, intentionally and documented.
+- **Multiplayer and NPC colonists:** stations have no occupancy or locking. They are safe for the current single player and revisited in Colony.
+
+### Validation Strategy
+
+- Authority behaviour is proved by automation in transient worlds: a spawned `ACharacter` plus actors with `UCraftingStationComponent`; destroy and move them to cover range and loss.
+- UI behaviour is proved by widget tests (real `W_CraftingPanel` / `W_Inventory` in a transient world, as in C6/C7).
+- World and interaction behaviour, and the final UX, are proved by user-run rendered PIE checklists in C8B and C8C. Results are recorded exactly as reported (PASS / FAIL / NOT TESTED).
+- Every checkpoint: build, focused tests, regression (C1-C7, Stacking, G4-G7, ResourceGathering), full suite, Windows cook, and a content audit (only the planned packages change).
+
+### Deferred (not in C8)
+
+Campfire and Forge content, station tiers, fuel or operational state, per-station craft speed, station occupancy and multi-user locking, NPC station use, placing or building stations (Phase 5), greyed-out "Requires Workbench" entries in the hand screen, crafting queue, HUD progress while screens are closed, save/load of active crafts, and station-owned output storage.
+
 ## Later Checkpoints (summary)
 
-- **C8** Workstations.
+- **C8** Workstations: design approved above; C8A COMPLETE / APPROVED; C8B and C8C not started.
 - **Crafting queue (deferred, user request after C7 PIE)**: queue up to 5 crafts per player that run one after another; each queued entry can be cancelled with a button or right-click. Needs its own design: whether ingredients are checked per entry at start or at completion (C7 consumes at completion), what happens to later entries when one fails or is cancelled, and how movement cancellation applies to the queue. Not started; must not be mixed into C8 without approval.
 - **Inventory/crafting UI/UX pass (deferred, user request after C7 PIE)**: make the combined screen more convenient. Known items from C7 PIE: keep the last craft result and selected recipe across closing/reopening the screen; remove the occasional quantity flicker after a result message disappears; show crafting progress or completion while the screen is closed (HUD); review layout density and the empty Item Details state. Not started.

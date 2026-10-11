@@ -123,6 +123,7 @@ bool FCraftingRecipeContractTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Output quantity"), Recipe->Outputs[0].Quantity, 1);
 	}
 	TestEqual(TEXT("Craft duration (instant fixture; timed fixtures are covered by C7)"), Recipe->CraftDuration, 0.f);
+	TestNull(TEXT("Hand recipe: no RequiredStation (station fixtures are covered by C8A)"), Recipe->RequiredStation.Get());
 
 	FCraftingItemQuantity DefaultEntry;
 	TestNull(TEXT("Default entry has no item"), DefaultEntry.ItemDefinition.Get());

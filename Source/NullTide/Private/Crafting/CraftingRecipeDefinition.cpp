@@ -3,6 +3,7 @@
 
 #include "Crafting/CraftingRecipeDefinition.h"
 
+#include "Crafting/CraftingStationDefinition.h"
 #include "Items/ItemDefinition.h"
 
 #if WITH_EDITOR
@@ -64,6 +65,16 @@ bool UCraftingRecipeDefinition::ValidateRecipe(FString& OutDiagnostic) const
 	{
 		OutDiagnostic = FString::Printf(TEXT("CraftDuration %.3f is negative."), CraftDuration);
 		return false;
+	}
+	if (RequiredStation)
+	{
+		FString StationDiagnostic;
+		if (!UCraftingStationDefinition::ResolveValidStation(RequiredStation, StationDiagnostic))
+		{
+			OutDiagnostic = FString::Printf(TEXT("RequiredStation (%s) is invalid: %s"),
+				*GetNameSafe(RequiredStation.Get()), *StationDiagnostic);
+			return false;
+		}
 	}
 	return true;
 }

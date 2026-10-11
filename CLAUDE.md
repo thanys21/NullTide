@@ -37,7 +37,7 @@ The engine is installed at `D:/game/epic/UE_5.8`.
 
 - If the editor is running, linking fails with `LNK1104` because the editor has the DLL locked. Ask the user to close the editor normally. Never force-kill an editor that has unsaved work.
 - The wrapper script can return a nonzero exit code even when the build succeeded. Check `%LOCALAPPDATA%\UnrealBuildTool\Log.txt` and look for `Result: Succeeded`.
-- Cook check: `UnrealEditor-Cmd.exe NullTide.uproject -run=Cook -TargetPlatform=Windows -Map=/Game/TopDown/Lvl_TopDown -unattended -nop4 -NullRHI -stdout`
+- Cook check: `UnrealEditor-Cmd.exe NullTide.uproject -run=Cook -TargetPlatform=Windows -Map=/Game/TopDown/Lvl_TopDown -unattended -nop4 -NullRHI -stdout`. Run it with the editor closed (the editor holds the MCP port). From Git Bash, prefix `MSYS_NO_PATHCONV=1`, otherwise MSYS rewrites `-Map=/Game/...` into a Windows path.
 
 ## Tests
 
@@ -46,7 +46,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Inventory.{M1..M6,G7,Stacking}`
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
-- `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7}`
+- `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -98,7 +98,15 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - `FCraftingTransaction::TryCraftRecipeAtomic` (native only) is the authoritative craft path: it validates the recipe and runs one `TryApplyDefinitionTransaction`.
 - `UCraftingComponent` on `BP_TopDownCharacter` is the player's crafting authority. It holds the registered recipes (`AvailableRecipes`, currently `Recipe_Axe`, `Recipe_WoodArrow`, `Recipe_Pickaxe`), resolves the owner's inventory, and exposes `GetAvailableRecipes`, `CanCraftRecipe` (exact read-only preflight; `CraftInProgress` while a timed craft runs), `TryStartCraft` (UI entry: instant recipes craft now, timed recipes start), `TryCraftRecipe` (instant only; timed recipes return `TimedCraftRequired`), `CancelCraft`, progress queries and `OnCraftStarted`/`OnCraftCancelled`/`OnCraftingResult`. UI and Blueprints call this component, never the inventory transaction.
 - Timed crafting (C7) consumes ingredients only at completion: start runs the exact preflight, a world timer runs (no tick), completion re-validates and runs one atomic transaction. One active craft per player. Movement (more than 10 cm horizontally) and jump/fall cancel through native `ACharacter` movement delegates bound only while crafting; do not add crafting cancel calls to Blueprint input graphs. Closing the UI does not cancel; `EndPlay` clears state silently.
-- Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. Crafting UI, timed crafting and workstations come in later checkpoints.
+- Workstations (C8) are context, never crafting authorities.
+  - `UCraftingStationDefinition` is the station kind: abstract, const, with data-only Blueprint subclasses in `Content/LevelPrototyping/CraftingSystem/Stations/Station_*`. It holds `StationName`, `StationIcon` and `UseRange` (default 300 cm).
+  - `UCraftingStationComponent` marks an actor as a station of one kind and answers `IsStationUsable` / `IsActorInUseRange`. It never crafts or touches an inventory.
+  - `UCraftingRecipeDefinition::RequiredStation` names the kind by exact class; null means a hand recipe.
+  - All recipes stay registered on the player's `AvailableRecipes`.
+  - Station-aware calls take the station explicitly: `GetRecipesForStation` (that station's recipes first, then hand recipes), `CanCraftRecipeAtStation`, `TryStartCraftAtStation`, `GetActiveCraftStation`. The calls without a station are the hand context; station recipes there return `StationRequired`, and out of range returns `StationOutOfRange`.
+  - Station access is re-validated at completion.
+  - A timed station recipe binds the station actor's `OnEndPlay`: a destroyed station cancels it (`StationLost`), and world teardown clears it silently. Hand recipes never depend on a station.
+- Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. The workstation actor (`ACraftingStationActor`, `BP_Workbench`; C8B) and station crafting UI (C8C) come in later checkpoints.
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

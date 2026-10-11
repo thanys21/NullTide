@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Crafting C7 (Timed Crafting) complete and approved (manual rendered PIE: 12 PASS, 1 NOT TESTED). Crafting C8 (Workstations) is next; crafting queue and the inventory/crafting UI-UX pass are deferred.
+> **Current development state:** Crafting C7 (Timed Crafting) complete and approved. Crafting C8 (Workstations): design approved; C8A (station data model and authority) COMPLETE / APPROVED; C8B and C8C not started. Crafting queue and the inventory/crafting UI-UX pass are deferred.
 
 ---
 
@@ -810,9 +810,10 @@ Crafting C5 Crafting Authority      ✅
 Crafting C6A Crafting UI Foundation  ✅
 Crafting C6B Craft Execution from UI ✅
 Crafting C7 Timed Crafting          ✅
+Crafting C8A Station Data/Authority  ✅
 
 NEXT:
-Crafting C8 Workstations
+Crafting C8B Workbench actor and interaction
 ```
 
 ---
@@ -1099,6 +1100,19 @@ etc.
 Recipe may require workstation type.
 
 Do not add this to the first crafting checkpoint unless necessary.
+
+Approved design (details in `CRAFTING_PLAN.md`, C8):
+
+- Stations are context, not crafting authorities. `UCraftingComponent` stays the player's only crafting authority; there is no station inventory or transaction.
+- Station kinds are `UCraftingStationDefinition` data-only Blueprint subclasses (`StationName`, `StationIcon`, `UseRange` default 300 cm). A recipe's `RequiredStation` names one kind by exact class; null means a hand recipe.
+- All recipes stay registered on the player's `AvailableRecipes`. A station lists its own recipes first, then hand recipes; the `I`/`Tab` screen lists hand recipes only.
+- Station access (kind, lifetime, range) is checked at query, start and completion. Destroying a station cancels a dependent timed craft (`StationLost`); hand recipes never depend on a station. One active craft per player across all contexts.
+- Station-aware API takes the station explicitly: `GetRecipesForStation`, `CanCraftRecipeAtStation`, `TryStartCraftAtStation`, `GetActiveCraftStation`.
+- C8C reuses `W_Inventory`, opened by `F` on the station, with the crafting panel in station context.
+- Checkpoints:
+  - C8A: data model and authority. COMPLETE / APPROVED; adds `Station_Workbench` and `Recipe_ShortSword` (Wood x2 + Scrap x4 -> ShortSword x1, 4 s, Workbench), not yet registered.
+  - C8B: `ACraftingStationActor`, `BP_Workbench`, placed bench.
+  - C8C: UI integration, registration, PIE.
 
 ---
 
@@ -1430,21 +1444,22 @@ Do not implement without a dedicated milestone.
 
 ## Crafting — C8 Workstations
 
-C7 is complete and approved (see `CRAFTING_PROGRESS.md`). C8 is the next checkpoint; not started.
+C7 is complete and approved. The C8 design is approved (all nine decisions; see `CRAFTING_PLAN.md`, C8). C8A is complete and approved (see `CRAFTING_PROGRESS.md`, C8A). C8B is next and not started.
 
 Claude/Codex instruction:
 
 ```text
-1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md (C7 section).
-2. Agree the C8 scope with the user and record it in CRAFTING_PLAN.md
-   (workstation types, how a recipe declares one, how the player
-   uses a station, whether stations own their own crafting component).
-3. Keep UCraftingComponent the crafting authority; reuse
-   UCraftingPanelWidget::SetCraftingSource for station UI.
-4. No crafting queue, no save/load of active crafts unless approved.
-5. Build + focused tests + regression + full suite + rendered PIE + cook.
-6. Update CRAFTING_PROGRESS.md and this plan.
-7. STOP for review.
+1. Read CRAFTING_PLAN.md (C8) and CRAFTING_PROGRESS.md (C8A section).
+2. Start C8B only after the user explicitly approves starting it.
+3. C8B: ACraftingStationActor (same shape as AStorageContainerActor),
+   BP_Workbench implementing BPI_Interactable, one placed bench
+   (World Partition external actor; the user saves it with Ctrl+S).
+4. C8C: station context on UCraftingPanelWidget, W_Inventory opened by
+   the station, register Recipe_ShortSword, user-run rendered PIE.
+5. Keep UCraftingComponent the only crafting authority; stations are context.
+6. No crafting queue, no save/load of active crafts unless approved.
+7. Build + focused tests + regression + full suite + cook (+ PIE in C8B/C8C).
+8. Update CRAFTING_PROGRESS.md and this plan. STOP for review.
 ```
 
 This keeps Crafting incremental and prevents inventory authority from becoming coupled to UI.
@@ -1490,6 +1505,16 @@ Focused Crafting C7                                                             
 Regression C1-C6B + Stacking + M1 + G4/G5/G6 + G7 + ResourceGathering         95/95
 Full permanent suite                                                       169/169
 ```
+
+At the completion of Crafting C8A (approved):
+
+```text
+Focused Crafting C8A                                                            11/11
+Crafting regression C1-C8A                                                      59/59
+Full permanent suite                                                       180/180
+```
+
+C8A Windows cook (editor closed): `Done!`, 0 errors, 2 environment warnings (619 cooked / 7 platform-skipped / 626 total). The new `Station_Workbench` and `Recipe_ShortSword` are not cooked until C8C registers the recipe; the final C8C cook must verify them. No rendered PIE for C8A (no station actor or UI yet; approved without PIE).
 
 Manual rendered PIE for C7 (performed and reported by the user): 12 PASS, 1 NOT TESTED. The click-to-move cancel case could not be run (cursor hidden in game mode) and remains a deferred manual verification; displacement cancel is covered by automation. Final pre-commit Windows cook: `Done!`, 0 errors (619/7/626).
 
@@ -1653,12 +1678,12 @@ Current input:
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
-- Crafting C7 9/9
-- regression C1-C6B + Stacking + M1 + G4/G5/G6/G7 + ResourceGathering 95/95
-- full 169/169
+- Crafting C8A 11/11
+- crafting regression C1-C8A 59/59
+- full 180/180
 
 Next:
-Crafting C8 Workstations.
+Crafting C8B (Workbench actor and interaction), after explicit approval.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1697,7 +1722,10 @@ Phase 4  Crafting                           ⏭ IN PROGRESS
          C6A Crafting UI Foundation         ✅
          C6B Craft Execution from UI        ✅
          C7 Timed Crafting                  ✅
-         C8 Workstations                    ⏭ NEXT
+         C8 Workstations                    ⏭ IN PROGRESS
+                C8A Station data/authority  ✅
+                C8B Workbench actor
+                C8C Station crafting UI
 
 Phase 5  Building
 

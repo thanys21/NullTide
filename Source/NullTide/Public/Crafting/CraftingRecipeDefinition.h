@@ -6,6 +6,7 @@
 #include "UObject/Object.h"
 #include "CraftingRecipeDefinition.generated.h"
 
+class UCraftingStationDefinition;
 class UItemDefinition;
 class UTexture2D;
 
@@ -50,6 +51,10 @@ public:
 	/** Seconds per craft. Zero means instant. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Crafting", meta = (ClampMin = "0.0", Units = "s"))
 	float CraftDuration = 0.f;
+
+	/** Station kind this recipe must be crafted at (exact class). Null means a hand recipe, craftable anywhere. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Crafting")
+	TSubclassOf<UCraftingStationDefinition> RequiredStation;
 
 	/** Reports the first invalid entry as an indexed diagnostic. */
 	UFUNCTION(BlueprintPure, Category = "Crafting")

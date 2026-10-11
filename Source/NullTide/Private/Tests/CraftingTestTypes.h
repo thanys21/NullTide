@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Crafting/CraftingRecipeDefinition.h"
 #include "Crafting/CraftingComponent.h"
+#include "Crafting/CraftingStationDefinition.h"
 #include "Crafting/CraftingTransaction.h"
 #include "Inventory/InventoryTypes.h"
 #include "Items/ItemDefinition.h"
@@ -192,4 +193,84 @@ class UCraftingTimedHeavyTestRecipe : public UCraftingRecipeDefinition
 
 public:
 	UCraftingTimedHeavyTestRecipe();
+};
+
+/** Valid station kind used only by C8 tests ("Test Bench", default UseRange 300). */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingTestStationDefinition : public UCraftingStationDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UCraftingTestStationDefinition();
+};
+
+/** A second valid station kind, for mismatch tests ("Test Forge"). */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingOtherTestStationDefinition : public UCraftingStationDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UCraftingOtherTestStationDefinition();
+};
+
+/** Invalid station kind: UseRange 0. */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingInvalidTestStationDefinition : public UCraftingStationDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UCraftingInvalidTestStationDefinition();
+};
+
+/** Timed (2 s) Test Bench recipe: Stackable x3 + Single x1 -> Other x1. */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingStationTimedTestRecipe : public UCraftingRecipeDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UCraftingStationTimedTestRecipe();
+};
+
+/** Instant Test Bench recipe: Stackable x2 -> Other x1. */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingStationInstantTestRecipe : public UCraftingRecipeDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UCraftingStationInstantTestRecipe();
+};
+
+/** Instant Test Forge recipe: Stackable x1 -> Other x1. */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingOtherStationTestRecipe : public UCraftingRecipeDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UCraftingOtherStationTestRecipe();
+};
+
+/** Invalid recipe: RequiredStation is the abstract native station root. */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingAbstractStationTestRecipe : public UCraftingRecipeDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UCraftingAbstractStationTestRecipe();
+};
+
+/** Invalid recipe: RequiredStation is an invalid station kind (UseRange 0). */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingInvalidStationTestRecipe : public UCraftingRecipeDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UCraftingInvalidStationTestRecipe();
 };

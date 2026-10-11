@@ -10,6 +10,7 @@
 #include "CraftingTestTypes.generated.h"
 
 class UCraftingComponent;
+class UCraftingPanelWidget;
 class UInventoryComponent;
 
 /** Concrete valid recipe used only by native crafting automation tests. */
@@ -111,5 +112,27 @@ public:
 	int32 InventoryEvents = 0;
 	int32 CraftingEvents = 0;
 	TSubclassOf<UCraftingRecipeDefinition> LastRecipe;
+	FCraftingTransactionResult LastResult;
+};
+
+/** Inventory listener that asks a crafting panel to craft again while a craft is being committed. */
+UCLASS(Transient, NotBlueprintable)
+class UCraftingPanelTestListener : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UFUNCTION()
+	void HandleInventoryChanged(int32 NewRevision);
+
+	UFUNCTION()
+	void HandleCraftingResult(TSubclassOf<UCraftingRecipeDefinition> RecipeClass, const FCraftingTransactionResult& Result);
+
+	UPROPERTY()
+	TObjectPtr<UCraftingPanelWidget> Panel;
+
+	bool bRequestCraftOnInventoryChanged = false;
+	int32 InventoryEvents = 0;
+	int32 CraftingEvents = 0;
 	FCraftingTransactionResult LastResult;
 };

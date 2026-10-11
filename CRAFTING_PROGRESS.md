@@ -11,8 +11,9 @@ Plan and design decisions: `CRAFTING_PLAN.md`.
 | C3/C4 Atomic Craft Transaction (one checkpoint) | COMPLETE |
 | C5 Crafting Authority | COMPLETE |
 | C6A Crafting UI Foundation | COMPLETE (approved; manual rendered PIE 12/12 PASS, user-confirmed) |
-| C6B Craft Execution from UI | NEXT (not started) |
-| C7-C8 | Not started |
+| C6B Craft Execution from UI | COMPLETE (manual rendered PIE 12/12 PASS, user-confirmed) |
+| C7 Timed Crafting | NEXT (not started) |
+| C8 Workstations | Not started |
 
 ## C1 - Recipe Data Model
 
@@ -334,6 +335,53 @@ All five were approved by the user without changes:
 - `CraftButton` has no click binding yet; C6B binds it to `UCraftingComponent::TryCraftRecipe` and adds result feedback.
 - The panel recreates requirement rows on each refresh; fine for the current recipe sizes.
 
+## C6B - Craft Execution from UI
+
+### Baseline and Scope
+
+- Baseline: `d831079` (C6A committed; manual PIE 12/12 user-confirmed). Previous full automation 153/153.
+- The existing CRAFT button now crafts the selected recipe. Layout, input and assets are unchanged from C6A.
+- Manual rendered PIE accepted by the user (12/12 PASS); committed as the C6B milestone.
+
+### Audit Summary
+
+- `W_CraftingPanel` already contains `CraftButton` and `CraftStatusText`; `UCraftingPanelWidget` already subscribed to `OnInventoryChanged` and `OnCraftingResult`. The click only needed a native binding, so no asset change was required.
+
+### Source Files
+
+- Changed: `Public/UI/CraftingPanelWidget.h`, `Private/UI/CraftingPanelWidget.cpp`, `Public/UI/CraftingViewLibrary.h`, `Private/UI/CraftingViewLibrary.cpp`, `Private/Tests/CraftingTestTypes.h` (panel test listener).
+- New: `Private/Tests/CraftingUIExecutionTests.cpp`.
+
+### Behaviour
+
+- Click path: `CraftButton.OnClicked` (bound once in `NativeOnInitialized`) -> `RequestCraftSelectedRecipe()` -> exactly one `UCraftingComponent::TryCraftRecipe(SelectedRecipe)`. The panel never touches the inventory or the transaction directly.
+- Pre-call checks give local feedback only when no call is made: no crafting component ("Crafting unavailable.") or no selected recipe ("Select a recipe.").
+- Feedback: only `OnCraftingResult` produces the craft message (`UCraftingViewLibrary::GetCraftFeedbackText`, decided by result code): "Crafted Axe x1." / "Crafted Wood Arrow x5.", "Not enough Wood (2 / 3).", "Not enough inventory space.", "Recipe unavailable." (invalid or unregistered), "Inventory is busy.", "No inventory available.", "Crafting failed.". Success is green, failure red. The return value of `TryCraftRecipe` is not displayed, so there is no duplicate message.
+- Feedback lifetime: `FeedbackDisplaySeconds` (default 3 s, real time). The message survives inventory refreshes, clears when another recipe is selected or a new craft starts, and `ClearCraftFeedback()` clears it explicitly.
+- Duplicate submissions: a request guard ignores reentrant requests (for example from an inventory or crafting event handler during the craft), and CRAFT is disabled while a request runs. Each separate click is one attempt; a click after the ingredients run out fails cleanly with feedback.
+- Refresh: inventory slots refresh from `OnInventoryChanged` as before; the panel refreshes ingredient owned/required values, READY markers, the exact `CanCraftRecipe` status and the CRAFT enabled state. The selected recipe stays selected while it is registered.
+- `SetCraftingSource(UCraftingComponent*)` binds the panel to a specific crafting component; null returns to following the owning pawn. Rebinding never leaves duplicate delegate bindings.
+
+### Event Contract
+
+- Successful craft from the UI: exactly one inventory revision increment, one `OnInventoryChanged` and one `OnCraftingResult`.
+- Failed craft from the UI: no ingredient consumed, no output, ItemIds unchanged, revision unchanged, no `OnInventoryChanged`; one `OnCraftingResult` with the failure.
+
+### Content
+
+- No Content change. Tracked `.uasset`/`.umap` packages 311 -> 311; no map, `__ExternalActors__` or `__ExternalObjects__` change. No input mapping change.
+
+### Validation
+
+- The first build ran while the user's editor was open and produced a hot-reload module (`UnrealEditor-NullTide-0001.dll`). After the user closed the editor, a clean rebuild produced `UnrealEditor-NullTide.dll` and all validation below ran on that clean build.
+- `NullTideEditor Win64 Development` clean build: succeeded, no compiler warnings.
+- Focused `NullTide.Crafting.C6B`: 6/6 passed (`ClickRoutesThroughComponent`, `RefreshAfterCraft`, `FailureFeedback`, `DuplicateAndReentrantClicks`, `NoDuplicateBindings`, `SelectionAndFeedbackLifetime`). The tests create a real `W_CraftingPanel` in a transient world and click through the panel's `CraftButton` binding.
+- Regression `NullTide.Crafting.C6A` + `C1` + `C2` + `C3C4` + `C5` + `Inventory.Stacking` + `Inventory.M1` + `Gameplay.G4` + `G5` + `G6` + `Inventory.G7`: 70/70 passed.
+- Full permanent automation `NullTide.`: 159/159 passed (153 previous + 6 new).
+- Blueprint compile with warnings as errors: `W_CraftingPanel`, `W_CraftingRecipeEntry`, `W_CraftingRequirementRow`, `W_Inventory` passed; none became dirty and nothing was saved.
+- Windows cook with the editor closed: succeeded, 0 errors (618 cooked, 7 platform-skipped, 625 total).
+- Rendered PIE: manual acceptance performed by the user, **12/12 checklist cases PASS (user-confirmed)**. The agent did not run or observe PIE itself.
+
 ## Next Checkpoint
 
-C6B - Craft Execution from UI. NEXT; not started.
+C7 - Timed Crafting. NEXT; not started. Decide reserve-at-start or consume-at-completion with the user first.

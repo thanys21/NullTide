@@ -170,8 +170,33 @@ Baseline: `0851c96` (C5 approved and committed). Full automation 147/147. Approv
 
 Executing crafts from the UI (C6B), crafting feedback/toasts (C6B), timed crafting (C7), workstations (C8), character stats.
 
+## C6B - Craft Execution from UI
+
+Baseline: `d831079` (C6A approved and committed; manual PIE 12/12 user-confirmed). Full automation 153/153. Manual rendered PIE 12/12 PASS (user-confirmed); committed.
+
+### Scope
+
+- Wire the existing CRAFT button to `UCraftingComponent::TryCraftRecipe` for the selected recipe. Layout, input and assets stay as in C6A.
+- Show one concise result message in the existing `CraftStatusText`, coloured for success or failure.
+
+### Decisions
+
+| Decision | Choice | Reason |
+| --- | --- | --- |
+| Asset scope | Source and tests only. `W_CraftingPanel` already has `CraftButton`; the click is bound in C++ (`NativeOnInitialized`, once per widget). | Smallest change; no Content edit expected. |
+| Click path | `CraftButton.OnClicked` -> `UCraftingPanelWidget::RequestCraftSelectedRecipe()` -> exactly one `UCraftingComponent::TryCraftRecipe(SelectedRecipe)`. The panel never touches `UInventoryComponent` or the transaction. | Single crafting authority. |
+| Feedback path | Craft feedback comes only from `OnCraftingResult`; the return value of `TryCraftRecipe` is not used for feedback. Local feedback is shown only when no call is made (no recipe selected, or no crafting component). | No duplicate messages. |
+| Messages | Built from structured result codes by `UCraftingViewLibrary::GetCraftFeedbackText`: success "Crafted Axe x1." (all outputs listed); missing "Not enough Wood (2 / 3)."; capacity "Not enough inventory space."; invalid/unavailable recipe "Recipe unavailable."; busy "Inventory is busy."; no inventory "No inventory available."; other "Crafting failed." | Readable, no diagnostic parsing. |
+| Feedback lifetime | The message stays for `FeedbackDisplaySeconds` (default 3 s, real time) even when inventory refreshes underneath; it clears early when another recipe is selected or a new craft is requested. | The synchronous refresh must not overwrite the result with "Ready to craft." |
+| Duplicate submissions | A panel-level request guard ignores reentrant requests (for example from an inventory or crafting event handler during the craft), and the button is disabled while a request runs. Each separate click is one craft attempt. | No double crafts from one click. |
+| Panel source | New `SetCraftingSource(UCraftingComponent*)`: binds the panel to a specific crafting component (null returns to following the owning pawn). Used by tests now and by workstation panels later. | Testable without a player controller; reusable. |
+| Selection | The selected recipe stays selected after a craft while it is still registered. | Requested behaviour. |
+
+### Out of scope
+
+Timed crafting (C7), workstations (C8), new hotkeys, layout changes, split stacks.
+
 ## Later Checkpoints (summary)
 
-- **C6B** Wire CRAFT to `UCraftingComponent::TryCraftRecipe` with feedback from `OnCraftingResult` (C6A delivered the read-only UI foundation).
 - **C7** Timed crafting; choose reserve-at-start or consume-at-completion before implementing.
 - **C8** Workstations.

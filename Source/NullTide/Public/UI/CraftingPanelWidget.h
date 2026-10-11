@@ -17,10 +17,10 @@ class UPanelWidget;
 class UTextBlock;
 
 /**
- * Read-only crafting panel. Observes the owning pawn's UCraftingComponent and inventory, lists the
- * registered recipes, and shows the selected recipe's requirements and exact craft status. Keeps no
- * crafting or inventory state besides the selected recipe class. C6A: the CRAFT button only reflects
- * CanCraftRecipe; it does not craft.
+ * Crafting panel. Observes the owning pawn's (or an explicitly set) UCraftingComponent and its inventory,
+ * lists the registered recipes, shows the selected recipe's requirements and exact craft status, and
+ * crafts the selected recipe through UCraftingComponent::TryCraftRecipe when CRAFT is clicked. Keeps no
+ * crafting or inventory state besides the selected recipe class and the last result message.
  */
 UCLASS(Abstract, Blueprintable)
 class NULLTIDE_API UCraftingPanelWidget : public UUserWidget
@@ -44,7 +44,32 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
 	UCraftingComponent* GetObservedCrafting() const { return ObservedCrafting; }
 
+	/** Binds the panel to this crafting component (for example a workstation's). Null follows the owning pawn again. */
+	UFUNCTION(BlueprintCallable, Category = "Crafting|UI")
+	void SetCraftingSource(UCraftingComponent* InCrafting);
+
+	/**
+	 * What the CRAFT button does: crafts the selected recipe once through UCraftingComponent::TryCraftRecipe.
+	 * Feedback arrives through OnCraftingResult. Reentrant requests are ignored.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Crafting|UI")
+	void RequestCraftSelectedRecipe();
+
+	/** Clears the last craft result message and shows the normal status again. */
+	UFUNCTION(BlueprintCallable, Category = "Crafting|UI")
+	void ClearCraftFeedback();
+
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	bool HasCraftFeedback() const { return bHasFeedback; }
+
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	FText GetCraftFeedback() const { return bHasFeedback ? FeedbackText : FText::GetEmpty(); }
+
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	bool IsCraftRequestInProgress() const { return bCraftRequestInProgress; }
+
 protected:
+	virtual void NativeOnInitialized() override;
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
@@ -80,7 +105,17 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "Crafting|UI")
 	TSubclassOf<UCraftingRequirementRowWidget> RequirementRowClass;
 
+	/** How long a craft result message stays before the normal status returns (real seconds). */
+	UPROPERTY(EditDefaultsOnly, Category = "Crafting|UI", meta = (ClampMin = "0.0", Units = "s"))
+	float FeedbackDisplaySeconds = 3.f;
+
 private:
+	UFUNCTION()
+	void HandleCraftButtonClicked();
+
+	void RebindToCrafting(APawn* Pawn, UCraftingComponent* Crafting);
+	void ShowFeedback(const FText& Text, bool bSuccess);
+	bool ExpireFeedback();
 	UFUNCTION()
 	void HandleInventoryChanged(int32 NewRevision);
 
@@ -108,7 +143,17 @@ private:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UCraftingRecipeEntryWidget>> RecipeEntries;
 
+	/** Explicit source from SetCraftingSource; when set, the panel does not follow the owning pawn. */
+	UPROPERTY(Transient)
+	TObjectPtr<UCraftingComponent> ExplicitCrafting;
+
 	TArray<TSubclassOf<UCraftingRecipeDefinition>> ListedRecipes;
 	TSubclassOf<UCraftingRecipeDefinition> SelectedRecipe;
 	FCraftingRecipeView SelectedView;
+
+	FText FeedbackText;
+	bool bHasFeedback = false;
+	bool bFeedbackSuccess = false;
+	double FeedbackExpireSeconds = 0.0;
+	bool bCraftRequestInProgress = false;
 };

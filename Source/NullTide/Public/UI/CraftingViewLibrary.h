@@ -92,4 +92,12 @@ public:
 	/** Status line for a craft result; names the missing ingredient when the view has it. */
 	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
 	static FText GetCraftStatusText(const FCraftingRecipeView& View);
+
+	/**
+	 * Player-facing message for a finished craft attempt, decided by the structured result code:
+	 * "Crafted Axe x1.", "Not enough Wood (2 / 3).", "Not enough inventory space.", and so on.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	static FText GetCraftFeedbackText(const UCraftingComponent* Crafting, TSubclassOf<UCraftingRecipeDefinition> RecipeClass,
+		const FCraftingTransactionResult& Result);
 };

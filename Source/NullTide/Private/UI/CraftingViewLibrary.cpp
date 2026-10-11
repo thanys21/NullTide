@@ -102,4 +102,45 @@ FText UCraftingViewLibrary::GetCraftStatusText(const FCraftingRecipeView& View)
 	}
 }
 
+FText UCraftingViewLibrary::GetCraftFeedbackText(const UCraftingComponent* Crafting,
+	TSubclassOf<UCraftingRecipeDefinition> RecipeClass, const FCraftingTransactionResult& Result)
+{
+	const FCraftingRecipeView View = BuildRecipeView(Crafting, RecipeClass);
+	switch (Result.Result)
+	{
+	case ECraftingTransactionResult::Success:
+	{
+		TArray<FText> Parts;
+		for (const FCraftingRequirementView& Output : View.Outputs)
+		{
+			Parts.Add(FText::Format(LOCTEXT("FeedbackOutput", "{0} x{1}"), Output.ItemName, FText::AsNumber(Output.RequiredQuantity)));
+		}
+		return Parts.IsEmpty()
+			? LOCTEXT("FeedbackCraftedGeneric", "Crafted.")
+			: FText::Format(LOCTEXT("FeedbackCrafted", "Crafted {0}."), FText::Join(LOCTEXT("FeedbackSeparator", ", "), Parts));
+	}
+	case ECraftingTransactionResult::InsufficientIngredients:
+		if (View.Ingredients.IsValidIndex(Result.EntryIndex))
+		{
+			const FCraftingRequirementView& Missing = View.Ingredients[Result.EntryIndex];
+			return FText::Format(LOCTEXT("FeedbackMissing", "Not enough {0} ({1} / {2})."),
+				Missing.ItemName, FText::AsNumber(Missing.OwnedQuantity), FText::AsNumber(Missing.RequiredQuantity));
+		}
+		return LOCTEXT("FeedbackMissingGeneric", "Not enough ingredients.");
+	case ECraftingTransactionResult::OutputCapacityFull:
+		return LOCTEXT("FeedbackFull", "Not enough inventory space.");
+	case ECraftingTransactionResult::InvalidRecipe:
+	case ECraftingTransactionResult::RecipeNotAvailable:
+		return LOCTEXT("FeedbackUnavailable", "Recipe unavailable.");
+	case ECraftingTransactionResult::InventoryBusy:
+	case ECraftingTransactionResult::CraftInProgress:
+		return LOCTEXT("FeedbackBusy", "Inventory is busy.");
+	case ECraftingTransactionResult::InvalidInventory:
+		return LOCTEXT("FeedbackNoInventory", "No inventory available.");
+	case ECraftingTransactionResult::InventoryRejected:
+	default:
+		return LOCTEXT("FeedbackFailed", "Crafting failed.");
+	}
+}
+
 #undef LOCTEXT_NAMESPACE

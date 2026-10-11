@@ -13,10 +13,34 @@
 
 #define LOCTEXT_NAMESPACE "NullTideCraftingUI"
 
+namespace
+{
+const FLinearColor StatusTextColor(0.72f, 0.74f, 0.70f, 1.f);
+const FLinearColor FeedbackSuccessColor(0.55f, 0.85f, 0.45f, 1.f);
+const FLinearColor FeedbackFailureColor(0.95f, 0.42f, 0.36f, 1.f);
+}
+
+void UCraftingPanelWidget::NativeOnInitialized()
+{
+	Super::NativeOnInitialized();
+	// Bound once per widget instance; reconstruction does not add a second binding.
+	if (CraftButton)
+	{
+		CraftButton->OnClicked.AddUniqueDynamic(this, &UCraftingPanelWidget::HandleCraftButtonClicked);
+	}
+}
+
 void UCraftingPanelWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
-	RebindToPawn(GetOwningPlayerPawn());
+	if (ExplicitCrafting)
+	{
+		RebindToCrafting(nullptr, ExplicitCrafting);
+	}
+	else
+	{
+		RebindToPawn(GetOwningPlayerPawn());
+	}
 }
 
 void UCraftingPanelWidget::NativeDestruct()
@@ -29,6 +53,18 @@ void UCraftingPanelWidget::NativeDestruct()
 void UCraftingPanelWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+	if (ExpireFeedback())
+	{
+		RefreshDetails();
+	}
+	if (ExplicitCrafting)
+	{
+		if (ExplicitCrafting != ObservedCrafting || ExplicitCrafting->GetInventory() != ObservedInventory)
+		{
+			RebindToCrafting(nullptr, ExplicitCrafting);
+		}
+		return;
+	}
 	APawn* CurrentPawn = GetOwningPlayerPawn();
 	UCraftingComponent* CurrentCrafting = CurrentPawn ? CurrentPawn->FindComponentByClass<UCraftingComponent>() : nullptr;
 	UInventoryComponent* CurrentInventory = CurrentCrafting ? CurrentCrafting->GetInventory() : nullptr;
@@ -38,11 +74,29 @@ void UCraftingPanelWidget::NativeTick(const FGeometry& MyGeometry, const float I
 	}
 }
 
+void UCraftingPanelWidget::SetCraftingSource(UCraftingComponent* InCrafting)
+{
+	ExplicitCrafting = InCrafting;
+	if (ExplicitCrafting)
+	{
+		RebindToCrafting(nullptr, ExplicitCrafting);
+	}
+	else
+	{
+		RebindToPawn(GetOwningPlayerPawn());
+	}
+}
+
 void UCraftingPanelWidget::RebindToPawn(APawn* Pawn)
+{
+	RebindToCrafting(Pawn, Pawn ? Pawn->FindComponentByClass<UCraftingComponent>() : nullptr);
+}
+
+void UCraftingPanelWidget::RebindToCrafting(APawn* Pawn, UCraftingComponent* Crafting)
 {
 	ReleaseBindings();
 	ObservedPawn = Pawn;
-	ObservedCrafting = Pawn ? Pawn->FindComponentByClass<UCraftingComponent>() : nullptr;
+	ObservedCrafting = Crafting;
 	ObservedInventory = ObservedCrafting ? ObservedCrafting->GetInventory() : nullptr;
 	if (ObservedInventory)
 	{
@@ -77,7 +131,71 @@ void UCraftingPanelWidget::HandleInventoryChanged(int32 NewRevision)
 void UCraftingPanelWidget::HandleCraftingResult(TSubclassOf<UCraftingRecipeDefinition> RecipeClass,
 	const FCraftingTransactionResult& Result)
 {
+	// The canonical feedback path: one message per crafting notification.
+	ShowFeedback(UCraftingViewLibrary::GetCraftFeedbackText(ObservedCrafting, RecipeClass, Result), Result.IsSuccess());
 	RefreshCraftingView();
+}
+
+void UCraftingPanelWidget::HandleCraftButtonClicked()
+{
+	RequestCraftSelectedRecipe();
+}
+
+void UCraftingPanelWidget::RequestCraftSelectedRecipe()
+{
+	if (bCraftRequestInProgress)
+	{
+		return;
+	}
+	if (!ObservedCrafting)
+	{
+		ShowFeedback(LOCTEXT("FeedbackNoCrafting", "Crafting unavailable."), false);
+		RefreshDetails();
+		return;
+	}
+	if (!SelectedRecipe)
+	{
+		ShowFeedback(LOCTEXT("FeedbackNoSelection", "Select a recipe."), false);
+		RefreshDetails();
+		return;
+	}
+	{
+		TGuardValue<bool> RequestGuard(bCraftRequestInProgress, true);
+		ClearCraftFeedback();
+		if (CraftButton)
+		{
+			CraftButton->SetIsEnabled(false);
+		}
+		// Feedback comes from OnCraftingResult; the returned result is intentionally not displayed.
+		ObservedCrafting->TryCraftRecipe(SelectedRecipe);
+	}
+	RefreshDetails();
+}
+
+void UCraftingPanelWidget::ShowFeedback(const FText& Text, const bool bSuccess)
+{
+	FeedbackText = Text;
+	bFeedbackSuccess = bSuccess;
+	bHasFeedback = true;
+	FeedbackExpireSeconds = FPlatformTime::Seconds() + FMath::Max(0.f, FeedbackDisplaySeconds);
+}
+
+void UCraftingPanelWidget::ClearCraftFeedback()
+{
+	bHasFeedback = false;
+	FeedbackText = FText::GetEmpty();
+	RefreshDetails();
+}
+
+bool UCraftingPanelWidget::ExpireFeedback()
+{
+	if (bHasFeedback && FPlatformTime::Seconds() >= FeedbackExpireSeconds)
+	{
+		bHasFeedback = false;
+		FeedbackText = FText::GetEmpty();
+		return true;
+	}
+	return false;
 }
 
 void UCraftingPanelWidget::HandleRecipeEntrySelected(TSubclassOf<UCraftingRecipeDefinition> RecipeClass)
@@ -87,6 +205,11 @@ void UCraftingPanelWidget::HandleRecipeEntrySelected(TSubclassOf<UCraftingRecipe
 
 void UCraftingPanelWidget::SelectRecipe(TSubclassOf<UCraftingRecipeDefinition> RecipeClass)
 {
+	if (RecipeClass != SelectedRecipe)
+	{
+		bHasFeedback = false;
+		FeedbackText = FText::GetEmpty();
+	}
 	SelectedRecipe = RecipeClass;
 	RefreshCraftingView();
 }
@@ -171,13 +294,25 @@ void UCraftingPanelWidget::RefreshDetails()
 	}
 	FillRequirementList(IngredientList, SelectedView.Ingredients, false);
 	FillRequirementList(OutputList, SelectedView.Outputs, true);
+	ExpireFeedback();
 	if (CraftStatusText)
 	{
-		CraftStatusText->SetText(bHasRecipe ? SelectedView.StatusText : FText::GetEmpty());
+		// A craft result message wins over the normal status until it expires, so the synchronous
+		// inventory refresh after a craft does not overwrite it.
+		if (bHasFeedback)
+		{
+			CraftStatusText->SetText(FeedbackText);
+			CraftStatusText->SetColorAndOpacity(FSlateColor(bFeedbackSuccess ? FeedbackSuccessColor : FeedbackFailureColor));
+		}
+		else
+		{
+			CraftStatusText->SetText(bHasRecipe ? SelectedView.StatusText : FText::GetEmpty());
+			CraftStatusText->SetColorAndOpacity(FSlateColor(StatusTextColor));
+		}
 	}
 	if (CraftButton)
 	{
-		CraftButton->SetIsEnabled(bHasRecipe && SelectedView.bCanCraft);
+		CraftButton->SetIsEnabled(bHasRecipe && SelectedView.bCanCraft && !bCraftRequestInProgress);
 	}
 }
 

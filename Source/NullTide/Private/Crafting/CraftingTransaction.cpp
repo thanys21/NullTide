@@ -31,6 +31,32 @@ void AppendRequests(const TArray<FCraftingItemQuantity>& Entries, TArray<FInvent
 		Request.Quantity = Entry.Quantity;
 	}
 }
+
+/** Shared input validation and request building for the commit and the preflight. */
+bool PrepareRequests(const UInventoryComponent* Inventory, const UCraftingRecipeDefinition* Recipe,
+	TArray<FInventoryDefinitionQuantity>& OutRemovals, TArray<FInventoryDefinitionQuantity>& OutAdditions,
+	FCraftingTransactionResult& OutFailure)
+{
+	if (!IsValid(Inventory))
+	{
+		OutFailure = MakeCraftingTransactionResult(ECraftingTransactionResult::InvalidInventory);
+		return false;
+	}
+	FString Diagnostic;
+	if (!IsValid(Recipe) || !Recipe->ValidateRecipe(Diagnostic))
+	{
+		OutFailure = MakeCraftingTransactionResult(ECraftingTransactionResult::InvalidRecipe, INDEX_NONE,
+			EInventoryOperationResult::NotInitialized, IsValid(Recipe) ? Diagnostic : FString(TEXT("Recipe is null.")));
+		return false;
+	}
+	// ValidateRecipe rejects duplicate entries, so request indices equal recipe entry indices.
+	// The inventory primitive still sums duplicates itself for generic callers.
+	AppendRequests(Recipe->Ingredients, OutRemovals);
+	AppendRequests(Recipe->Outputs, OutAdditions);
+	return true;
+}
+
+FCraftingTransactionResult MapTransactionResult(const FInventoryTransactionResult& Transaction);
 }
 
 FCraftingTransactionResult FCraftingTransaction::TryCraftRecipeAtomic(UInventoryComponent* Inventory,
@@ -48,25 +74,33 @@ FCraftingTransactionResult FCraftingTransaction::TryCraftRecipeAtomic(UInventory
 FCraftingTransactionResult FCraftingTransaction::TryCraftRecipeAtomic(UInventoryComponent* Inventory,
 	const UCraftingRecipeDefinition* Recipe)
 {
-	if (!IsValid(Inventory))
-	{
-		return MakeCraftingTransactionResult(ECraftingTransactionResult::InvalidInventory);
-	}
-	FString Diagnostic;
-	if (!IsValid(Recipe) || !Recipe->ValidateRecipe(Diagnostic))
-	{
-		return MakeCraftingTransactionResult(ECraftingTransactionResult::InvalidRecipe, INDEX_NONE,
-			EInventoryOperationResult::NotInitialized, IsValid(Recipe) ? Diagnostic : FString(TEXT("Recipe is null.")));
-	}
-
-	// ValidateRecipe rejects duplicate entries, so request indices equal recipe entry indices.
-	// The inventory primitive still sums duplicates itself for generic callers.
+	FCraftingTransactionResult InputFailure;
 	TArray<FInventoryDefinitionQuantity> Removals;
 	TArray<FInventoryDefinitionQuantity> Additions;
-	AppendRequests(Recipe->Ingredients, Removals);
-	AppendRequests(Recipe->Outputs, Additions);
+	if (!PrepareRequests(Inventory, Recipe, Removals, Additions, InputFailure))
+	{
+		return InputFailure;
+	}
+	return MapTransactionResult(Inventory->TryApplyDefinitionTransaction(Removals, Additions));
+}
 
-	const FInventoryTransactionResult Transaction = Inventory->TryApplyDefinitionTransaction(Removals, Additions);
+FCraftingTransactionResult FCraftingTransaction::CanCraftRecipe(const UInventoryComponent* Inventory,
+	const UCraftingRecipeDefinition* Recipe)
+{
+	FCraftingTransactionResult InputFailure;
+	TArray<FInventoryDefinitionQuantity> Removals;
+	TArray<FInventoryDefinitionQuantity> Additions;
+	if (!PrepareRequests(Inventory, Recipe, Removals, Additions, InputFailure))
+	{
+		return InputFailure;
+	}
+	return MapTransactionResult(Inventory->CanApplyDefinitionTransaction(Removals, Additions));
+}
+
+namespace
+{
+FCraftingTransactionResult MapTransactionResult(const FInventoryTransactionResult& Transaction)
+{
 	switch (Transaction.Result)
 	{
 	case EInventoryOperationResult::Success:
@@ -87,4 +121,5 @@ FCraftingTransactionResult FCraftingTransaction::TryCraftRecipeAtomic(UInventory
 		return MakeCraftingTransactionResult(ECraftingTransactionResult::InventoryRejected,
 			Transaction.FailedIndex, Transaction.Result, TEXT("Inventory rejected a craft request."));
 	}
+}
 }

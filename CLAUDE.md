@@ -46,7 +46,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Inventory.{M1..M6,G7,Stacking}`
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
-- `NullTide.Crafting.{C1,C2,C3C4}`
+- `NullTide.Crafting.{C1,C2,C3C4,C5}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -72,7 +72,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - Each successful change increments `Revision` and broadcasts `OnInventoryChanged`.
 - UI and other callers read data through `GetItemsSnapshot`. They never mutate items locally.
 - Read-only queries (`GetTotalQuantity`, `CanRemoveDefinitionQuantity`, `CanAddDefinitionQuantity`, `CanAddDefinitionQuantities`) return the same reason codes as the `Try*` calls and never change `Revision` or broadcast. They are advisory; commits always re-run their own preflight inside the mutation guard.
-- `TryApplyDefinitionTransaction(Removals, Additions)` (native only) is the atomic multi-definition commit: removals consume the earliest stacks of the exact class, additions are planned against the post-removal projection, and success bumps `Revision` once and broadcasts once. Crafting uses it; do not build a craft out of several `Try*` calls.
+- `TryApplyDefinitionTransaction(Removals, Additions)` (native only) is the atomic multi-definition commit: removals consume the earliest stacks of the exact class, additions are planned against the post-removal projection, and success bumps `Revision` once and broadcasts once. `CanApplyDefinitionTransaction` is its exact read-only preflight (same planning, no commit). Crafting uses both; do not build a craft out of several `Try*` calls.
 - The inventory stays generic: it must not include or depend on crafting types.
 - Stack planning lives in the private `InventoryStacking.*` files. `BuildAddPlanForEntries` over `FInventoryStackEntry` (live or projected stacks) is the only stacking rule set; `BuildAddPlan` wraps it for live stacks. Do not add a second capacity or stacking algorithm.
 
@@ -95,8 +95,9 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - `UCraftingRecipeDefinition` is an abstract, const UObject, the same pattern as `UItemDefinition`. Each recipe is a data-only Blueprint subclass in `Content/LevelPrototyping/CraftingSystem/Recipes/Recipe_*`, referenced by `TSubclassOf` and read from its class default object.
 - A recipe has `Ingredients` and `Outputs` (`FCraftingItemQuantity`: item definition class + quantity) and `CraftDuration`. `ValidateRecipe` returns an indexed diagnostic, and `IsDataValid` reports the same error in the editor.
 - Recipes hold static data only. Recipe-specific inventory checks live in `UCraftingQueryLibrary` (advisory read-only ingredient and output-capacity checks; the output check runs before consumption, so it is conservative).
-- `FCraftingTransaction::TryCraftRecipeAtomic` (native only) is the authoritative craft path: it validates the recipe and runs one `TryApplyDefinitionTransaction`. There is no `UCraftingComponent` yet (C5).
-- Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. Consumption, a crafting authority and UI come in later checkpoints.
+- `FCraftingTransaction::TryCraftRecipeAtomic` (native only) is the authoritative craft path: it validates the recipe and runs one `TryApplyDefinitionTransaction`.
+- `UCraftingComponent` on `BP_TopDownCharacter` is the player's crafting authority. It holds the registered recipes (`AvailableRecipes`, currently `Recipe_Axe`, `Recipe_WoodArrow`), resolves the owner's inventory, and exposes `GetAvailableRecipes`, `CanCraftRecipe` (exact read-only preflight), `TryCraftRecipe` and `OnCraftingResult`. UI and Blueprints call this component, never the inventory transaction.
+- Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. Crafting UI, timed crafting and workstations come in later checkpoints.
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

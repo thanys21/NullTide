@@ -886,6 +886,20 @@ FInventoryTransactionResult UInventoryComponent::PreflightTransaction(
 	return MakeTransactionResult(EInventoryOperationResult::Success);
 }
 
+FInventoryTransactionResult UInventoryComponent::CanApplyDefinitionTransaction(
+	const TArray<FInventoryDefinitionQuantity>& Removals,
+	const TArray<FInventoryDefinitionQuantity>& Additions) const
+{
+	if (!CanOperate())
+	{
+		return MakeTransactionResult(EInventoryOperationResult::NotInitialized);
+	}
+	FInventoryTransactionPlan Plan;
+	FArrayProperty* ProjectionArray = nullptr;
+	FClassProperty* ProjectionClass = nullptr;
+	return PreflightTransaction(Removals, Additions, Plan, ProjectionArray, ProjectionClass);
+}
+
 FInventoryTransactionResult UInventoryComponent::TryApplyDefinitionTransaction(
 	const TArray<FInventoryDefinitionQuantity>& Removals,
 	const TArray<FInventoryDefinitionQuantity>& Additions)

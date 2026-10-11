@@ -52,6 +52,13 @@ public:
 	FInventoryTransactionResult TryApplyDefinitionTransaction(const TArray<FInventoryDefinitionQuantity>& Removals,
 		const TArray<FInventoryDefinitionQuantity>& Additions);
 
+	/**
+	 * Read-only: runs the exact preflight TryApplyDefinitionTransaction would run for the current contents,
+	 * including post-removal output planning, without committing. Does not report Busy. Native only.
+	 */
+	FInventoryTransactionResult CanApplyDefinitionTransaction(const TArray<FInventoryDefinitionQuantity>& Removals,
+		const TArray<FInventoryDefinitionQuantity>& Additions) const;
+
 	/** Spawns the generic pickup first, then commits the exact-ID removal on success. */
 	UFUNCTION(BlueprintCallable, Category = "Inventory")
 	FInventoryWorldDropResult TryDropItemToWorld(APawn* OwningPawn, FGuid ItemId);

@@ -107,9 +107,37 @@ Baseline: `b7a2b86` (C2 approved). C3 (ingredient consumption) and C4 (outputs) 
 
 `UCraftingComponent` (C5), crafting UI (C6), timed crafting (C7), workstations (C8).
 
+## C5 - Crafting Authority
+
+Baseline: `e042232` (C3/C4 approved and committed). Full automation 138/138. Approved by the user (all five design decisions without changes) and committed.
+
+### Owner and API
+
+- Owner: `BP_TopDownCharacter`, next to its existing inventory (`InventoryManagerComponent`, a `UInventoryComponent` subclass) and `UToolLoadoutComponent`.
+- Inventory resolution: `GetOwner()->FindComponentByClass<UInventoryComponent>()`, the same pattern as `UToolLoadoutComponent`. The component stores no inventory contents and no transaction state.
+- Blueprint API (the only crafting entry points for UI):
+  - `GetAvailableRecipes()` (pure): registered recipes in authored order, without null, abstract, invalid or duplicate entries.
+  - `CanCraftRecipe(RecipeClass)` (pure): exact read-only preflight, `FCraftingTransactionResult`.
+  - `TryCraftRecipe(RecipeClass)` (callable): authoritative craft, `FCraftingTransactionResult`.
+  - `OnCraftingResult(RecipeClass, Result)` (assignable): one notification per non-reentrant `TryCraftRecipe` call, success or failure.
+
+### Decisions
+
+| Decision | Choice | Reason |
+| --- | --- | --- |
+| Recipe registration | `AvailableRecipes` (`EditDefaultsOnly`) on the component, configured on `BP_TopDownCharacter` through Unreal MCP with `Recipe_Axe`, `Recipe_WoodArrow`. Authored order is the listing order; the first copy of a duplicate wins; invalid entries are skipped and reported by `IsDataValid`. | Data-driven, no hard-coded asset paths in C++. |
+| Rejection order | Null/abstract or invalid recipe -> `InvalidRecipe`; valid but not registered -> `RecipeNotAvailable`; missing or inactive inventory -> `InvalidInventory`; then the transaction result. | Matches the C5 request. |
+| Result type | Reuse `FCraftingTransactionResult`; append `RecipeNotAvailable` and `CraftInProgress` to `ECraftingTransactionResult`. | One result type for UI from preflight, commit and notifications. |
+| Exact preflight | New read-only `UInventoryComponent::CanApplyDefinitionTransaction` (native) runs the same `PreflightTransaction` as the commit; `FCraftingTransaction::CanCraftRecipe` builds requests and maps results with the same code as `TryCraftRecipeAtomic`. Like other queries it does not report `Busy`. | No second stacking or planning algorithm; overlap (Wood 50/50, x10 -> x5) is exact. |
+| Reentrancy | The component holds a craft-in-progress guard for the whole `TryCraftRecipe`, including its notification. A reentrant call (from `OnInventoryChanged` during the commit, or from an `OnCraftingResult` handler) returns `CraftInProgress` without mutating or notifying. A craft attempted during an unrelated inventory mutation is a real attempt: it returns `InventoryBusy` and notifies once. | No duplicate or nested crafting notifications. |
+| Generic primitives | `TryApplyDefinitionTransaction`, `CanApplyDefinitionTransaction` and `FCraftingTransaction` stay native only. | Blueprints go through the crafting component. |
+
+### Out of scope
+
+Crafting UI (C6), hotkeys, timed crafting (C7), workstations (C8), recipe unlock progression.
+
 ## Later Checkpoints (summary)
 
-- **C5** `UCraftingComponent` as the single crafting authority.
 - **C6** Minimal crafting UI that only observes authority state.
 - **C7** Timed crafting; choose reserve-at-start or consume-at-completion before implementing.
 - **C8** Workstations.

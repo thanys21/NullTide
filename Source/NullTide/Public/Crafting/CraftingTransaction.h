@@ -9,7 +9,7 @@
 class UCraftingRecipeDefinition;
 class UInventoryComponent;
 
-UENUM(BlueprintType)
+UENUM(BlueprintType, meta = (ScriptName = "CraftingTransactionResultCode"))
 enum class ECraftingTransactionResult : uint8
 {
 	Success,
@@ -19,7 +19,11 @@ enum class ECraftingTransactionResult : uint8
 	OutputCapacityFull,
 	InventoryBusy,
 	/** The inventory refused a request for another reason; see InventoryResult. */
-	InventoryRejected
+	InventoryRejected,
+	/** The recipe is valid but not registered on the crafting component. */
+	RecipeNotAvailable,
+	/** The crafting component is already processing a craft (reentrant call). */
+	CraftInProgress
 };
 
 /** Result of one atomic craft. */
@@ -57,5 +61,12 @@ public:
 	static FCraftingTransactionResult TryCraftRecipeAtomic(UInventoryComponent* Inventory,
 		TSubclassOf<UCraftingRecipeDefinition> RecipeClass);
 	static FCraftingTransactionResult TryCraftRecipeAtomic(UInventoryComponent* Inventory,
+		const UCraftingRecipeDefinition* Recipe);
+
+	/**
+	 * Exact read-only preflight: the result TryCraftRecipeAtomic would return for the current inventory,
+	 * using the same post-removal planning. Changes nothing. Does not report InventoryBusy.
+	 */
+	static FCraftingTransactionResult CanCraftRecipe(const UInventoryComponent* Inventory,
 		const UCraftingRecipeDefinition* Recipe);
 };

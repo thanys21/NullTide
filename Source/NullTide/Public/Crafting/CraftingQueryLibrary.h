@@ -10,7 +10,7 @@
 class UCraftingRecipeDefinition;
 class UInventoryComponent;
 
-UENUM(BlueprintType)
+UENUM(BlueprintType, meta = (ScriptName = "CraftingQueryResultCode"))
 enum class ECraftingQueryResult : uint8
 {
 	Success,

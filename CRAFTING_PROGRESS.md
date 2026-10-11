@@ -9,8 +9,9 @@ Plan and design decisions: `CRAFTING_PLAN.md`.
 | C1 Recipe Data Model | COMPLETE |
 | C2 Inventory Quantity Queries | COMPLETE |
 | C3/C4 Atomic Craft Transaction (one checkpoint) | COMPLETE |
-| C5 Crafting Authority | NEXT |
-| C6-C8 | Not started |
+| C5 Crafting Authority | COMPLETE |
+| C6 Minimal Crafting UI | NEXT |
+| C7-C8 | Not started |
 
 ## C1 - Recipe Data Model
 
@@ -204,6 +205,82 @@ Resolved exactly. `Wood 50/50`, recipe `Wood x10 -> Wood x5`, otherwise full inv
 - The transaction and the craft executor are native only. C5 decides what `UCraftingComponent` exposes to Blueprints.
 - An exact read-only craft preflight (the transaction preflight without commit) would let C6 enable the Craft button exactly; today only the conservative C2 output check is exposed.
 
+## C5 - Crafting Authority
+
+### Baseline and Scope
+
+- Baseline: `e042232` (C3/C4 committed). Previous full automation 138/138.
+- Instant crafting only. No crafting UI, hotkeys, timed crafting, workstations or recipe unlock progression.
+- Reviewed and approved by the user (all five design decisions approved without changes); committed as the C5 milestone.
+
+### Architecture Audit
+
+- Player: `BP_TopDownCharacter` already owns the inventory (`InventoryManagerComponent`, a `UInventoryComponent` subclass) and `UToolLoadoutComponent`. `UToolLoadoutComponent` resolves the inventory with `GetOwner()->FindComponentByClass<UInventoryComponent>()`; the crafting component uses the same pattern.
+- Blueprint-facing patterns reused: `Try*` callable functions returning result structs, `BlueprintPure` queries, a `BlueprintAssignable` dynamic multicast delegate for notifications.
+- `FCraftingTransaction` and `UInventoryComponent::TryApplyDefinitionTransaction` stay native only; Blueprints use the component.
+
+### Source Files
+
+- New: `Public/Crafting/CraftingComponent.h`, `Private/Crafting/CraftingComponent.cpp`, `Private/Tests/CraftingComponentTests.cpp`.
+- Changed: `Public/Inventory/InventoryComponent.h`, `Private/Inventory/InventoryComponent.cpp` (`CanApplyDefinitionTransaction`); `Public/Crafting/CraftingTransaction.h`, `Private/Crafting/CraftingTransaction.cpp` (`CanCraftRecipe`, shared request building and result mapping, two new result codes, enum `ScriptName`); `Public/Crafting/CraftingQueryLibrary.h` (enum `ScriptName`); `Private/Tests/CraftingTestTypes.h` (C5 fixtures).
+
+### `UCraftingComponent`
+
+| API | Contract |
+| --- | --- |
+| `GetAvailableRecipes()` (pure) | Registered recipes in authored order; null, abstract, invalid and duplicate entries are dropped (first copy wins). |
+| `IsRecipeAvailable(RecipeClass)` (pure) | True for a registered, valid recipe. |
+| `CanCraftRecipe(RecipeClass)` (pure) | Exact read-only preflight; returns what `TryCraftRecipe` would return now (except busy states). |
+| `TryCraftRecipe(RecipeClass)` (callable) | Authoritative craft through `FCraftingTransaction::TryCraftRecipeAtomic`. |
+| `GetInventory()` (pure) | The owner's inventory component, or null. |
+| `OnCraftingResult(RecipeClass, Result)` (assignable) | One notification per non-reentrant `TryCraftRecipe` call, success or failure. Preflights never notify. |
+
+- Registration: `AvailableRecipes` (`EditDefaultsOnly`). `IsDataValid` reports null, abstract, invalid and duplicate entries.
+- Rejection order: null/abstract/invalid recipe -> `InvalidRecipe` (with the `ValidateRecipe` diagnostic); valid but unregistered -> `RecipeNotAvailable`; no inventory or inactive native authority -> `InvalidInventory`; then the transaction result (`InsufficientIngredients`, `OutputCapacityFull` with recipe entry index, `InventoryBusy`, `InventoryRejected`).
+- `ECraftingTransactionResult` gained `RecipeNotAvailable` and `CraftInProgress` (appended).
+- Reentrancy: a craft-in-progress guard covers the whole `TryCraftRecipe`, including the notification. A reentrant call from `OnInventoryChanged` during the commit or from an `OnCraftingResult` handler returns `CraftInProgress` without mutation or notification. A craft attempted during an unrelated inventory mutation returns `InventoryBusy` and notifies once.
+
+### Exact Preflight
+
+- `UInventoryComponent::CanApplyDefinitionTransaction(Removals, Additions)` (native, const) returns `NotInitialized` when authority is inactive, otherwise runs the same `PreflightTransaction` as `TryApplyDefinitionTransaction`. No live stack, ItemId, revision or event changes.
+- `FCraftingTransaction::CanCraftRecipe(Inventory, Recipe)` uses the same request building and result mapping as `TryCraftRecipeAtomic`.
+- Overlap is exact: `Stackable 50/50` in a full inventory, recipe `x10 -> x5`: the C2 advisory check says full, `CanCraftRecipe` succeeds, and the craft leaves 45 in the same stack.
+- `UCraftingQueryLibrary` (C2) stays as the conservative advisory helper; C6 should use `CanCraftRecipe`.
+
+### Content
+
+- `BP_TopDownCharacter` (`/Game/TopDown/Blueprints/BP_TopDownCharacter`): added one `UCraftingComponent` named `CraftingComponent` through Unreal MCP (`ActorTools.add_component`), set `AvailableRecipes = [Recipe_Axe, Recipe_WoodArrow]` (`ObjectTools.set_properties`), compiled with warnings as errors, saved only this asset. Save-time data validation reported no errors.
+- No other Content change. Tracked `.uasset`/`.umap` packages 308 -> 308; no map, `__ExternalActors__` or `__ExternalObjects__` change.
+- The two recipe packages are now referenced by the player Blueprint, so the map cook includes them (620 -> 622 packages).
+
+### Validation
+
+- `NullTideEditor Win64 Development` build: succeeded, no compiler warnings.
+- Focused `NullTide.Crafting.C5`: 9/9 passed (`InventoryResolution`, `RecipeRegistration`, `RequestRejection`, `ExactPreflight`, `CraftFailures`, `ProductionRecipes`, `RevisionAndEventContract`, `Reentrancy`, `BlueprintApi`). `RecipeRegistration` also checks that `BP_TopDownCharacter` has exactly one crafting component registering `Recipe_Axe`, `Recipe_WoodArrow` in order. `BlueprintApi` checks function/delegate flags, that the inventory transaction functions are not Blueprint-exposed, and crafts through the reflected `TryCraftRecipe` entry point.
+- Regression `NullTide.Crafting.C1` + `C2` + `C3C4` + `Inventory.Stacking` + `Inventory.M1`: 33/33 passed.
+- Full permanent automation `NullTide.`: 147/147 passed (138 previous + 9 new).
+- Windows cook with the editor closed: succeeded, 0 errors (615 cooked, 7 platform-skipped, 622 total). Environment warnings only.
+- Tests ran headless through `UnrealEditor-Cmd` with `-NullRHI`.
+- Rendered PIE: not run. Nothing in game calls the crafting component yet, so no visible behaviour changed.
+
+### Notes
+
+- Adding the new enums exposed two Python script-name collisions from C2/C3 (`ECraftingQueryResult`/`FCraftingQueryResult`, `ECraftingTransactionResult`/`FCraftingTransactionResult`). Fixed with `ScriptName = "...ResultCode"`, the same pattern as `EInventoryOperationResult`.
+
+### Approved Design Decisions
+
+All five were approved by the user without changes:
+
+1. `OnCraftingResult` fires once per non-reentrant `TryCraftRecipe` call, for success and for failure, so UI can show feedback such as missing ingredients. `CanCraftRecipe` never notifies.
+2. A reentrant `TryCraftRecipe` (from `OnInventoryChanged` during the commit, or from an `OnCraftingResult` handler) returns `CraftInProgress` without mutating or notifying. A handler therefore cannot chain another craft inside the same call.
+3. `FCraftingTransactionResult` is reused as the component result type; `RecipeNotAvailable` and `CraftInProgress` were appended to `ECraftingTransactionResult`.
+4. `CanCraftRecipe` does not report busy states, like the other queries. During an unrelated inventory mutation `TryCraftRecipe` can still return `InventoryBusy` after a successful preflight.
+5. `ECraftingQueryResult` (C2) and `ECraftingTransactionResult` (C3/C4) carry `ScriptName = "...ResultCode"` to remove Python name collisions. C++ and Blueprint names are unchanged.
+
+### Deferred
+
+- Crafting UI (C6), hotkeys, timed crafting and craft cancellation (C7), workstations (C8), recipe unlock progression.
+
 ## Next Checkpoint
 
-C5 - Crafting Authority. NEXT; not started.
+C6 - Minimal Crafting UI. NEXT; not started.

@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Crafting C3/C4 (Atomic Craft Transaction) complete. Crafting C5 (Crafting Authority) is next.
+> **Current development state:** Crafting C5 (Crafting Authority) complete. Crafting C6 (Minimal Crafting UI) is next.
 
 ---
 
@@ -762,6 +762,18 @@ Storage:
 1 BP_StorageContainer
 ```
 
+Player crafting (C5):
+
+```text
+BP_TopDownCharacter
+  CraftingComponent (UCraftingComponent)
+    AvailableRecipes:
+      Recipe_Axe        Wood x3 + Stone x5 → Axe x1
+      Recipe_WoodArrow  Wood x1 → WoodArrow x5
+```
+
+No crafting UI or input binding yet (C6).
+
 Generic pickups exist for production/test catalog items.
 
 Some user-authored Axe/Pickaxe pickups may exist in addition to approved RG3 pickups.
@@ -793,9 +805,10 @@ Inventory Stacking                  ✅
 Crafting C1 Recipe Data Model       ✅
 Crafting C2 Quantity Queries        ✅
 Crafting C3/C4 Atomic Transaction   ✅
+Crafting C5 Crafting Authority      ✅
 
 NEXT:
-Crafting C5 Crafting Authority
+Crafting C6 Minimal Crafting UI
 ```
 
 ---
@@ -984,6 +997,14 @@ Responsibilities:
 - crafting state.
 
 Avoid crafting authority inside widgets.
+
+Implemented (complete; details in `CRAFTING_PROGRESS.md`):
+
+- `UCraftingComponent` on `BP_TopDownCharacter`, registered recipes `Recipe_Axe`, `Recipe_WoodArrow` (authored order).
+- Blueprint API: `GetAvailableRecipes`, `IsRecipeAvailable`, `CanCraftRecipe` (exact read-only preflight), `TryCraftRecipe`, `GetInventory`, `OnCraftingResult`.
+- Crafting goes through `FCraftingTransaction::TryCraftRecipeAtomic` → `UInventoryComponent::TryApplyDefinitionTransaction`; the component stores no inventory state.
+- Instant crafting only; start/cancel and crafting state arrive with C7 timed crafting.
+- Approved design decisions: `OnCraftingResult` fires for success and failure (preflights never notify); reentrant `TryCraftRecipe` returns `CraftInProgress` silently; `FCraftingTransactionResult` is reused with `RecipeNotAvailable`/`CraftInProgress` appended; `CanCraftRecipe` does not report busy states; crafting result enums carry `ScriptName = "...ResultCode"`.
 
 ---
 
@@ -1367,23 +1388,24 @@ Do not implement without a dedicated milestone.
 
 # 15. Recommended Next Immediate Checkpoint
 
-## Crafting — C5 Crafting Authority
+## Crafting — C6 Minimal Crafting UI
 
-C3/C4 is complete (see `CRAFTING_PROGRESS.md`). C5 is the next checkpoint.
+C5 is complete (see `CRAFTING_PROGRESS.md`). C6 is the next checkpoint.
 
 Claude/Codex instruction:
 
 ```text
-1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md (C3/C4 section).
-2. Agree the C5 scope with the user and record it in CRAFTING_PLAN.md
-   (known recipes, instant craft request, what Blueprints may call).
-3. UCraftingComponent owns crafting requests and calls
-   FCraftingTransaction::TryCraftRecipeAtomic; it never edits
-   inventory stacks itself.
-4. Decide whether to expose an exact read-only transaction preflight
-   for UI (C6) instead of the conservative C2 output check.
-5. Do NOT build crafting UI yet (C6); no timed crafting (C7).
-6. Build + focused tests + regression + full suite + cook.
+1. Read CRAFTING_PLAN.md and CRAFTING_PROGRESS.md (C5 section).
+2. Agree the C6 scope with the user and record it in CRAFTING_PLAN.md
+   (where the UI opens, layout, input).
+3. UI observes UCraftingComponent only: GetAvailableRecipes,
+   CanCraftRecipe (exact), TryCraftRecipe, OnCraftingResult,
+   plus inventory OnInventoryChanged for refresh.
+4. UI never calls inventory mutation or transaction primitives and
+   never depends on specific recipe/item assets.
+5. No timed crafting (C7), no workstations (C8).
+6. Build + focused tests + regression + full suite + rendered PIE
+   (UI is gameplay-visible) + cook.
 7. Update CRAFTING_PROGRESS.md and this plan.
 8. STOP for review.
 ```
@@ -1424,15 +1446,15 @@ Only then advance the roadmap.
 
 # 17. Current Test Baseline
 
-At the completion of Crafting C3/C4:
+At the completion of Crafting C5:
 
 ```text
-Focused Crafting C3C4                          8/8
-Regression C2 + C1 + Stacking + M1           25/25
-Full permanent suite                       138/138
+Focused Crafting C5                                 9/9
+Regression C1 + C2 + C3C4 + Stacking + M1         33/33
+Full permanent suite                            147/147
 ```
 
-Previous baselines: Crafting C2 full 130/130; Crafting C1 full 125/125; Inventory Stacking full 121/121.
+Previous baselines: Crafting C3/C4 full 138/138; Crafting C2 full 130/130; Crafting C1 full 125/125; Inventory Stacking full 121/121.
 
 Future work must preserve these unless test totals intentionally increase.
 
@@ -1541,6 +1563,7 @@ Completed:
 - Crafting C1 Recipe Data Model
 - Crafting C2 Inventory Quantity Queries
 - Crafting C3/C4 Atomic Craft Transaction
+- Crafting C5 Crafting Authority
 
 Current crafting:
 - UCraftingRecipeDefinition data-only Blueprint recipes, validated by ValidateRecipe
@@ -1552,7 +1575,9 @@ Current crafting:
 - UInventoryComponent::TryApplyDefinitionTransaction: atomic remove + add by
   exact definition class, one revision, one event (native only)
 - FCraftingTransaction::TryCraftRecipeAtomic: authoritative craft path (native only)
-- no UCraftingComponent or UI yet
+- UCraftingComponent on BP_TopDownCharacter (Recipe_Axe, Recipe_WoodArrow):
+  GetAvailableRecipes, CanCraftRecipe (exact), TryCraftRecipe, OnCraftingResult
+- no crafting UI yet
 
 Current inventory:
 - UInventoryComponent is authority
@@ -1580,12 +1605,12 @@ Current input:
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
-- Crafting C3C4 8/8
-- regression C2 + C1 + Stacking + M1 25/25
-- full 138/138
+- Crafting C5 9/9
+- regression C1 + C2 + C3C4 + Stacking + M1 33/33
+- full 147/147
 
 Next:
-Crafting C5 Crafting Authority.
+Crafting C6 Minimal Crafting UI.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1620,8 +1645,8 @@ Phase 4  Crafting                           ⏭ IN PROGRESS
          C2 Quantity Queries                ✅
          C3/C4 Atomic Craft Transaction     ✅
                 (one transaction: consume + output)
-         C5 Crafting Authority              ⏭ NEXT
-         C6 Minimal Crafting UI
+         C5 Crafting Authority              ✅
+         C6 Minimal Crafting UI             ⏭ NEXT
          C7 Timed Crafting
          C8 Workstations
 

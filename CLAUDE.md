@@ -4,6 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Null Tide is an Unreal Engine 5.8 top-down game project (single runtime module `NullTide`, Windows). The C++ work so far is mostly about inventory, items, storage and resource gathering. Blueprints and UMG widgets are built on top of that code.
 
+## Project roadmap
+
+Before starting or continuing milestone work, read:
+
+NULLTIDE_MASTER_PLAN.md
+
+Treat it as the current high-level roadmap and architecture source of truth.
+Read the latest milestone-specific *_PROGRESS.md and *_REPORT.md files for the most recent implementation details.
+
+Do not start the next milestone until the current milestone is validated and committed.
+
 ## Rules (from AGENTS.md)
 
 - Look at the existing architecture before you change it.

@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Crafting C7 (Timed Crafting) complete and approved. Crafting C8 (Workstations): design approved; C8A (station data model and authority) COMPLETE / APPROVED; C8B and C8C not started. Crafting queue and the inventory/crafting UI-UX pass are deferred.
+> **Current development state:** Crafting C7 (Timed Crafting) complete and approved. Crafting C8 (Workstations): design approved; C8A (station data model and authority) COMPLETE / APPROVED; C8B (Workbench actor and interaction) COMPLETE / APPROVED; C8C (workstation crafting UI) NEXT, not started. Crafting queue and the inventory/crafting UI-UX pass are deferred.
 
 ---
 
@@ -811,9 +811,10 @@ Crafting C6A Crafting UI Foundation  ✅
 Crafting C6B Craft Execution from UI ✅
 Crafting C7 Timed Crafting          ✅
 Crafting C8A Station Data/Authority  ✅
+Crafting C8B Workbench Actor/Interaction ✅
 
 NEXT:
-Crafting C8B Workbench actor and interaction
+Crafting C8C Workstation Crafting UI (not started)
 ```
 
 ---
@@ -1111,7 +1112,7 @@ Approved design (details in `CRAFTING_PLAN.md`, C8):
 - C8C reuses `W_Inventory`, opened by `F` on the station, with the crafting panel in station context.
 - Checkpoints:
   - C8A: data model and authority. COMPLETE / APPROVED; adds `Station_Workbench` and `Recipe_ShortSword` (Wood x2 + Scrap x4 -> ShortSword x1, 4 s, Workbench), not yet registered.
-  - C8B: `ACraftingStationActor`, `BP_Workbench`, placed bench.
+  - C8B: `ACraftingStationActor`, `BP_Workbench`, one bench placed in `Lvl_TopDown`. COMPLETE / APPROVED.
   - C8C: UI integration, registration, PIE.
 
 ---
@@ -1444,13 +1445,13 @@ Do not implement without a dedicated milestone.
 
 ## Crafting — C8 Workstations
 
-C7 is complete and approved. The C8 design is approved (all nine decisions; see `CRAFTING_PLAN.md`, C8). C8A is complete and approved (see `CRAFTING_PROGRESS.md`, C8A). C8B is next and not started.
+C7 is complete and approved. The C8 design is approved (all nine decisions; see `CRAFTING_PLAN.md`, C8). C8A is complete and approved. C8B is complete and approved (183/183, cook PASS, manual rendered PIE 8 PASS + 1 N/A; see `CRAFTING_PROGRESS.md`, C8B). C8C is NEXT and not started.
 
 Claude/Codex instruction:
 
 ```text
-1. Read CRAFTING_PLAN.md (C8) and CRAFTING_PROGRESS.md (C8A section).
-2. Start C8B only after the user explicitly approves starting it.
+1. Read CRAFTING_PLAN.md (C8) and CRAFTING_PROGRESS.md (C8A and C8B sections).
+2. Start C8C only after explicit approval.
 3. C8B: ACraftingStationActor (same shape as AStorageContainerActor),
    BP_Workbench implementing BPI_Interactable, one placed bench
    (World Partition external actor; the user saves it with Ctrl+S).
@@ -1515,6 +1516,16 @@ Full permanent suite                                                       180/1
 ```
 
 C8A Windows cook (editor closed): `Done!`, 0 errors, 2 environment warnings (619 cooked / 7 platform-skipped / 626 total). The new `Station_Workbench` and `Recipe_ShortSword` are not cooked until C8C registers the recipe; the final C8C cook must verify them. No rendered PIE for C8A (no station actor or UI yet; approved without PIE).
+
+At the completion of Crafting C8B (approved):
+
+```text
+Focused Crafting C8B                                                              3/3
+Crafting C1-C8B                                                                 62/62
+Full permanent suite                                                       183/183
+```
+
+C8B Windows cook (editor closed): `Done!`, 0 errors, 2 environment warnings (621 cooked / 7 platform-skipped / 628 total); `BP_Workbench` and `Station_Workbench` cooked. One new World Partition external actor package (`C8B_Workbench`). Manual rendered PIE for C8B (performed and reported by the user): 8 PASS, 1 N/A (no door in `Lvl_TopDown`), 0 FAIL, 0 NOT TESTED.
 
 Manual rendered PIE for C7 (performed and reported by the user): 12 PASS, 1 NOT TESTED. The click-to-move cancel case could not be run (cursor hidden in game mode) and remains a deferred manual verification; displacement cancel is covered by automation. Final pre-commit Windows cook: `Done!`, 0 errors (619/7/626).
 
@@ -1678,12 +1689,12 @@ Current input:
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
-- Crafting C8A 11/11
-- crafting regression C1-C8A 59/59
-- full 180/180
+- Crafting C8B 3/3 (C8A 11/11)
+- crafting C1-C8B 62/62
+- full 183/183
 
 Next:
-Crafting C8B (Workbench actor and interaction), after explicit approval.
+Crafting C8C (workstation crafting UI), after explicit approval.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1724,8 +1735,8 @@ Phase 4  Crafting                           ⏭ IN PROGRESS
          C7 Timed Crafting                  ✅
          C8 Workstations                    ⏭ IN PROGRESS
                 C8A Station data/authority  ✅
-                C8B Workbench actor
-                C8C Station crafting UI
+                C8B Workbench actor          ✅
+                C8C Station crafting UI      ⏭ NEXT
 
 Phase 5  Building
 

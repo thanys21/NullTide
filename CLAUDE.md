@@ -46,7 +46,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Inventory.{M1..M6,G7,Stacking}`
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
-- `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A}`
+- `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -106,7 +106,13 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - Station-aware calls take the station explicitly: `GetRecipesForStation` (that station's recipes first, then hand recipes), `CanCraftRecipeAtStation`, `TryStartCraftAtStation`, `GetActiveCraftStation`. The calls without a station are the hand context; station recipes there return `StationRequired`, and out of range returns `StationOutOfRange`.
   - Station access is re-validated at completion.
   - A timed station recipe binds the station actor's `OnEndPlay`: a destroyed station cancels it (`StationLost`), and world teardown clears it silently. Hand recipes never depend on a station.
-- Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. The workstation actor (`ACraftingStationActor`, `BP_Workbench`; C8B) and station crafting UI (C8C) come in later checkpoints.
+- `ACraftingStationActor` (abstract; Blueprint `Content/LevelPrototyping/CraftingSystem/Stations/BP_Workbench`, one placed in `Lvl_TopDown`) is the world station.
+  - Components: an unscaled `StationRoot`, a placeholder `StationMesh`, `InteractionBounds` and a `UCraftingStationComponent`.
+  - `BPI_Interactable` `Interact` calls `OpenCraftingForInteractor`, which validates the request with `GetOpenCraftingResult` (interactor, player controller, station, `UseRange`, `CraftingScreenClass`). A rejected request changes nothing.
+  - Until C8C wires `CraftingScreenClass` (`W_Inventory` in station context), it opens no screen.
+  - The station actor never creates a crafting component or inventory.
+- Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. Station crafting UI comes in C8C.
+- MCP cannot add a Blueprint interface to a new Blueprint. `BP_Workbench` was made by duplicating `BP_Sword` and reparenting it. Duplicating marks the source Blueprint dirty in the editor; never save that source.
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

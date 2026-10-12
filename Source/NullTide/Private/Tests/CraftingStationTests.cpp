@@ -1,12 +1,19 @@
 #include "CraftingTestTypes.h"
 
 #include "InventoryComponentTestTypes.h"
+#include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Crafting/CraftingComponent.h"
 #include "Crafting/CraftingRecipeDefinition.h"
+#include "Crafting/CraftingStationActor.h"
 #include "Crafting/CraftingStationComponent.h"
 #include "Crafting/CraftingStationDefinition.h"
 #include "Engine/Blueprint.h"
+#include "Engine/BlueprintGeneratedClass.h"
+#include "GameFramework/PlayerController.h"
+#include "UI/InventoryScreenWidget.h"
+#include "UObject/UObjectIterator.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/Engine.h"
@@ -901,6 +908,324 @@ bool FCraftingC8AProductionAssetsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("ShortSword created"), Fixture.Inventory->GetTotalQuantity(ShortSword), 1);
 	TestEqual(TEXT("One revision on completion"), Fixture.Inventory->GetRevision(), Revision + 1);
 	TestEqual(TEXT("One inventory event on completion"), Fixture.Listener->InventoryEvents, 1);
+	return true;
+}
+
+namespace
+{
+const TCHAR* C8BWorkbenchPath = TEXT("/Game/LevelPrototyping/CraftingSystem/Stations/BP_Workbench.BP_Workbench_C");
+const TCHAR* C8BInteractablePath = TEXT("/Game/LevelPrototyping/interactionSystem/BPI_Interactable.BPI_Interactable_C");
+
+ACraftingStationActor* C8BSpawnStationActor(const FC8AFixture& Fixture, UClass* Class, const FVector& Location,
+	TSubclassOf<UCraftingStationDefinition> Definition, bool bSetDefinition)
+{
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ACraftingStationActor* Actor = Fixture.World->SpawnActor<ACraftingStationActor>(Class, FTransform(Location), Params);
+	if (Actor)
+	{
+		if (bSetDefinition)
+		{
+			C8ASetStationDefinition(Actor->GetCraftingStationComponent(), Definition);
+		}
+		Actor->DispatchBeginPlay();
+	}
+	return Actor;
+}
+
+APlayerController* C8BSpawnPlayerController(const FC8AFixture& Fixture, APawn* PawnToPossess)
+{
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	APlayerController* Controller = Fixture.World->SpawnActor<APlayerController>(APlayerController::StaticClass(), FTransform::Identity, Params);
+	if (Controller && PawnToPossess)
+	{
+		Controller->Possess(PawnToPossess);
+	}
+	return Controller;
+}
+
+void C8BSetScreenClass(ACraftingStationActor* Actor, UClass* ScreenClass)
+{
+	FClassProperty* Property = FindFProperty<FClassProperty>(ACraftingStationActor::StaticClass(), TEXT("CraftingScreenClass"));
+	check(Property);
+	Property->SetObjectPropertyValue_InContainer(Actor, ScreenClass);
+}
+
+UClass* C8BGetScreenClass(const ACraftingStationActor* Actor)
+{
+	const FClassProperty* Property = FindFProperty<FClassProperty>(ACraftingStationActor::StaticClass(), TEXT("CraftingScreenClass"));
+	return Property ? Cast<UClass>(Property->GetObjectPropertyValue_InContainer(Actor)) : nullptr;
+}
+
+int32 C8BCountLiveObjects(const UClass* Class)
+{
+	int32 Count = 0;
+	for (TObjectIterator<UObject> It; It; ++It)
+	{
+		Count += ::IsValid(*It) && It->IsA(Class) && !It->HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject) ? 1 : 0;
+	}
+	return Count;
+}
+
+/** Everything a rejected interaction must leave untouched: inventory, crafting state, UI and input. */
+struct FC8BUnchanged
+{
+	FC8AStacks Stacks;
+	int32 Revision = 0;
+	bool bCrafting = false;
+	TSubclassOf<UCraftingRecipeDefinition> ActiveRecipe;
+	UCraftingStationComponent* ActiveStation = nullptr;
+	bool bShowMouseCursor = false;
+	int32 InventoryScreens = 0;
+	int32 CraftingComponents = 0;
+
+	FC8BUnchanged(const FC8AFixture& Fixture, const APlayerController* Controller)
+		: Stacks(C8ACapture(Fixture.Inventory.Get()))
+		, Revision(Fixture.Inventory->GetRevision())
+		, bCrafting(Fixture.Crafting->IsCrafting())
+		, ActiveRecipe(Fixture.Crafting->GetActiveCraftRecipe())
+		, ActiveStation(Fixture.Crafting->GetActiveCraftStation())
+		, bShowMouseCursor(Controller->bShowMouseCursor)
+		, InventoryScreens(C8BCountLiveObjects(UInventoryScreenWidget::StaticClass()))
+		, CraftingComponents(C8BCountLiveObjects(UCraftingComponent::StaticClass()))
+	{
+	}
+
+	void Check(FAutomationTestBase& Test, const FC8AFixture& Fixture, const APlayerController* Controller, const FString& What) const
+	{
+		Test.TestTrue(What + TEXT(": inventory ItemIds and quantities unchanged"), C8ACapture(Fixture.Inventory.Get()) == Stacks);
+		Test.TestEqual(What + TEXT(": no inventory revision"), Fixture.Inventory->GetRevision(), Revision);
+		Test.TestTrue(What + TEXT(": crafting state unchanged"), Fixture.Crafting->IsCrafting() == bCrafting
+			&& Fixture.Crafting->GetActiveCraftRecipe() == ActiveRecipe && Fixture.Crafting->GetActiveCraftStation() == ActiveStation);
+		Test.TestEqual(What + TEXT(": cursor visibility unchanged"), Controller->bShowMouseCursor, bShowMouseCursor);
+		Test.TestEqual(What + TEXT(": no inventory/crafting screen created"), C8BCountLiveObjects(UInventoryScreenWidget::StaticClass()), InventoryScreens);
+		Test.TestEqual(What + TEXT(": no crafting component created"), C8BCountLiveObjects(UCraftingComponent::StaticClass()), CraftingComponents);
+	}
+};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCraftingC8BActorContractTest,
+	"NullTide.Crafting.C8B.ActorContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCraftingC8BActorContractTest::RunTest(const FString& Parameters)
+{
+	TestTrue(TEXT("Native station actor root is abstract"), ACraftingStationActor::StaticClass()->HasAnyClassFlags(CLASS_Abstract));
+
+	FC8AFixture Fixture({});
+	if (!Fixture.IsValid(*this)) { return false; }
+	ACraftingStationActor* Actor = C8BSpawnStationActor(Fixture, ACraftingTestStationActor::StaticClass(), C8AInRange, C8ABench(), true);
+	if (!TestNotNull(TEXT("Station actor spawns"), Actor)) { return false; }
+
+	const USceneComponent* Root = Actor->GetRootComponent();
+	TestTrue(TEXT("Root is a plain, unscaled scene component"), Root && !Root->IsA<UPrimitiveComponent>()
+		&& Root->GetRelativeScale3D().Equals(FVector::OneVector));
+
+	TInlineComponentArray<UStaticMeshComponent*> Meshes(Actor);
+	if (!TestEqual(TEXT("One placeholder mesh"), Meshes.Num(), 1)) { return false; }
+	const UStaticMeshComponent* Mesh = Meshes[0];
+	TestTrue(TEXT("Mesh has a placeholder static mesh"), Mesh->GetStaticMesh() != nullptr);
+	TestTrue(TEXT("Mesh is attached to the root"), Mesh->GetAttachParent() == Root);
+	TestTrue(TEXT("Mesh is 160 x 80 x 80 cm standing on the origin"), Mesh->GetRelativeScale3D().Equals(FVector(1.6f, 0.8f, 0.8f))
+		&& Mesh->GetRelativeLocation().Equals(FVector(0.f, 0.f, 40.f)));
+	TestTrue(TEXT("Mesh blocks (BlockAllDynamic)"), Mesh->GetCollisionProfileName() == FName(TEXT("BlockAllDynamic")));
+
+	TInlineComponentArray<UBoxComponent*> Boxes(Actor);
+	if (!TestEqual(TEXT("One interaction bounds box"), Boxes.Num(), 1)) { return false; }
+	const UBoxComponent* Bounds = Boxes[0];
+	TestTrue(TEXT("Bounds are attached to the root"), Bounds->GetAttachParent() == Root);
+	TestTrue(TEXT("Bounds are query-only"), Bounds->GetCollisionEnabled() == ECollisionEnabled::QueryOnly);
+	TestTrue(TEXT("Bounds overlap pawns"), Bounds->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Overlap);
+	TestTrue(TEXT("Bounds generate overlap events"), Bounds->GetGenerateOverlapEvents());
+	TestTrue(TEXT("Bounds extent is inside UseRange"),
+		Bounds->GetScaledBoxExtent().Equals(FVector(150.f, 120.f, 110.f)) && Bounds->GetScaledBoxExtent().X < 300.f);
+	TestTrue(TEXT("Bounds follow the actor"), Bounds->GetComponentLocation().Equals(Actor->GetActorLocation() + FVector(0.f, 0.f, 90.f)));
+	TestFalse(TEXT("Bounds do not affect navigation"), Bounds->CanEverAffectNavigation());
+
+	UCraftingStationComponent* Station = Actor->GetCraftingStationComponent();
+	TInlineComponentArray<UCraftingStationComponent*> Stations(Actor);
+	TestTrue(TEXT("Exactly one station component, exposed by the getter"), Station && Stations.Num() == 1 && Stations[0] == Station);
+	TestTrue(TEXT("Station definition"), Station && Station->GetStationDefinition() == C8ABench());
+	TestTrue(TEXT("Station is usable"), Station && Station->IsStationUsable());
+	TestNull(TEXT("CraftingScreenClass is unset by default"), C8BGetScreenClass(Actor));
+
+	TInlineComponentArray<UCraftingComponent*> CraftingComponents(Actor);
+	TInlineComponentArray<UInventoryComponent*> Inventories(Actor);
+	TestEqual(TEXT("No crafting authority on the station"), CraftingComponents.Num(), 0);
+	TestEqual(TEXT("No inventory on the station"), Inventories.Num(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCraftingC8BOpenRejectsTest,
+	"NullTide.Crafting.C8B.OpenRejectsInvalidInteractor",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCraftingC8BOpenRejectsTest::RunTest(const FString& Parameters)
+{
+	FC8AFixture Fixture({ C8ABenchTimed() });
+	if (!Fixture.IsValid(*this) || !C8AAdd(*this, Fixture.Inventory.Get(), C8ABig(), 5)
+		|| !C8AAdd(*this, Fixture.Inventory.Get(), C8ASingle(), 2)) { return false; }
+	APlayerController* Controller = C8BSpawnPlayerController(Fixture, Fixture.Character);
+	ACraftingStationActor* Bench = C8BSpawnStationActor(Fixture, ACraftingTestStationActor::StaticClass(), C8AInRange, C8ABench(), true);
+	ACraftingStationActor* Unset = C8BSpawnStationActor(Fixture, ACraftingTestStationActor::StaticClass(), FVector(0.f, 200.f, 0.f), nullptr, false);
+	if (!TestTrue(TEXT("Controller possesses the character; stations spawn"),
+		Controller && Fixture.Character->GetController() == Controller && Bench && Unset)) { return false; }
+
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AActor* PlainActor = Fixture.World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity, Params);
+	AActor* DestroyedActor = Fixture.World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity, Params);
+	ACharacter* Unpossessed = Fixture.World->SpawnActor<ACharacter>(ACharacter::StaticClass(), FVector(50.f, 0.f, 100.f), FRotator::ZeroRotator, Params);
+	APlayerController* PawnlessController = C8BSpawnPlayerController(Fixture, nullptr);
+	if (!TestTrue(TEXT("Helper actors spawn"), PlainActor && DestroyedActor && Unpossessed && PawnlessController)) { return false; }
+	DestroyedActor->Destroy();
+
+	// A craft is running at the bench: rejected interactions must not touch it either.
+	if (!TestTrue(TEXT("A station craft is active"),
+		C8AIs(Fixture.Crafting->TryStartCraftAtStation(C8ABenchTimed(), Bench->GetCraftingStationComponent()), ECraftingTransactionResult::Started))) { return false; }
+	const FC8BUnchanged Before(Fixture, Controller);
+
+	struct FCase { const TCHAR* Name; ACraftingStationActor* Station; AActor* Interactor; ECraftingStationOpenResult Expected; };
+	const FCase Cases[] = {
+		{ TEXT("Null interactor"), Bench, nullptr, ECraftingStationOpenResult::InvalidInteractor },
+		{ TEXT("Destroyed interactor"), Bench, DestroyedActor, ECraftingStationOpenResult::InvalidInteractor },
+		{ TEXT("Station without a definition"), Unset, Fixture.Character, ECraftingStationOpenResult::StationUnavailable },
+		{ TEXT("Actor that is not a pawn or controller"), Bench, PlainActor, ECraftingStationOpenResult::NoPlayerController },
+		{ TEXT("Pawn without a controller"), Bench, Unpossessed, ECraftingStationOpenResult::NoPlayerController },
+		{ TEXT("Player controller without a pawn"), Bench, PawnlessController, ECraftingStationOpenResult::InvalidInteractor },
+		{ TEXT("Player pawn, no crafting screen"), Bench, Fixture.Character, ECraftingStationOpenResult::NoCraftingScreen },
+		{ TEXT("Player controller, no crafting screen"), Bench, Controller, ECraftingStationOpenResult::NoCraftingScreen },
+	};
+	for (const FCase& Case : Cases)
+	{
+		TestTrue(FString(Case.Name) + TEXT(": result"), Case.Station->GetOpenCraftingResult(Case.Interactor) == Case.Expected);
+		TestFalse(FString(Case.Name) + TEXT(": nothing opens"), Case.Station->OpenCraftingForInteractor(Case.Interactor));
+	}
+	Before.Check(*this, Fixture, Controller, TEXT("Rejected interactions"));
+
+	// Out of range (the station moved away; the craft is not polled and keeps running until completion).
+	Bench->SetActorLocation(C8AOutOfRange);
+	TestTrue(TEXT("Out of range: result"), Bench->GetOpenCraftingResult(Fixture.Character) == ECraftingStationOpenResult::OutOfRange);
+	TestFalse(TEXT("Out of range: nothing opens"), Bench->OpenCraftingForInteractor(Fixture.Character));
+	Before.Check(*this, Fixture, Controller, TEXT("Out-of-range interaction"));
+	Bench->SetActorLocation(C8AInRange);
+
+	// Even a fully valid request opens nothing in C8B: the station screen is wired in C8C.
+	C8BSetScreenClass(Bench, UInventoryScreenWidget::StaticClass());
+	TestTrue(TEXT("Valid request: Ready"), Bench->GetOpenCraftingResult(Fixture.Character) == ECraftingStationOpenResult::Ready);
+	TestFalse(TEXT("Valid request: C8B still opens nothing"), Bench->OpenCraftingForInteractor(Fixture.Character));
+	Before.Check(*this, Fixture, Controller, TEXT("Valid interaction in C8B"));
+
+	TInlineComponentArray<UCraftingComponent*> PlayerCrafting(Fixture.Character);
+	TestEqual(TEXT("The player still has exactly one crafting authority"), PlayerCrafting.Num(), 1);
+	Fixture.AdvanceTime(2.1f);
+	TestTrue(TEXT("The station craft completes normally afterwards"),
+		!Fixture.Crafting->IsCrafting() && Fixture.Inventory->GetTotalQuantity(C8AOther()) == 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCraftingC8BProductionWorkbenchTest,
+	"NullTide.Crafting.C8B.ProductionWorkbench",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCraftingC8BProductionWorkbenchTest::RunTest(const FString& Parameters)
+{
+	UClass* WorkbenchClass = LoadClass<ACraftingStationActor>(nullptr, C8BWorkbenchPath);
+	UClass* StationClass = LoadClass<UCraftingStationDefinition>(nullptr,
+		TEXT("/Game/LevelPrototyping/CraftingSystem/Stations/Station_Workbench.Station_Workbench_C"));
+	UClass* InteractableClass = LoadClass<UInterface>(nullptr, C8BInteractablePath);
+	if (!TestTrue(TEXT("BP_Workbench, Station_Workbench and BPI_Interactable load"), WorkbenchClass && StationClass && InteractableClass)) { return false; }
+
+	const ACraftingStationActor* Defaults = WorkbenchClass->GetDefaultObject<ACraftingStationActor>();
+	TestTrue(TEXT("BP_Workbench station definition is Station_Workbench"),
+		Defaults->GetCraftingStationComponent() && Defaults->GetCraftingStationComponent()->GetStationDefinition().Get() == StationClass);
+	TestNull(TEXT("BP_Workbench has no crafting screen in C8B"), C8BGetScreenClass(Defaults));
+	TestTrue(TEXT("BP_Workbench implements BPI_Interactable"), WorkbenchClass->ImplementsInterface(InteractableClass));
+
+	// No extra crafting authority, inventory or recipe list authored on the Blueprint.
+	bool bExtraAuthority = false;
+	if (const UBlueprintGeneratedClass* Generated = Cast<UBlueprintGeneratedClass>(WorkbenchClass))
+	{
+		if (const USimpleConstructionScript* ConstructionScript = Generated->SimpleConstructionScript)
+		{
+			for (const USCS_Node* Node : ConstructionScript->GetAllNodes())
+			{
+				bExtraAuthority |= Node && (Cast<UCraftingComponent>(Node->ComponentTemplate) || Cast<UInventoryComponent>(Node->ComponentTemplate)
+					|| Cast<UCraftingStationComponent>(Node->ComponentTemplate));
+			}
+		}
+	}
+	TestFalse(TEXT("No crafting, inventory or second station component added in the Blueprint"), bExtraAuthority);
+
+	FC8AFixture Fixture({ C8AHandInstant() });
+	if (!Fixture.IsValid(*this) || !C8AAdd(*this, Fixture.Inventory.Get(), C8ABig(), 5)
+		|| !C8AAdd(*this, Fixture.Inventory.Get(), C8ASingle(), 2)) { return false; }
+	APlayerController* Controller = C8BSpawnPlayerController(Fixture, Fixture.Character);
+	ACraftingStationActor* Workbench = C8BSpawnStationActor(Fixture, WorkbenchClass, C8AInRange, nullptr, false);
+	if (!TestTrue(TEXT("Workbench spawns for a possessed player"), Controller && Workbench)) { return false; }
+	TInlineComponentArray<UCraftingComponent*> WorkbenchCrafting(Workbench);
+	TestEqual(TEXT("Spawned workbench has no crafting authority"), WorkbenchCrafting.Num(), 0);
+	TInlineComponentArray<UBoxComponent*> WorkbenchBoxes(Workbench);
+	TInlineComponentArray<UStaticMeshComponent*> WorkbenchMeshes(Workbench);
+	TestTrue(TEXT("Production workbench keeps the native layout (one mesh and one bounds box, both on the root)"),
+		WorkbenchBoxes.Num() == 1 && WorkbenchMeshes.Num() == 1
+		&& WorkbenchBoxes[0]->GetAttachParent() == Workbench->GetRootComponent()
+		&& WorkbenchMeshes[0]->GetAttachParent() == Workbench->GetRootComponent()
+		&& WorkbenchMeshes[0]->GetRelativeScale3D().Equals(FVector(1.6f, 0.8f, 0.8f))
+		&& WorkbenchBoxes[0]->GetScaledBoxExtent().Equals(FVector(150.f, 120.f, 110.f)));
+	TestTrue(TEXT("Spawned workbench station is usable"), Workbench->GetCraftingStationComponent()->IsStationUsable());
+
+	// E_InteractionType from the interface: Press.
+	UFunction* GetType = Workbench->FindFunction(FName(TEXT("GetInteractionType")));
+	if (TestNotNull(TEXT("GetInteractionType is implemented"), GetType))
+	{
+		TArray<uint8> Buffer;
+		Buffer.SetNumZeroed(FMath::Max<int32>(GetType->ParmsSize, 1));
+		Workbench->ProcessEvent(GetType, Buffer.GetData());
+		FString TypeName;
+		// Blueprint functions return values through an out parameter (here "Type"), not a C++ return property.
+		const FProperty* Return = GetType->GetReturnProperty();
+		for (TFieldIterator<FProperty> It(GetType); It && !Return; ++It)
+		{
+			Return = It->HasAnyPropertyFlags(CPF_OutParm) ? *It : nullptr;
+		}
+		if (Return)
+		{
+			if (const FByteProperty* Byte = CastField<FByteProperty>(Return); Byte && Byte->Enum)
+			{
+				TypeName = Byte->Enum->GetDisplayNameTextByValue(*Byte->ContainerPtrToValuePtr<uint8>(Buffer.GetData())).ToString();
+			}
+			else if (const FEnumProperty* EnumProperty = CastField<FEnumProperty>(Return))
+			{
+				const int64 Value = EnumProperty->GetUnderlyingProperty()->GetSignedIntPropertyValue(EnumProperty->ContainerPtrToValuePtr<void>(Buffer.GetData()));
+				TypeName = EnumProperty->GetEnum()->GetDisplayNameTextByValue(Value).ToString();
+			}
+		}
+		TestEqual(TEXT("Interaction type is Press"), TypeName, FString(TEXT("Press")));
+	}
+
+	// Interact(Interactor) through the interface event: rejected safely while no screen is configured.
+	TestTrue(TEXT("Production workbench in range: NoCraftingScreen"),
+		Workbench->GetOpenCraftingResult(Fixture.Character) == ECraftingStationOpenResult::NoCraftingScreen);
+	const FC8BUnchanged Before(Fixture, Controller);
+	UFunction* Interact = Workbench->FindFunction(FName(TEXT("Interact")));
+	if (TestNotNull(TEXT("Interact is implemented"), Interact))
+	{
+		const FObjectPropertyBase* InteractorParam = CastField<FObjectPropertyBase>(Interact->FindPropertyByName(FName(TEXT("Interactor"))));
+		if (TestNotNull(TEXT("Interact has an Interactor parameter"), InteractorParam))
+		{
+			TArray<uint8> Buffer;
+			Buffer.SetNumZeroed(FMath::Max<int32>(Interact->ParmsSize, 1));
+			InteractorParam->SetObjectPropertyValue_InContainer(Buffer.GetData(), Fixture.Character);
+			Workbench->ProcessEvent(Interact, Buffer.GetData());
+		}
+	}
+	Before.Check(*this, Fixture, Controller, TEXT("F on the production workbench"));
+	TestTrue(TEXT("Hand crafting still works after the interaction"), Fixture.Crafting->TryStartCraft(C8AHandInstant()).IsSuccess());
 	return true;
 }
 

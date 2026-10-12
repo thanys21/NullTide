@@ -13,7 +13,7 @@ Plan and design decisions: `CRAFTING_PLAN.md`.
 | C6A Crafting UI Foundation | COMPLETE (approved; manual rendered PIE 12/12 PASS, user-confirmed) |
 | C6B Craft Execution from UI | COMPLETE (manual rendered PIE 12/12 PASS, user-confirmed) |
 | C7 Timed Crafting | COMPLETE / APPROVED (manual rendered PIE: 12 PASS, 1 NOT TESTED; user-confirmed) |
-| C8 Workstations | IN PROGRESS: design approved; C8A COMPLETE / APPROVED (full automation 180/180, cook 0 errors; no PIE required); C8B and C8C not started |
+| C8 Workstations | IN PROGRESS: design approved; C8A COMPLETE / APPROVED (180/180); C8B COMPLETE / APPROVED (183/183, cook PASS, manual rendered PIE 8 PASS + 1 N/A, user-confirmed); C8C NEXT, not started |
 
 ## C1 - Recipe Data Model
 
@@ -572,6 +572,89 @@ All five were approved by the user without changes:
 - `Station_Workbench` and `Recipe_ShortSword` are not cooked yet (nothing cooked references them). The user expects this; the final C8C cook must verify both are cooked.
 - C8B (`ACraftingStationActor`, `BP_Workbench`, placed bench) and C8C (UI integration, registering `Recipe_ShortSword`, PIE) are not started.
 
+## C8B - Workbench Actor and Interaction
+
+### Baseline and Scope
+
+- Baseline: `c867e6d` (C8A approved and committed; not pushed). Previous full automation 180/180.
+- Scope: the station actor and the interaction contract only. C8B has no crafting screen, so `F` on the bench is handled and rejected safely; C8C wires the screen.
+- COMPLETE / APPROVED by the user (manual rendered PIE 8 PASS, 1 N/A; automation 183/183; cook PASS). Committed as the C8B milestone.
+
+### Source Files
+
+- New:
+  - `Public/Crafting/CraftingStationActor.h` + `Private/Crafting/CraftingStationActor.cpp`
+- Changed:
+  - `Private/Tests/CraftingTestTypes.h` (`ACraftingTestStationActor`, a concrete test subclass)
+  - `Private/Tests/CraftingStationTests.cpp` (C8B tests next to C8A, reusing its station fixture)
+- Not changed: `UCraftingComponent`, `UInventoryScreenWidget`, `UCraftingPanelWidget`, storage, gathering, input.
+
+### ACraftingStationActor
+
+- Abstract, Blueprintable, no tick. It has the same shape as `AStorageContainerActor`, but with an unscaled `StationRoot` scene component as root, so placing or scaling the actor never distorts the mesh or bounds.
+  - `StationMesh`: placeholder `/Engine/BasicShapes/Cube`, 160 x 80 x 80 cm (scale 1.6/0.8/0.8), raised 40 cm so it stands on the actor origin, collision `BlockAllDynamic`.
+  - `InteractionBounds`: box with extent 150 x 120 x 110 at +90 cm, query-only, overlaps all channels, generates overlap events, does not affect navigation. It is well inside the 300 cm `UseRange`.
+  - `CraftingStation`: a `UCraftingStationComponent`.
+  - `CraftingScreenClass` (`TSubclassOf<UInventoryScreenWidget>`, `EditDefaultsOnly`): unset in C8B, for C8C.
+- `GetOpenCraftingResult(Interactor)` (pure) returns `ECraftingStationOpenResult`. Checks run in this order:
+  1. `InvalidInteractor`: null or destroyed interactor, or a player controller without a pawn.
+  2. `StationUnavailable`: no usable station component or definition.
+  3. `NoPlayerController`: not a player controller, and not a pawn controlled by one.
+  4. `OutOfRange`: pawn outside `UseRange`.
+  5. `NoCraftingScreen`: no screen class set.
+  6. `Ready`.
+- `OpenCraftingForInteractor(Interactor)`: logs the result to the `LogCraftingStation` category and returns false. In C8B it returns false even for `Ready`, because the station screen is wired in C8C. A rejected request creates no widget and changes no input mode, cursor, inventory or crafting state.
+- The actor never creates a `UCraftingComponent` or an inventory and never crafts.
+
+### BP_Workbench (through Unreal MCP)
+
+- `/Game/LevelPrototyping/CraftingSystem/Stations/BP_Workbench`, parent `ACraftingStationActor`.
+  - `CraftingStation.StationDefinition = Station_Workbench`; `CraftingScreenClass` unset.
+  - Implements `BPI_Interactable`: `GetInteractionType` returns Press (`NewEnumerator0`), `GetHoldDuration` returns 0, and `Interact(Interactor)` calls `OpenCraftingForInteractor(Interactor)`.
+  - No variables, no added components; the native components only.
+  - Compiled with warnings as errors and saved by explicit path.
+- How it was built: the MCP toolsets cannot add a Blueprint interface to a new Blueprint, so `BP_Sword` (parent `AActor`, already implements `BPI_Interactable`, no native components) was duplicated and reparented to `ACraftingStationActor`. Then:
+  - its `Sword`, `Sphere` and `DefaultSceneRoot` components and its two variables were removed;
+  - its event graph was replaced;
+  - its two interface functions were set to constants.
+- A first attempt duplicated `BP_StorageContainer` instead. It left `InteractionBounds` with a stale attach parent (storage's `ContainerMesh`) and exposed that the mesh-as-root layout loses the mesh scale when the actor is placed. That attempt was fully rolled back (the unsaved placed actor removed and the asset deleted), and the actor now uses a separate scene root.
+- The duplicate step only marked the source Blueprints (`BP_StorageContainer`, `BP_Sword`) dirty in the editor. They were never saved; both are unchanged on disk.
+
+### World Placement
+
+- Exactly one `BP_Workbench` placed in `/Game/TopDown/Lvl_TopDown`: label `C8B_Workbench`, location (-620, -700, 0), yaw 0. This is the empty south-west corner below the central spawn plateau, mirroring `BP_StorageContainer` at the north-west corner (-560, 560).
+- Clearance: actor bounds (-770..-470, -820..-580, z -20..200) overlap no other actor. They stay clear of the plateau (-500..500), the west ramp (x -900..-500, y -200..200), the south ramp (x -200..200, y -900..-500), storage, all resource nodes and all pickups (nearest is `G3_Pickup_HealthPotion` at (-900, -600)).
+- World Partition audit: 90 external actor packages before, 91 after. The one new package is `Content/__ExternalActors__/TopDown/Lvl_TopDown/2/PF/Z2WV4MR2XZR5TL1I53GCTS.uasset` (`C8B_Workbench`), saved by the user with Ctrl+S. No existing external actor package was modified; `__ExternalObjects__` is unchanged (3). No existing actor was moved, renamed or modified. 97 actors before, 98 after.
+- There is no door (`BP_Door`) placed in `Lvl_TopDown`; the door Blueprint exists but has no placed instance.
+
+### Validation
+
+- `NullTideEditor Win64 Development` build with the editor closed: succeeded, no compiler warnings.
+- Focused `NullTide.Crafting.C8B`: 3/3 passed.
+  - `ActorContract`: scene root, mesh and bounds layout, collision, station component and definition, no crafting or inventory component, screen class unset.
+  - `OpenRejectsInvalidInteractor`: null, destroyed, non-pawn, unpossessed pawn, pawnless controller, station without a definition, out of range, and no screen class are each rejected. A valid request reports `Ready` but still opens nothing in C8B. A station craft running at the same bench is not affected, and inventory, crafting state, cursor, screen count and crafting-component count are unchanged.
+  - `ProductionWorkbench`: `BP_Workbench` has `Station_Workbench`, no screen class, implements `BPI_Interactable` with Press, keeps the native layout and has no extra authority. `Interact(Character)` through the interface changes nothing, and hand crafting still works afterwards.
+- The first in-editor run of `ProductionWorkbench` failed on two test-side issues: a Blueprint function returns through an out parameter rather than a return property, and the fixture lacked the hand recipe's second ingredient. Both were fixed in the test; no production change.
+- Full permanent automation `NullTide`: 183/183 passed (180 previous + 3 C8B). Crafting C1 5, C2 5, C3C4 8, C5 9, C6A 6, C6B 6, C7 9, C8A 11, C8B 3; Inventory 53; Gameplay 50; ResourceGathering 18.
+- Windows cook with the editor closed: `Done!`, `Success - 0 error(s), 2 warning(s)` (environment only); 621 cooked, 7 platform-skipped, 628 total (+2 compared with C8A). `BP_Workbench` and `Station_Workbench` are in the cooked asset registry (the placed bench references them); `Recipe_ShortSword` still waits for C8C.
+- Content delta: 1 new asset (`BP_Workbench`) and 1 new external actor package; no modified tracked package.
+
+### Manual Rendered PIE Checklist (for the user; not run by the agent)
+
+Expected C8B behaviour: `F` on the bench does nothing visible. The Output Log shows `LogCraftingStation: ... crafting station not opened for ... (NoCraftingScreen).`
+
+1. The workbench is visible near the spawn, at the south-west corner below the plateau.
+2. The placeholder mesh is about 160 x 80 x 80 cm on the ground, and the character cannot walk through it.
+3. The `F` interaction prompt appears when approaching the bench.
+4. `F` is handled safely: no screen opens, the cursor does not appear, and the log line above is printed.
+5. The character can still move normally after pressing `F`.
+6. Storage interaction still works (`F` on `BP_StorageContainer` opens the storage screen).
+7. Door interaction: N/A, because no door is placed in `Lvl_TopDown`.
+8. Tree, Rock and Scrap gathering still work.
+9. The bench does not obstruct navigation (click-to-move around it and down the west and south ramps).
+
+PIE results (performed and reported by the user; the agent did not run or observe PIE): **8 PASS, 1 N/A, 0 FAIL, 0 NOT TESTED**. Items 1-6, 8 and 9 passed; item 7 (door) is N/A because no door actor exists in `Lvl_TopDown`.
+
 ## Next Checkpoint
 
-C8B - Workbench actor and interaction: NEXT, not started (needs explicit go-ahead). Crafting queue and the inventory/crafting UI-UX pass remain deferred.
+C8C - Workstation crafting UI: NEXT, not started (needs explicit go-ahead). Crafting queue and the inventory/crafting UI-UX pass remain deferred.

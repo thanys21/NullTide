@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Crafting/CraftingRecipeDefinition.h"
 #include "Crafting/CraftingComponent.h"
+#include "Crafting/CraftingStationActor.h"
 #include "Crafting/CraftingStationDefinition.h"
 #include "Crafting/CraftingTransaction.h"
 #include "Inventory/InventoryTypes.h"
@@ -273,4 +274,11 @@ class UCraftingInvalidStationTestRecipe : public UCraftingRecipeDefinition
 
 public:
 	UCraftingInvalidStationTestRecipe();
+};
+
+/** Concrete crafting station actor for native C8B tests (the production root is abstract). */
+UCLASS(Transient, NotBlueprintable)
+class ACraftingTestStationActor : public ACraftingStationActor
+{
+	GENERATED_BODY()
 };

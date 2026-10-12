@@ -285,7 +285,7 @@ Re-entrancy (user requirement): on completion the active timed state, timer and 
 
 Crafting queue, multiple simultaneous crafts, workstations (C8), HUD toast while the screen is closed, damage cancel, save/load of an active craft.
 
-## C8 - Workstations (design APPROVED; C8A COMPLETE / APPROVED)
+## C8 - Workstations (design APPROVED; C8A and C8B COMPLETE / APPROVED; C8C NEXT)
 
 Baseline: `0cf655f` (C7 complete and approved; pushed). Full automation 169/169. The user approved all nine design decisions below without changes, with `Recipe_ShortSword` as the production Workbench recipe. C8 is implemented one checkpoint at a time: C8A first, then C8B and C8C only after review.
 
@@ -531,6 +531,30 @@ Carried into C8C from the C8A review:
 - The station UI must close or become unusable when its station component is invalid, not only when the station actor is destroyed (see note 2).
 - The final C8C cook must verify that `Station_Workbench` and `Recipe_ShortSword` are cooked once the recipe is registered.
 
+### C8B Scope (COMPLETE / APPROVED; manual rendered PIE 8 PASS, 1 N/A, user-confirmed)
+
+Baseline: `c867e6d` (C8A approved and committed; not pushed). Full automation 180/180.
+
+- `ACraftingStationActor`, following `AStorageContainerActor`:
+  - components: a static mesh, `InteractionBounds` and a `UCraftingStationComponent`;
+  - `CraftingScreenClass` for C8C;
+  - `OpenCraftingForInteractor(Interactor)`, which validates the interactor, its player controller, the station and `UseRange`, and rejects the request safely while `CraftingScreenClass` is unset.
+  - It never touches inventory or crafting state and never creates a `UCraftingComponent`.
+- `BP_Workbench` (through MCP): parent `ACraftingStationActor`, `StationDefinition = Station_Workbench`, implements `BPI_Interactable` (Press; `Interact` forwards to `OpenCraftingForInteractor`), placeholder mesh. No crafting component or recipe list.
+- Exactly one `BP_Workbench` placed in `Lvl_TopDown` near the spawn, clear of storage, resource nodes, the door and the main path. One new external actor package, saved by the user with Ctrl+S. No existing actor changes.
+- A failed `F` interaction opens nothing and does not change input mode, cursor or movement.
+- No change to `BP_TopDownController`, `IMC_Default`, gathering, storage code, `W_Inventory`, `W_CraftingPanel`, `UCraftingComponent` or recipe registration.
+- Tests `NullTide.Crafting.C8B.*`: `ActorContract`, `OpenRejectsInvalidInteractor`, `ProductionWorkbench`.
+- A user-run rendered PIE checklist. C8B has no crafting screen, so `F` on the bench is expected to do nothing visible.
+
+C8B implementation notes (accepted with the C8B approval; details in `CRAFTING_PROGRESS.md`, C8B):
+
+1. **Scene root instead of a mesh root.** Unlike `AStorageContainerActor`, the station actor's root is an unscaled `StationRoot`, with the mesh and interaction bounds attached to it. With a scaled mesh as root, placing the actor resets the mesh scale.
+2. **`ECraftingStationOpenResult` and `GetOpenCraftingResult`** expose why a request is rejected. C8C can reuse this, for example to show "Too far".
+3. **`OpenCraftingForInteractor` returns false even for a valid request** until C8C wires the station screen.
+4. **`BP_Workbench` was built by duplicating `BP_Sword` and reparenting it**, because the MCP toolsets cannot add a Blueprint interface. Everything inherited from `BP_Sword` was removed.
+5. **No door is placed in `Lvl_TopDown`**, so the door PIE item is N/A.
+
 ### Risks and Edge Cases
 
 - **Interaction target selection:** `PlayerInteractionComponent` picks the last overlapped interactable. A bench placed next to storage or a resource node may target the wrong actor. Mitigation: place the bench apart from other interactables. Changing the target selection is out of scope.
@@ -557,6 +581,6 @@ Campfire and Forge content, station tiers, fuel or operational state, per-statio
 
 ## Later Checkpoints (summary)
 
-- **C8** Workstations: design approved above; C8A COMPLETE / APPROVED; C8B and C8C not started.
+- **C8** Workstations: design approved above; C8A and C8B COMPLETE / APPROVED; C8C (workstation crafting UI) NEXT, not started.
 - **Crafting queue (deferred, user request after C7 PIE)**: queue up to 5 crafts per player that run one after another; each queued entry can be cancelled with a button or right-click. Needs its own design: whether ingredients are checked per entry at start or at completion (C7 consumes at completion), what happens to later entries when one fails or is cancelled, and how movement cancellation applies to the queue. Not started; must not be mixed into C8 without approval.
 - **Inventory/crafting UI/UX pass (deferred, user request after C7 PIE)**: make the combined screen more convenient. Known items from C7 PIE: keep the last craft result and selected recipe across closing/reopening the screen; remove the occasional quantity flicker after a result message disappears; show crafting progress or completion while the screen is closed (HUD); review layout density and the empty Item Details state. Not started.

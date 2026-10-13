@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Next planned major phase: Phase 5 Building (not started; needs explicit approval). Crafting queue and the inventory/crafting UI-UX pass are deferred.
+> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building IN PROGRESS: B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 NEXT — design review required (recovery design gate OPEN). Crafting queue and the inventory/crafting UI-UX pass are deferred.
 
 ---
 
@@ -816,7 +816,7 @@ Crafting C8C Workstation Crafting UI  ✅
 Phase 4 Crafting                    ✅
 
 NEXT:
-Phase 5 Building (not started; needs explicit approval)
+Phase 5 Building: IN PROGRESS — B0 approved, B1 complete; B2 next after design review (see BUILDING_PROGRESS.md)
 ```
 
 ---
@@ -1149,6 +1149,14 @@ Campfire / Workbench
 
 Building costs should use stack-aware inventory quantity authority.
 
+B0 design APPROVED (see `BUILDING_PLAN.md`); progress in `BUILDING_PROGRESS.md`. B1 is COMPLETE / APPROVED. Before B2: the OPEN design gate for the post-payment recovery contract, including total recovery failure (`BUILDING_PLAN.md` section 5.2). Checkpoints:
+- B1 data model and grid validation core;
+- B2 atomic construction authority;
+- B3 Wooden Floor end to end;
+- B4 building mode, ghost preview and input;
+- B5 Wooden Wall and Door;
+- B6 demolition and refund.
+
 ---
 
 # Phase 6 — Colony
@@ -1445,27 +1453,31 @@ Do not implement without a dedicated milestone.
 
 # 15. Recommended Next Immediate Checkpoint
 
-## Crafting — C8 Workstations
+## Building — B2 Design Review (Construction Authority)
 
-C7 is complete and approved. The C8 design is approved (all nine decisions; see `CRAFTING_PLAN.md`, C8). C8A is complete and approved. C8B is complete and approved (183/183, cook PASS, manual rendered PIE 8 PASS + 1 N/A; see `CRAFTING_PROGRESS.md`, C8B). C8C is complete and approved (190/190, cook PASS; manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; see `CRAFTING_PROGRESS.md`, C8C). C8 Workstations and Phase 4 Crafting are COMPLETE.
+Phase 4 Crafting is COMPLETE (C1–C8; see `CRAFTING_PROGRESS.md`). Phase 5 Building is IN PROGRESS:
+- B0 architecture is APPROVED (`BUILDING_PLAN.md`).
+- B1 (data model, grid coordinates, occupancy, placement validation) is COMPLETE / APPROVED (`BUILDING_PROGRESS.md`; full automation 198/198, cook PASS, no manual PIE required).
+- **B2 is NEXT and requires a design review first:** the post-payment recovery design gate (`BUILDING_PLAN.md` section 5.2) is OPEN.
 
 Claude/Codex instruction:
 
 ```text
-1. Read CRAFTING_PLAN.md (C8) and CRAFTING_PROGRESS.md (C8A, C8B and C8C sections).
-2. C8 is complete. Next work (Phase 5 Building, crafting queue, UI-UX pass) needs explicit approval.
-3. C8B: ACraftingStationActor (same shape as AStorageContainerActor),
-   BP_Workbench implementing BPI_Interactable, one placed bench
-   (World Partition external actor; the user saves it with Ctrl+S).
-4. C8C: station context on UCraftingPanelWidget, W_Inventory opened by
-   the station, register Recipe_ShortSword, user-run rendered PIE.
-5. Keep UCraftingComponent the only crafting authority; stations are context.
-6. No crafting queue, no save/load of active crafts unless approved.
-7. Build + focused tests + regression + full suite + cook (+ PIE in C8B/C8C).
-8. Update CRAFTING_PROGRESS.md and this plan. STOP for review.
+1. Read BUILDING_PLAN.md (sections 4.1 boundary, 5 construction, 5.2 gate)
+   and BUILDING_PROGRESS.md (B1).
+2. Do not implement B2 until the section 5.2 design gate is specified
+   and approved by the user (respawn / refund / pickup failure, terminal
+   reporting, recovery state, revision and event counts, fault-injection tests).
+3. B2 adds UConstructionComponent (AvailableBuildings, inventory preflight,
+   provisional AlwaysSpawn build, atomic cost via
+   TryApplyDefinitionTransaction, rollback). UBuildingSubsystem stays
+   inventory-free; the inventory stays generic.
+4. No B3+ content, input, UI, door or demolition in B2.
+5. Build + focused tests + regression + full suite + cook + content/WP audit.
+6. Update BUILDING_PROGRESS.md and this plan. STOP for review.
 ```
 
-This keeps Crafting incremental and prevents inventory authority from becoming coupled to UI.
+This keeps Building incremental and keeps inventory, crafting, storage and interaction authority unchanged.
 
 ---
 
@@ -1538,6 +1550,15 @@ Full permanent suite                                                       190/1
 ```
 
 C8C Windows cook (editor closed): `Done!`, 0 errors, 2 environment warnings (622 cooked / 7 platform-skipped / 629 total); `Station_Workbench`, `Recipe_ShortSword`, `BP_Workbench`, `W_Inventory` and `W_CraftingPanel` are all cooked. Content: `BP_Workbench` and `BP_TopDownCharacter` modified; World Partition unchanged. Manual rendered PIE for C8C (performed and reported by the user): 13 PASS, 1 N/A (station destruction, automation-covered), 0 FAIL. The user then found that `Tab` did not close the screen after a child widget took keyboard focus; it is fixed in `UInventoryScreenWidget::NativeOnPreviewKeyDown` with a regression test, and the user retest passed 6/6.
+
+At the completion of Building B1 (approved):
+
+```text
+Focused Building B1                                                               8/8
+Full permanent suite                                                       198/198
+```
+
+B1 clean build: 0 compiler warnings. Windows cook (editor closed): `Done!`, 0 errors (622/7/629, unchanged; B1 adds no assets). No Content, map or World Partition change.
 
 Manual rendered PIE for C7 (performed and reported by the user): 12 PASS, 1 NOT TESTED. The click-to-move cancel case could not be run (cursor hidden in game mode) and remains a deferred manual verification; displacement cancel is covered by automation. Final pre-commit Windows cook: `Done!`, 0 errors (619/7/626).
 
@@ -1701,12 +1722,12 @@ Current input:
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
-- Crafting C8C 7/7 (C8B 3/3, C8A 11/11)
+- Building B1 8/8; Crafting C8C 7/7 (C8B 3/3, C8A 11/11)
 - crafting C1-C8C 69/69
-- full 190/190
+- full 198/198 (190 + 8 Building B1)
 
 Next:
-Phase 5 Building (next planned major phase; not started, needs explicit approval). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
+Phase 5 Building: B2 design review (the OPEN recovery design gate) before any B2 implementation. Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1750,7 +1771,7 @@ Phase 4  Crafting                           ✅
                 C8B Workbench actor          ✅
                 C8C Station crafting UI      ✅
 
-Phase 5  Building                           ⏭ NEXT (not started)
+Phase 5  Building                           ⏭ IN PROGRESS (B0 ✅, B1 ✅, B2 next: design review)
 
 Phase 6  Colony
 

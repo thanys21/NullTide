@@ -47,6 +47,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
+- `NullTide.Building.{B1}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -113,6 +114,21 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - The station actor never creates a crafting component or inventory.
 - Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`.
 - MCP cannot add a Blueprint interface to a new Blueprint. `BP_Workbench` was made by duplicating `BP_Sword` and reparenting it. Duplicating marks the source Blueprint dirty in the editor; never save that source.
+
+**Building (`Building/`)** — Phase 5, in progress (design in `BUILDING_PLAN.md`, status in `BUILDING_PROGRESS.md`)
+- `UBuildingDefinition` is an abstract, const UObject with data-only Blueprint subclasses read from the CDO (the items/recipes/stations pattern). It holds the category, `PieceActorClass` (must carry a `UBuildingPieceComponent`), placement mode (`GridCell` for floors and furniture, `GridEdge` for walls and doors), footprint, cost (`FInventoryDefinitionQuantity`), `RefundFraction` and range override. `ValidateBuilding` and `IsDataValid` report the first problem.
+- `UBuildingSubsystem` (`UWorldSubsystem`) is the grid, occupancy and placement-validation authority.
+  - Grid: 200 cm cells from the world origin (floor division); canonical edges (X edge `(ix,iy)` runs along X from `(ix*200, iy*200)`; Y edge likewise along Y); edge snapping tie order South, West, North, East.
+  - Layers: `RoundToInt(SurfaceZ / 50)`.
+  - Rotation: 90° steps.
+- **The subsystem is the only writer of the occupancy registry.**
+  - Keys (`Floor`, `Edge`, `Furniture` categories plus layer) are reserved all-or-nothing by an owner (`ReserveKeys` → unique, never-reused handle), then committed once to a piece or released by that owner.
+  - Finalized pieces register with `RegisterActivePiece`, idempotently.
+  - Pieces unregister on `EndPlay` and component destruction; dead holders are purged.
+  - `AuditRegistry` must stay empty in tests.
+- `ValidatePlacement` is read-only. It recomputes surface, layer and transform (never trusts the caller) and checks, in order: definition, shape, range (600 cm), support surface (`WorldStatic` or `Active` floor; slope ≤ 30°, unevenness ≤ 25 cm), occupancy, blocking collision (Pawn channel, ground excluded geometrically, not by identity), builder safety.
+- `UBuildingPieceComponent` holds per-piece metadata and state (`Provisional`/`Active`/`Removing`). `ABuildingPieceActor` is a thin host whose `SetProvisional` hides the piece and removes collision and navigation.
+- Building never changes inventory, crafting, storage or interaction authority. The construction transaction (B2) uses only `UInventoryComponent::TryApplyDefinitionTransaction`. B2 has a pending design gate for the post-payment recovery contract.
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

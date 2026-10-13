@@ -11,6 +11,7 @@ class UCraftingComponent;
 class UCraftingRecipeDefinition;
 class UCraftingRecipeEntryWidget;
 class UCraftingRequirementRowWidget;
+class UCraftingStationComponent;
 class UImage;
 class UInventoryComponent;
 class UPanelWidget;
@@ -19,9 +20,10 @@ class UTextBlock;
 
 /**
  * Crafting panel. Observes the owning pawn's (or an explicitly set) UCraftingComponent and its inventory,
- * lists the registered recipes, shows the selected recipe's requirements and exact craft status, and
- * crafts the selected recipe through UCraftingComponent::TryCraftRecipe when CRAFT is clicked. Keeps no
- * crafting or inventory state besides the selected recipe class and the last result message.
+ * lists the recipes usable in its context (hand, or a station set with SetCraftingStation), shows the selected
+ * recipe's requirements and exact craft status, and starts the selected recipe through UCraftingComponent
+ * (TryStartCraft, or TryStartCraftAtStation) when CRAFT is clicked. Keeps no
+ * crafting or inventory state besides the selected recipe class, the station context and the last result message.
  */
 UCLASS(Abstract, Blueprintable)
 class NULLTIDE_API UCraftingPanelWidget : public UUserWidget
@@ -45,12 +47,34 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
 	UCraftingComponent* GetObservedCrafting() const { return ObservedCrafting; }
 
-	/** Binds the panel to this crafting component (for example a workstation's). Null follows the owning pawn again. */
+	/** Binds the panel to a specific crafting component (used by tests). Null follows the owning pawn again. */
 	UFUNCTION(BlueprintCallable, Category = "Crafting|UI")
 	void SetCraftingSource(UCraftingComponent* InCrafting);
 
 	/**
-	 * What the CRAFT button does: crafts the selected recipe once through UCraftingComponent::TryCraftRecipe.
+	 * Station context (UI only; the player's crafting component stays the authority). With a station the panel
+	 * lists that station's recipes first, then hand recipes, and crafts with the station-aware API. Null returns
+	 * to the hand context. A station that later becomes unusable leaves the panel unusable (no recipes, no CRAFT;
+	 * CANCEL of an active craft still works) until the context is changed.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Crafting|UI")
+	void SetCraftingStation(UCraftingStationComponent* InStation);
+
+	/** The station context while it is still usable; null in the hand context or once the station is gone. */
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	UCraftingStationComponent* GetCraftingStation() const;
+
+	/** True when a station context was set, even if that station is now gone. */
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	bool HasStationContext() const { return bHasStationContext; }
+
+	/** Recipes currently listed, in display order. */
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	TArray<TSubclassOf<UCraftingRecipeDefinition>> GetListedRecipes() const { return ListedRecipes; }
+
+	/**
+	 * What the CRAFT button does: starts the selected recipe once through UCraftingComponent::TryStartCraft (or
+	 * TryStartCraftAtStation in a station context).
 	 * Feedback arrives through OnCraftingResult. Reentrant requests are ignored.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Crafting|UI")
@@ -108,6 +132,10 @@ protected:
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UProgressBar> CraftProgressBar;
 
+	/** Column heading: "CRAFTING" by hand, the station name in upper case ("WORKBENCH") at a station. */
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> PanelTitle;
+
 	UPROPERTY(EditDefaultsOnly, Category = "Crafting|UI")
 	TSubclassOf<UCraftingRecipeEntryWidget> RecipeEntryClass;
 
@@ -144,6 +172,10 @@ private:
 
 	void RebindToPawn(APawn* Pawn);
 	void ReleaseBindings();
+	/** True when a station context was set and that station is no longer usable. */
+	bool IsStationContextLost() const;
+	FCraftingRecipeView BuildView(TSubclassOf<UCraftingRecipeDefinition> RecipeClass) const;
+	void RefreshTitle();
 	void RebuildRecipeEntries(const TArray<TSubclassOf<UCraftingRecipeDefinition>>& Recipes);
 	void RefreshDetails();
 	void FillRequirementList(UPanelWidget* List, const TArray<FCraftingRequirementView>& Requirements, bool bIsOutput);
@@ -166,6 +198,9 @@ private:
 
 	TArray<TSubclassOf<UCraftingRecipeDefinition>> ListedRecipes;
 	TSubclassOf<UCraftingRecipeDefinition> SelectedRecipe;
+	/** Station UI context only; never an authority. */
+	TWeakObjectPtr<UCraftingStationComponent> StationContext;
+	bool bHasStationContext = false;
 	FCraftingRecipeView SelectedView;
 
 	FText FeedbackText;

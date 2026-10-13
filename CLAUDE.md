@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Null Tide is an Unreal Engine 5.8 top-down game project (single runtime module `NullTide`, Windows). The C++ work so far is mostly about inventory, items, storage, resource gathering and (starting) crafting. Blueprints and UMG widgets are built on top of that code.
+Null Tide is an Unreal Engine 5.8 top-down game project (single runtime module `NullTide`, Windows). The C++ work so far is mostly about inventory, items, storage, resource gathering and crafting (Phase 4 complete, including workstations). Blueprints and UMG widgets are built on top of that code.
 
 ## Project roadmap
 
@@ -46,7 +46,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Inventory.{M1..M6,G7,Stacking}`
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
-- `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B}`
+- `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -96,7 +96,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - A recipe has `Ingredients` and `Outputs` (`FCraftingItemQuantity`: item definition class + quantity) and `CraftDuration`. `ValidateRecipe` returns an indexed diagnostic, and `IsDataValid` reports the same error in the editor.
 - Recipes hold static data only. Recipe-specific inventory checks live in `UCraftingQueryLibrary` (advisory read-only ingredient and output-capacity checks; the output check runs before consumption, so it is conservative).
 - `FCraftingTransaction::TryCraftRecipeAtomic` (native only) is the authoritative craft path: it validates the recipe and runs one `TryApplyDefinitionTransaction`.
-- `UCraftingComponent` on `BP_TopDownCharacter` is the player's crafting authority. It holds the registered recipes (`AvailableRecipes`, currently `Recipe_Axe`, `Recipe_WoodArrow`, `Recipe_Pickaxe`), resolves the owner's inventory, and exposes `GetAvailableRecipes`, `CanCraftRecipe` (exact read-only preflight; `CraftInProgress` while a timed craft runs), `TryStartCraft` (UI entry: instant recipes craft now, timed recipes start), `TryCraftRecipe` (instant only; timed recipes return `TimedCraftRequired`), `CancelCraft`, progress queries and `OnCraftStarted`/`OnCraftCancelled`/`OnCraftingResult`. UI and Blueprints call this component, never the inventory transaction.
+- `UCraftingComponent` on `BP_TopDownCharacter` is the player's crafting authority. It holds the registered recipes (`AvailableRecipes`, currently `Recipe_Axe`, `Recipe_WoodArrow`, `Recipe_Pickaxe`, `Recipe_ShortSword`), resolves the owner's inventory, and exposes `GetAvailableRecipes`, `CanCraftRecipe` (exact read-only preflight; `CraftInProgress` while a timed craft runs), `TryStartCraft` (UI entry: instant recipes craft now, timed recipes start), `TryCraftRecipe` (instant only; timed recipes return `TimedCraftRequired`), `CancelCraft`, progress queries and `OnCraftStarted`/`OnCraftCancelled`/`OnCraftingResult`. UI and Blueprints call this component, never the inventory transaction.
 - Timed crafting (C7) consumes ingredients only at completion: start runs the exact preflight, a world timer runs (no tick), completion re-validates and runs one atomic transaction. One active craft per player. Movement (more than 10 cm horizontally) and jump/fall cancel through native `ACharacter` movement delegates bound only while crafting; do not add crafting cancel calls to Blueprint input graphs. Closing the UI does not cancel; `EndPlay` clears state silently.
 - Workstations (C8) are context, never crafting authorities.
   - `UCraftingStationDefinition` is the station kind: abstract, const, with data-only Blueprint subclasses in `Content/LevelPrototyping/CraftingSystem/Stations/Station_*`. It holds `StationName`, `StationIcon` and `UseRange` (default 300 cm).
@@ -109,15 +109,26 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - `ACraftingStationActor` (abstract; Blueprint `Content/LevelPrototyping/CraftingSystem/Stations/BP_Workbench`, one placed in `Lvl_TopDown`) is the world station.
   - Components: an unscaled `StationRoot`, a placeholder `StationMesh`, `InteractionBounds` and a `UCraftingStationComponent`.
   - `BPI_Interactable` `Interact` calls `OpenCraftingForInteractor`, which validates the request with `GetOpenCraftingResult` (interactor, player controller, station, `UseRange`, `CraftingScreenClass`). A rejected request changes nothing.
-  - Until C8C wires `CraftingScreenClass` (`W_Inventory` in station context), it opens no screen.
+  - A valid request puts the station's cached `CraftingScreenClass` instance (`W_Inventory`) in station context (`UInventoryScreenWidget::OpenForCraftingStation`). Only then does it show the screen with the cursor, UI-only input and keyboard focus.
   - The station actor never creates a crafting component or inventory.
-- Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`. Station crafting UI comes in C8C.
+- Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`.
 - MCP cannot add a Blueprint interface to a new Blueprint. `BP_Workbench` was made by duplicating `BP_Sword` and reparenting it. Duplicating marks the source Blueprint dirty in the editor; never save that source.
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.
 - Widgets only show inventory data and send requests to the components. They must not depend on specific item assets.
-- Crafting UI: `UCraftingPanelWidget` (with `UCraftingRecipeEntryWidget` and `UCraftingRequirementRowWidget`) is a self-contained panel that observes the owning pawn's `UCraftingComponent` and inventory. Display data comes from `UCraftingViewLibrary::BuildRecipeView` (read-only, uses the exact `CanCraftRecipe`). CRAFT calls `RequestCraftSelectedRecipe`, which calls `UCraftingComponent::TryCraftRecipe` once; the result message comes only from `OnCraftingResult` (`GetCraftFeedbackText`), and reentrant requests are ignored. `SetCraftingSource` binds the panel to a specific crafting component (for example a future workstation). UMG assets are in `Content/LevelPrototyping/CraftingSystem/UI/`. `W_Inventory` embeds `W_CraftingPanel` as its right column (inventory left, character middle, crafting right). Keep every widget name that `UInventoryScreenWidget` binds when editing `W_Inventory`.
+- Crafting UI: `UCraftingPanelWidget` (with `UCraftingRecipeEntryWidget` and `UCraftingRequirementRowWidget`) is a self-contained panel that observes the owning pawn's `UCraftingComponent` and inventory.
+  - Display data comes from `UCraftingViewLibrary::BuildRecipeView` / `BuildRecipeViewAtStation` (read-only, exact `CanCraftRecipe` / `CanCraftRecipeAtStation`).
+  - CRAFT calls `RequestCraftSelectedRecipe`, which calls `TryStartCraft` (or `TryStartCraftAtStation`) once. The result message comes only from `OnCraftingResult` (`GetCraftFeedbackText`), and reentrant requests are ignored.
+  - `SetCraftingSource` binds the panel to a specific crafting component (tests).
+  - `SetCraftingStation` sets a weak station UI context. Hand context lists hand recipes only; station context lists that station's recipes first, then hand recipes, and sets the `PanelTitle` text to the station name ("WORKBENCH"). A lost station lists nothing.
+  - Progress and CANCEL always follow the player's active craft, even when its recipe is not listed.
+  - UMG assets are in `Content/LevelPrototyping/CraftingSystem/UI/`.
+- `W_Inventory` embeds `W_CraftingPanel` as its right column (inventory left, character middle, crafting right), bound natively as `UInventoryScreenWidget::CraftingPanel`.
+  - `OpenForCraftingStation` gives a station screen its context. Close and destruction clear it, and the screen closes itself when its station becomes unusable.
+  - The controller-owned hand screen never has a station context.
+  - `I`, `Tab` and `Esc` close the screen in `NativeOnPreviewKeyDown` (and `NativeOnKeyDown`) through `CloseInventory`. The preview pass is required because a focused child (slot, recipe entry, button) otherwise consumes `Tab` as Slate focus navigation.
+  - Keep every widget name that `UInventoryScreenWidget` binds when editing `W_Inventory`.
 
 **Content**
 - The main map is `/Game/TopDown/Lvl_TopDown`.

@@ -1,5 +1,6 @@
 #include "Crafting/CraftingStationActor.h"
 
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Crafting/CraftingStationComponent.h"
@@ -99,8 +100,35 @@ bool ACraftingStationActor::OpenCraftingForInteractor(AActor* Interactor)
 			*StaticEnum<ECraftingStationOpenResult>()->GetNameStringByValue(static_cast<int64>(Result)));
 		return false;
 	}
-	// The crafting screen in station context is wired in C8C; until then a valid request opens nothing either.
-	UE_LOG(LogCraftingStation, Log, TEXT("%s: crafting station request from %s is valid; the station screen arrives in C8C."),
-		*GetName(), *GetNameSafe(Interactor));
-	return false;
+	APawn* Pawn = nullptr;
+	APlayerController* PlayerController = nullptr;
+	ResolveInteractor(Interactor, Pawn, PlayerController);
+
+	// One cached screen per station, owned by the interacting player; a different player gets a fresh one.
+	UInventoryScreenWidget* Screen = ActiveCraftingScreen.Get();
+	if (!IsValid(Screen) || Screen->GetOwningPlayer() != PlayerController)
+	{
+		Screen = CreateWidget<UInventoryScreenWidget>(PlayerController, CraftingScreenClass);
+		if (!Screen)
+		{
+			UE_LOG(LogCraftingStation, Warning, TEXT("%s: could not create the crafting screen for %s."), *GetName(), *GetNameSafe(Interactor));
+			return false;
+		}
+		ActiveCraftingScreen = Screen;
+	}
+
+	// Initialize the station context first; input mode and cursor change only after it succeeded.
+	if (!Screen->OpenForCraftingStation(CraftingStation))
+	{
+		UE_LOG(LogCraftingStation, Warning, TEXT("%s: the crafting screen rejected the station context."), *GetName());
+		return false;
+	}
+	if (!Screen->IsInViewport())
+	{
+		Screen->AddToViewport(100);
+	}
+	PlayerController->SetShowMouseCursor(true);
+	UWidgetBlueprintLibrary::SetInputMode_UIOnlyEx(PlayerController, Screen, EMouseLockMode::DoNotLock, false);
+	Screen->SetKeyboardFocus();
+	return true;
 }

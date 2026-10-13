@@ -1,6 +1,6 @@
 # Crafting Plan
 
-Phase 4 of `NULLTIDE_MASTER_PLAN.md`. Crafting is delivered in small checkpoints (C1-C8). Each checkpoint is validated, documented in `CRAFTING_PROGRESS.md` and committed before the next one starts.
+Phase 4 of `NULLTIDE_MASTER_PLAN.md` (COMPLETE). Crafting was delivered in small checkpoints (C1-C8). Each checkpoint is validated, documented in `CRAFTING_PROGRESS.md` and committed before the next one starts.
 
 ## Baseline
 
@@ -285,7 +285,7 @@ Re-entrancy (user requirement): on completion the active timed state, timer and 
 
 Crafting queue, multiple simultaneous crafts, workstations (C8), HUD toast while the screen is closed, damage cancel, save/load of an active craft.
 
-## C8 - Workstations (design APPROVED; C8A and C8B COMPLETE / APPROVED; C8C NEXT)
+## C8 - Workstations (COMPLETE / APPROVED: C8A, C8B, C8C)
 
 Baseline: `0cf655f` (C7 complete and approved; pushed). Full automation 169/169. The user approved all nine design decisions below without changes, with `Recipe_ShortSword` as the production Workbench recipe. C8 is implemented one checkpoint at a time: C8A first, then C8B and C8C only after review.
 
@@ -555,6 +555,40 @@ C8B implementation notes (accepted with the C8B approval; details in `CRAFTING_P
 4. **`BP_Workbench` was built by duplicating `BP_Sword` and reparenting it**, because the MCP toolsets cannot add a Blueprint interface. Everything inherited from `BP_Sword` was removed.
 5. **No door is placed in `Lvl_TopDown`**, so the door PIE item is N/A.
 
+### C8C Scope (COMPLETE / APPROVED; manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS)
+
+Baseline: `49f38ca` (C8B approved and committed; C8A and C8B not pushed). Full automation 183/183.
+
+- **Station opening.** `ACraftingStationActor::OpenCraftingForInteractor` opens its own cached `CraftingScreenClass` instance (`W_Inventory`):
+  - it calls `UInventoryScreenWidget::OpenForCraftingStation(Station)` before adding the screen to the viewport;
+  - it shows the cursor, sets UI-only input and sets keyboard focus only after that succeeds;
+  - a failure removes a screen it just added and leaves input unchanged.
+- **Inventory screen.** `UInventoryScreenWidget` binds the existing `CraftingPanel` widget (`BindWidgetOptional`) and forwards the station context to it.
+  - The context is cleared on close and destruction.
+  - The screen closes itself when its station actor or station component is no longer usable.
+  - The controller-owned hand screen never has a station context.
+  - Backpack, details, equipment and drag/drop are unchanged.
+- **Crafting panel.** `UCraftingPanelWidget::SetCraftingStation(Station)` stores a weak UI context only.
+  - Hand context: `GetRecipesForStation(nullptr)` (hand recipes only), `CanCraftRecipe`, `TryStartCraft`.
+  - Station context: `GetRecipesForStation(Station)`, `CanCraftRecipeAtStation`, `TryStartCraftAtStation`, title "WORKBENCH" (the station name in upper case).
+  - A station context whose station is gone makes the panel unusable: no recipes, CRAFT disabled, CANCEL of an active craft still allowed.
+  - Progress and CANCEL always follow the player's active craft, even when its recipe is not listed (a Workbench craft seen from the hand screen). The hand list never includes station recipes.
+- **Text.** "Requires Workbench.", "Too far from the Workbench." and "Crafting cancelled: the Workbench is gone." come from the recipe's `RequiredStation` name.
+- **Assets (MCP):**
+  - `BP_Workbench.CraftingScreenClass = W_Inventory`;
+  - `BP_TopDownCharacter` registers `Recipe_ShortSword` fourth;
+  - `W_CraftingPanel` unchanged: the panel binds its existing `PanelTitle` heading (text "CRAFTING") instead of adding a `CraftingTitleText`.
+- **Not changed:** `IMC_Default`, `BP_TopDownController`, storage, gathering, actor placement.
+- **Tests:** `NullTide.Crafting.C8C.*`, with the C5 and C8A production registration expectations updated to four recipes and the C8B "valid request opens nothing" check replaced.
+
+C8C implementation notes (accepted with the C8C approval; details in `CRAFTING_PROGRESS.md`, C8C):
+
+1. **Selection on a context change.** Changing the station context resets the panel selection to the active craft when it is listed, otherwise the first listed recipe. Opening a Workbench therefore selects ShortSword; returning to hand selects Axe.
+2. **A lost station context lists nothing.** A station context whose station is gone lists no recipes, shows "Workstation unavailable" and refuses CRAFT. CANCEL of an active craft still works. The screen closes on its next tick anyway.
+3. **The actor's real open path is covered by PIE.** Creating, adding to the viewport and switching input mode need a local player and a game viewport, which the transient automation world does not have. Automation covers the gating (`GetOpenCraftingResult`) and the screen and panel behaviour directly.
+4. **Title binding.** The title binds the existing `PanelTitle` text block, so no UMG asset change was needed.
+5. **Close keys in the preview pass (user PIE finding).** The user's C8C PIE (13 PASS, 1 N/A) found that `Tab` did not close the screen once a child widget had keyboard focus, because Slate consumed it as focus navigation. `UInventoryScreenWidget` now handles `I`/`Tab`/`Esc` in `NativeOnPreviewKeyDown` through the existing `CloseInventory`, scoped to this screen only. The user accepted C8C gameplay on condition that this is fixed before commit.
+
 ### Risks and Edge Cases
 
 - **Interaction target selection:** `PlayerInteractionComponent` picks the last overlapped interactable. A bench placed next to storage or a resource node may target the wrong actor. Mitigation: place the bench apart from other interactables. Changing the target selection is out of scope.
@@ -581,6 +615,6 @@ Campfire and Forge content, station tiers, fuel or operational state, per-statio
 
 ## Later Checkpoints (summary)
 
-- **C8** Workstations: design approved above; C8A and C8B COMPLETE / APPROVED; C8C (workstation crafting UI) NEXT, not started.
+- **C8** Workstations: COMPLETE / APPROVED (C8A, C8B, C8C). Phase 4 Crafting is complete; Phase 5 Building is the next planned major phase (not started).
 - **Crafting queue (deferred, user request after C7 PIE)**: queue up to 5 crafts per player that run one after another; each queued entry can be cancelled with a button or right-click. Needs its own design: whether ingredients are checked per entry at start or at completion (C7 consumes at completion), what happens to later entries when one fails or is cancelled, and how movement cancellation applies to the queue. Not started; must not be mixed into C8 without approval.
 - **Inventory/crafting UI/UX pass (deferred, user request after C7 PIE)**: make the combined screen more convenient. Known items from C7 PIE: keep the last craft result and selected recipe across closing/reopening the screen; remove the occasional quantity flicker after a result message disappears; show crafting progress or completion while the screen is closed (HUD); review layout density and the empty Item Details state. Not started.

@@ -1,8 +1,17 @@
 #include "CraftingTestTypes.h"
 
 #include "InventoryComponentTestTypes.h"
+#include "Blueprint/UserWidget.h"
+#include "Blueprint/WidgetTree.h"
 #include "Components/BoxComponent.h"
+#include "Components/Button.h"
+#include "Components/PanelWidget.h"
+#include "Components/ProgressBar.h"
 #include "Components/SceneComponent.h"
+#include "Components/TextBlock.h"
+#include "Components/VerticalBox.h"
+#include "UI/CraftingPanelWidget.h"
+#include "UI/CraftingViewLibrary.h"
 #include "Components/StaticMeshComponent.h"
 #include "Crafting/CraftingComponent.h"
 #include "Crafting/CraftingRecipeDefinition.h"
@@ -886,7 +895,7 @@ bool FCraftingC8AProductionAssetsTest::RunTest(const FString& Parameters)
 			}
 		}
 	}
-	TestFalse(TEXT("Recipe_ShortSword is not registered on BP_TopDownCharacter in C8A"), bRegistered);
+	TestTrue(TEXT("Recipe_ShortSword is registered on BP_TopDownCharacter (since C8C)"), bRegistered);
 
 	// End to end with the production data: Workbench in range, consume at completion.
 	FC8AFixture Fixture({ RecipeShortSword });
@@ -1113,11 +1122,11 @@ bool FCraftingC8BOpenRejectsTest::RunTest(const FString& Parameters)
 	Before.Check(*this, Fixture, Controller, TEXT("Out-of-range interaction"));
 	Bench->SetActorLocation(C8AInRange);
 
-	// Even a fully valid request opens nothing in C8B: the station screen is wired in C8C.
+	// With a screen class configured the request is Ready. Opening the screen itself needs a local player and a game
+	// viewport, so it is covered by the C8C screen tests and rendered PIE rather than called here.
 	C8BSetScreenClass(Bench, UInventoryScreenWidget::StaticClass());
 	TestTrue(TEXT("Valid request: Ready"), Bench->GetOpenCraftingResult(Fixture.Character) == ECraftingStationOpenResult::Ready);
-	TestFalse(TEXT("Valid request: C8B still opens nothing"), Bench->OpenCraftingForInteractor(Fixture.Character));
-	Before.Check(*this, Fixture, Controller, TEXT("Valid interaction in C8B"));
+	Before.Check(*this, Fixture, Controller, TEXT("Readiness query"));
 
 	TInlineComponentArray<UCraftingComponent*> PlayerCrafting(Fixture.Character);
 	TestEqual(TEXT("The player still has exactly one crafting authority"), PlayerCrafting.Num(), 1);
@@ -1143,7 +1152,9 @@ bool FCraftingC8BProductionWorkbenchTest::RunTest(const FString& Parameters)
 	const ACraftingStationActor* Defaults = WorkbenchClass->GetDefaultObject<ACraftingStationActor>();
 	TestTrue(TEXT("BP_Workbench station definition is Station_Workbench"),
 		Defaults->GetCraftingStationComponent() && Defaults->GetCraftingStationComponent()->GetStationDefinition().Get() == StationClass);
-	TestNull(TEXT("BP_Workbench has no crafting screen in C8B"), C8BGetScreenClass(Defaults));
+	UClass* InventoryScreenClass = LoadClass<UInventoryScreenWidget>(nullptr,
+		TEXT("/Game/LevelPrototyping/InventorySystem/UI/Widgets/W_Inventory.W_Inventory_C"));
+	TestTrue(TEXT("BP_Workbench opens W_Inventory (since C8C)"), InventoryScreenClass && C8BGetScreenClass(Defaults) == InventoryScreenClass);
 	TestTrue(TEXT("BP_Workbench implements BPI_Interactable"), WorkbenchClass->ImplementsInterface(InteractableClass));
 
 	// No extra crafting authority, inventory or recipe list authored on the Blueprint.
@@ -1208,9 +1219,13 @@ bool FCraftingC8BProductionWorkbenchTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Interaction type is Press"), TypeName, FString(TEXT("Press")));
 	}
 
-	// Interact(Interactor) through the interface event: rejected safely while no screen is configured.
-	TestTrue(TEXT("Production workbench in range: NoCraftingScreen"),
-		Workbench->GetOpenCraftingResult(Fixture.Character) == ECraftingStationOpenResult::NoCraftingScreen);
+	// Since C8C the production bench has a screen, so a request in range is Ready (opening it needs a game viewport;
+	// see C8C). Interact(Interactor) through the interface event from out of range is rejected without side effects.
+	TestTrue(TEXT("Production workbench in range: Ready"),
+		Workbench->GetOpenCraftingResult(Fixture.Character) == ECraftingStationOpenResult::Ready);
+	Workbench->SetActorLocation(C8AOutOfRange);
+	TestTrue(TEXT("Production workbench out of range: OutOfRange"),
+		Workbench->GetOpenCraftingResult(Fixture.Character) == ECraftingStationOpenResult::OutOfRange);
 	const FC8BUnchanged Before(Fixture, Controller);
 	UFunction* Interact = Workbench->FindFunction(FName(TEXT("Interact")));
 	if (TestNotNull(TEXT("Interact is implemented"), Interact))
@@ -1226,6 +1241,512 @@ bool FCraftingC8BProductionWorkbenchTest::RunTest(const FString& Parameters)
 	}
 	Before.Check(*this, Fixture, Controller, TEXT("F on the production workbench"));
 	TestTrue(TEXT("Hand crafting still works after the interaction"), Fixture.Crafting->TryStartCraft(C8AHandInstant()).IsSuccess());
+	return true;
+}
+
+namespace
+{
+/** Production classes used by the C8C tests. */
+struct FC8CProduction
+{
+	UClass* Wood = nullptr;
+	UClass* Scrap = nullptr;
+	UClass* Stone = nullptr;
+	UClass* ShortSword = nullptr;
+	UClass* RecipeAxe = nullptr;
+	UClass* RecipeWoodArrow = nullptr;
+	UClass* RecipePickaxe = nullptr;
+	UClass* RecipeShortSword = nullptr;
+	UClass* Workbench = nullptr;
+	UClass* PanelClass = nullptr;
+	UClass* InventoryClass = nullptr;
+
+	FC8CProduction()
+	{
+		auto Item = [](const TCHAR* Name)
+		{
+			return LoadClass<UItemDefinition>(nullptr, *FString::Printf(TEXT("/Game/LevelPrototyping/InventorySystem/Items/%s.%s_C"), Name, Name));
+		};
+		auto Recipe = [](const TCHAR* Name)
+		{
+			return LoadClass<UCraftingRecipeDefinition>(nullptr, *FString::Printf(TEXT("/Game/LevelPrototyping/CraftingSystem/Recipes/%s.%s_C"), Name, Name));
+		};
+		Wood = Item(TEXT("Item_Wood"));
+		Scrap = Item(TEXT("Item_Scrap"));
+		Stone = Item(TEXT("Item_Stone"));
+		ShortSword = Item(TEXT("Item_ShortSword"));
+		RecipeAxe = Recipe(TEXT("Recipe_Axe"));
+		RecipeWoodArrow = Recipe(TEXT("Recipe_WoodArrow"));
+		RecipePickaxe = Recipe(TEXT("Recipe_Pickaxe"));
+		RecipeShortSword = Recipe(TEXT("Recipe_ShortSword"));
+		Workbench = LoadClass<ACraftingStationActor>(nullptr, C8BWorkbenchPath);
+		PanelClass = LoadClass<UCraftingPanelWidget>(nullptr, TEXT("/Game/LevelPrototyping/CraftingSystem/UI/W_CraftingPanel.W_CraftingPanel_C"));
+		InventoryClass = LoadClass<UInventoryScreenWidget>(nullptr, TEXT("/Game/LevelPrototyping/InventorySystem/UI/Widgets/W_Inventory.W_Inventory_C"));
+	}
+
+	bool IsValid(FAutomationTestBase& Test) const
+	{
+		return Test.TestTrue(TEXT("Production items, recipes, BP_Workbench, W_CraftingPanel and W_Inventory load"),
+			Wood && Scrap && Stone && ShortSword && RecipeAxe && RecipeWoodArrow && RecipePickaxe && RecipeShortSword
+			&& Workbench && PanelClass && InventoryClass);
+	}
+
+	/** The production registration order on BP_TopDownCharacter. */
+	FC8ARecipeList Registered() const { return { RecipeAxe, RecipeWoodArrow, RecipePickaxe, RecipeShortSword }; }
+	FC8ARecipeList HandList() const { return { RecipeAxe, RecipeWoodArrow, RecipePickaxe }; }
+	FC8ARecipeList WorkbenchList() const { return { RecipeShortSword, RecipeAxe, RecipeWoodArrow, RecipePickaxe }; }
+};
+
+UWidget* C8CFind(const UUserWidget* Widget, const TCHAR* Name)
+{
+	return Widget && Widget->WidgetTree ? Widget->WidgetTree->FindWidget(FName(Name)) : nullptr;
+}
+
+FString C8CText(const UUserWidget* Widget, const TCHAR* Name)
+{
+	const UTextBlock* Text = Cast<UTextBlock>(C8CFind(Widget, Name));
+	return Text ? Text->GetText().ToString() : FString(TEXT("<missing>"));
+}
+
+void C8CClickCraft(const UUserWidget* Panel)
+{
+	if (UButton* Button = Cast<UButton>(C8CFind(Panel, TEXT("CraftButton"))))
+	{
+		Button->OnClicked.Broadcast();
+	}
+}
+
+template <typename DelegateType>
+int32 C8CBindingCount(const DelegateType& Delegate, const UObject* Object)
+{
+	int32 Count = 0;
+	for (const UObject* Bound : Delegate.GetAllObjects())
+	{
+		Count += Bound == Object ? 1 : 0;
+	}
+	return Count;
+}
+
+/** Every crafting and inventory delegate the panel observes is bound exactly once. */
+bool C8CBoundOnce(const FC8AFixture& Fixture, const UCraftingPanelWidget* Panel)
+{
+	return C8CBindingCount(Fixture.Crafting->OnCraftingResult, Panel) == 1
+		&& C8CBindingCount(Fixture.Crafting->OnCraftStarted, Panel) == 1
+		&& C8CBindingCount(Fixture.Crafting->OnCraftCancelled, Panel) == 1
+		&& C8CBindingCount(Fixture.Inventory->OnInventoryChanged, Panel) == 1;
+}
+
+/** Fixture with the production recipes registered in production order and one production Workbench in range. */
+struct FC8CFixture : FC8AFixture
+{
+	ACraftingStationActor* Bench = nullptr;
+
+	explicit FC8CFixture(const FC8CProduction& Production)
+		: FC8AFixture(Production.Registered())
+	{
+		if (World && Production.Workbench)
+		{
+			Bench = C8BSpawnStationActor(*this, Production.Workbench, C8AInRange, nullptr, false);
+		}
+	}
+
+	UCraftingStationComponent* Station() const { return Bench ? Bench->GetCraftingStationComponent() : nullptr; }
+
+	UCraftingPanelWidget* CreatePanel(const FC8CProduction& Production) const
+	{
+		UCraftingPanelWidget* Panel = CreateWidget<UCraftingPanelWidget>(World, Production.PanelClass);
+		if (Panel)
+		{
+			Panel->SetCraftingSource(Crafting.Get());
+		}
+		return Panel;
+	}
+
+	/** A W_Inventory instance whose embedded crafting panel follows this fixture's crafting component. */
+	UInventoryScreenWidget* CreateScreen(const FC8CProduction& Production) const
+	{
+		UInventoryScreenWidget* Screen = CreateWidget<UInventoryScreenWidget>(World, Production.InventoryClass);
+		if (Screen && Screen->GetCraftingPanel())
+		{
+			Screen->GetCraftingPanel()->SetCraftingSource(Crafting.Get());
+		}
+		return Screen;
+	}
+};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCraftingC8CRecipeListTest,
+	"NullTide.Crafting.C8C.WorkbenchAndHandRecipeLists",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCraftingC8CRecipeListTest::RunTest(const FString& Parameters)
+{
+	const FC8CProduction Production;
+	if (!Production.IsValid(*this)) { return false; }
+	FC8CFixture Fixture(Production);
+	if (!Fixture.IsValid(*this) || !TestNotNull(TEXT("Production Workbench spawns"), Fixture.Bench)) { return false; }
+
+	TStrongObjectPtr<UCraftingPanelWidget> Panel(Fixture.CreatePanel(Production));
+	if (!TestNotNull(TEXT("W_CraftingPanel is created"), Panel.Get())) { return false; }
+	TestNotNull(TEXT("W_CraftingPanel has its PanelTitle heading"), Cast<UTextBlock>(C8CFind(Panel.Get(), TEXT("PanelTitle"))));
+
+	// Hand context: hand recipes only, in registration order; ShortSword never appears.
+	TestFalse(TEXT("Hand panel has no station context"), Panel->HasStationContext());
+	TestTrue(TEXT("Hand list is Axe, WoodArrow, Pickaxe"), Panel->GetListedRecipes() == Production.HandList());
+	TestFalse(TEXT("Hand list excludes ShortSword"), Panel->GetListedRecipes().Contains(Production.RecipeShortSword));
+	TestEqual(TEXT("Hand title"), C8CText(Panel.Get(), TEXT("PanelTitle")), FString(TEXT("CRAFTING")));
+
+	// Workbench context: Workbench recipes first, then hand recipes in registration order.
+	Panel->SetCraftingStation(Fixture.Station());
+	TestTrue(TEXT("Workbench context is set"), Panel->HasStationContext() && Panel->GetCraftingStation() == Fixture.Station());
+	TestTrue(TEXT("Workbench list is ShortSword, Axe, WoodArrow, Pickaxe"), Panel->GetListedRecipes() == Production.WorkbenchList());
+	TestEqual(TEXT("Workbench title"), C8CText(Panel.Get(), TEXT("PanelTitle")), FString(TEXT("WORKBENCH")));
+	TestTrue(TEXT("The Workbench recipe is selected first"), Panel->GetSelectedRecipe() == Production.RecipeShortSword);
+	TestEqual(TEXT("Recipe entries match the list"), C8CFind(Panel.Get(), TEXT("RecipeList"))
+		? Cast<UPanelWidget>(C8CFind(Panel.Get(), TEXT("RecipeList")))->GetChildrenCount() : -1, 4);
+
+	// Back to hand: the station recipe disappears again and the selection falls back to a hand recipe.
+	Panel->SetCraftingStation(nullptr);
+	TestTrue(TEXT("Back to the hand list"), Panel->GetListedRecipes() == Production.HandList());
+	TestTrue(TEXT("Selection falls back to a hand recipe"), Panel->GetSelectedRecipe() == Production.RecipeAxe);
+	TestEqual(TEXT("Title back to CRAFTING"), C8CText(Panel.Get(), TEXT("PanelTitle")), FString(TEXT("CRAFTING")));
+	TestTrue(TEXT("Delegates bound once after context changes"), C8CBoundOnce(Fixture, Panel.Get()));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCraftingC8CStationFeedbackTest,
+	"NullTide.Crafting.C8C.StationRequiredAndOutOfRangeFeedback",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCraftingC8CStationFeedbackTest::RunTest(const FString& Parameters)
+{
+	const FC8CProduction Production;
+	if (!Production.IsValid(*this)) { return false; }
+	FC8CFixture Fixture(Production);
+	if (!Fixture.IsValid(*this) || !Fixture.Bench || !C8AAdd(*this, Fixture.Inventory.Get(), Production.Wood, 2)
+		|| !C8AAdd(*this, Fixture.Inventory.Get(), Production.Scrap, 4)) { return false; }
+	Fixture.StartObserving();
+
+	// Hand context: the view and the feedback both say the recipe needs the Workbench.
+	const FCraftingRecipeView HandView = UCraftingViewLibrary::BuildRecipeView(Fixture.Crafting.Get(), Production.RecipeShortSword);
+	TestTrue(TEXT("Hand view: StationRequired"), HandView.CraftResult.Result == ECraftingTransactionResult::StationRequired && !HandView.bCanCraft);
+	TestEqual(TEXT("Hand view: station name"), HandView.RequiredStationName.ToString(), FString(TEXT("Workbench")));
+	TestEqual(TEXT("Hand status text"), HandView.StatusText.ToString(), FString(TEXT("Requires Workbench.")));
+	const FCraftingTransactionResult HandStart = Fixture.Crafting->TryStartCraft(Production.RecipeShortSword);
+	TestEqual(TEXT("Hand feedback text"), UCraftingViewLibrary::GetCraftFeedbackText(Fixture.Crafting.Get(), Production.RecipeShortSword, HandStart).ToString(),
+		FString(TEXT("Requires Workbench.")));
+
+	// Workbench in range: ready. Out of range: the panel says so and CRAFT is disabled.
+	TStrongObjectPtr<UCraftingPanelWidget> Panel(Fixture.CreatePanel(Production));
+	if (!TestNotNull(TEXT("Panel"), Panel.Get())) { return false; }
+	Panel->SetCraftingStation(Fixture.Station());
+	Panel->SelectRecipe(Production.RecipeShortSword);
+	TestEqual(TEXT("In range: ready"), C8CText(Panel.Get(), TEXT("CraftStatusText")), FString(TEXT("Ready to craft.")));
+	Fixture.Bench->SetActorLocation(C8AOutOfRange);
+	Panel->RefreshCraftingView();
+	TestEqual(TEXT("Out of range status"), C8CText(Panel.Get(), TEXT("CraftStatusText")), FString(TEXT("Too far from the Workbench.")));
+	TestFalse(TEXT("Out of range: CRAFT disabled"), Cast<UButton>(C8CFind(Panel.Get(), TEXT("CraftButton")))->GetIsEnabled());
+	TestTrue(TEXT("Out of range: the station recipe stays listed"), Panel->GetListedRecipes() == Production.WorkbenchList());
+	const FC8AUnchanged Before(Fixture);
+	const FCraftingTransactionResult FarStart = Fixture.Crafting->TryStartCraftAtStation(Production.RecipeShortSword, Fixture.Station());
+	TestEqual(TEXT("Out of range feedback text"), UCraftingViewLibrary::GetCraftFeedbackText(Fixture.Crafting.Get(), Production.RecipeShortSword, FarStart).ToString(),
+		FString(TEXT("Too far from the Workbench.")));
+	Before.Check(*this, Fixture, TEXT("Refused requests"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCraftingC8CWorkbenchCraftTest,
+	"NullTide.Crafting.C8C.WorkbenchShortSwordCraft",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCraftingC8CWorkbenchCraftTest::RunTest(const FString& Parameters)
+{
+	const FC8CProduction Production;
+	if (!Production.IsValid(*this)) { return false; }
+	FC8CFixture Fixture(Production);
+	if (!Fixture.IsValid(*this) || !Fixture.Bench || !C8AAdd(*this, Fixture.Inventory.Get(), Production.Wood, 3)
+		|| !C8AAdd(*this, Fixture.Inventory.Get(), Production.Scrap, 4)) { return false; }
+	Fixture.StartObserving();
+	TStrongObjectPtr<UInventoryScreenWidget> Screen(Fixture.CreateScreen(Production));
+	if (!TestTrue(TEXT("W_Inventory with its crafting panel"), Screen && Screen->GetCraftingPanel())) { return false; }
+	UCraftingPanelWidget* Panel = Screen->GetCraftingPanel();
+	if (!TestTrue(TEXT("W_Inventory opens for the Workbench"), Screen->OpenForCraftingStation(Fixture.Station()))) { return false; }
+	TestTrue(TEXT("Screen is a station screen"), Screen->IsCraftingStationScreen() && Screen->GetCraftingStation() == Fixture.Station());
+	TestTrue(TEXT("Embedded panel is in Workbench context"), Panel->GetCraftingStation() == Fixture.Station());
+	TestTrue(TEXT("ShortSword selected"), Panel->GetSelectedRecipe() == Production.RecipeShortSword);
+
+	const FGuid WoodStack = C8ACapture(Fixture.Inventory.Get())[0].Key;
+	const int32 Revision = Fixture.Inventory->GetRevision();
+	C8CClickCraft(Panel);
+	TestTrue(TEXT("CRAFT started the timed Workbench craft"), Fixture.Crafting->IsCrafting()
+		&& Fixture.Crafting->GetActiveCraftRecipe() == Production.RecipeShortSword && Fixture.Crafting->GetActiveCraftStation() == Fixture.Station());
+	TestEqual(TEXT("One started event"), Fixture.Listener->StartedEvents, 1);
+	TestEqual(TEXT("Started with 4 s"), Fixture.Listener->LastDuration, 4.f);
+	TestEqual(TEXT("CANCEL label while crafting"), C8CText(Panel, TEXT("CraftButtonText")), FString(TEXT("CANCEL")));
+	TestEqual(TEXT("Nothing consumed on start"), Fixture.Inventory->GetTotalQuantity(Production.Scrap), 4);
+
+	Fixture.AdvanceTime(2.f);
+	Panel->RefreshCraftingView(); // widgets do not tick in tests
+	TestEqual(TEXT("Halfway progress"), Cast<UProgressBar>(C8CFind(Panel, TEXT("CraftProgressBar")))->GetPercent(), 0.5f, 0.02f);
+	TestEqual(TEXT("Halfway status shows remaining time"), C8CText(Panel, TEXT("CraftStatusText")), FString(TEXT("Crafting Short Sword... 2.0 s")));
+	TestEqual(TEXT("Nothing consumed halfway"), Fixture.Inventory->GetTotalQuantity(Production.Wood), 3);
+
+	// Closing the screen does not cancel; the craft completes against the Workbench.
+	Screen->CloseInventory();
+	TestTrue(TEXT("Closing the Workbench screen does not cancel"), Fixture.Crafting->IsCrafting());
+	Fixture.AdvanceTime(2.1f);
+	TestTrue(TEXT("Completion succeeded"), Fixture.Listener->LastResult.IsSuccess());
+	TestEqual(TEXT("Wood 3 - 2 (same stack)"), Fixture.Inventory->GetTotalQuantity(Production.Wood), 1);
+	TestTrue(TEXT("Wood consumed from its existing stack"), C8ACapture(Fixture.Inventory.Get())[0].Key == WoodStack);
+	TestEqual(TEXT("Scrap 4 - 4"), Fixture.Inventory->GetTotalQuantity(Production.Scrap), 0);
+	TestEqual(TEXT("ShortSword x1"), Fixture.Inventory->GetTotalQuantity(Production.ShortSword), 1);
+	TestEqual(TEXT("Exactly one revision"), Fixture.Inventory->GetRevision(), Revision + 1);
+	TestEqual(TEXT("Exactly one inventory event"), Fixture.Listener->InventoryEvents, 1);
+	TestEqual(TEXT("Exactly one result notification"), Fixture.Listener->ResultEvents, 1);
+
+	// Reopen at the bench: no stale state, and a second craft is refused atomically for missing Scrap.
+	TestTrue(TEXT("Reopens for the Workbench"), Screen->OpenForCraftingStation(Fixture.Station()));
+	const FC8AUnchanged Before(Fixture);
+	C8CClickCraft(Panel);
+	TestFalse(TEXT("No craft without Scrap"), Fixture.Crafting->IsCrafting());
+	Before.Check(*this, Fixture, TEXT("Refused second craft"));
+	TestTrue(TEXT("Delegates bound once"), C8CBoundOnce(Fixture, Panel));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCraftingC8CStationLostTest,
+	"NullTide.Crafting.C8C.StationLostAndInvalidatedScreens",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCraftingC8CStationLostTest::RunTest(const FString& Parameters)
+{
+	const FC8CProduction Production;
+	if (!Production.IsValid(*this)) { return false; }
+
+	// Station actor destroyed while its screen is open and a Workbench craft runs.
+	{
+		FC8CFixture Fixture(Production);
+		if (!Fixture.IsValid(*this) || !Fixture.Bench || !C8AAdd(*this, Fixture.Inventory.Get(), Production.Wood, 2)
+			|| !C8AAdd(*this, Fixture.Inventory.Get(), Production.Scrap, 4)) { return false; }
+		Fixture.StartObserving();
+		TStrongObjectPtr<UInventoryScreenWidget> Screen(Fixture.CreateScreen(Production));
+		if (!TestTrue(TEXT("Screen opens for the Workbench"), Screen && Screen->OpenForCraftingStation(Fixture.Station()))) { return false; }
+		UCraftingPanelWidget* Panel = Screen->GetCraftingPanel();
+		C8CClickCraft(Panel);
+		const FC8AUnchanged Before(Fixture);
+		Fixture.Bench->Destroy();
+		TestFalse(TEXT("Destroying the station cancels the Workbench craft"), Fixture.Crafting->IsCrafting());
+		TestTrue(TEXT("Reason StationLost"), Fixture.Listener->CancelledEvents == 1 && Fixture.Listener->LastCancelReason == ECraftCancelReason::StationLost);
+		TestEqual(TEXT("StationLost feedback"), C8CText(Panel, TEXT("CraftStatusText")), FString(TEXT("Crafting cancelled: the Workbench is gone.")));
+		TestTrue(TEXT("The panel is unusable until the screen closes"), Panel->HasStationContext() && !Panel->GetCraftingStation()
+			&& Panel->GetListedRecipes().IsEmpty());
+		TestFalse(TEXT("Validation closes the screen"), Screen->ValidateCraftingStationContext());
+		TestFalse(TEXT("Closed screen has no station context"), Screen->IsCraftingStationScreen() || Panel->HasStationContext());
+		TestTrue(TEXT("Closed screen panel is back to the hand list"), Panel->GetListedRecipes() == Production.HandList());
+		Before.Check(*this, Fixture, TEXT("StationLost"));
+		Fixture.AdvanceTime(5.f);
+		TestEqual(TEXT("No completion after StationLost"), Fixture.Listener->ResultEvents, 0);
+	}
+
+	// Station component destroyed (actor alive) while the screen is open.
+	{
+		FC8CFixture Fixture(Production);
+		if (!Fixture.IsValid(*this) || !Fixture.Bench) { return false; }
+		TStrongObjectPtr<UInventoryScreenWidget> Screen(Fixture.CreateScreen(Production));
+		if (!TestTrue(TEXT("Screen opens"), Screen && Screen->OpenForCraftingStation(Fixture.Station()))) { return false; }
+		TestTrue(TEXT("Valid station keeps the screen open"), Screen->ValidateCraftingStationContext() && Screen->IsCraftingStationScreen());
+		Fixture.Station()->DestroyComponent();
+		TestFalse(TEXT("Invalid station component closes the screen"), Screen->ValidateCraftingStationContext());
+		TestFalse(TEXT("No stale context"), Screen->IsCraftingStationScreen() || Screen->GetCraftingPanel()->HasStationContext());
+	}
+
+	// Station definition cleared while the screen is open; invalid inputs are rejected without changing anything.
+	{
+		FC8CFixture Fixture(Production);
+		if (!Fixture.IsValid(*this) || !Fixture.Bench) { return false; }
+		TStrongObjectPtr<UInventoryScreenWidget> Screen(Fixture.CreateScreen(Production));
+		if (!TestNotNull(TEXT("Screen"), Screen.Get())) { return false; }
+		TestFalse(TEXT("Null station is rejected"), Screen->OpenForCraftingStation(nullptr));
+		TestFalse(TEXT("Rejected open leaves a hand screen"), Screen->IsCraftingStationScreen() || Screen->GetCraftingPanel()->HasStationContext());
+		TestTrue(TEXT("Hand screen always validates"), Screen->ValidateCraftingStationContext());
+		TestTrue(TEXT("Screen opens"), Screen->OpenForCraftingStation(Fixture.Station()));
+		C8ASetStationDefinition(Fixture.Station(), nullptr);
+		TestFalse(TEXT("Unusable station closes the screen"), Screen->ValidateCraftingStationContext());
+		TestFalse(TEXT("An unusable station cannot be reopened"), Screen->OpenForCraftingStation(Fixture.Station()));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCraftingC8CContextIsolationTest,
+	"NullTide.Crafting.C8C.ScreenContextIsolationAndReopen",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCraftingC8CContextIsolationTest::RunTest(const FString& Parameters)
+{
+	const FC8CProduction Production;
+	if (!Production.IsValid(*this)) { return false; }
+	FC8CFixture Fixture(Production);
+	if (!Fixture.IsValid(*this) || !Fixture.Bench) { return false; }
+	ACraftingStationActor* SecondBench = C8BSpawnStationActor(Fixture, Production.Workbench, FVector(0.f, 200.f, 0.f), nullptr, false);
+	if (!TestNotNull(TEXT("Second Workbench"), SecondBench)) { return false; }
+
+	// Two independent W_Inventory instances: the station screen and the controller's hand screen.
+	TStrongObjectPtr<UInventoryScreenWidget> StationScreen(Fixture.CreateScreen(Production));
+	TStrongObjectPtr<UInventoryScreenWidget> HandScreen(Fixture.CreateScreen(Production));
+	if (!TestTrue(TEXT("Both screens have crafting panels"), StationScreen && HandScreen && StationScreen->GetCraftingPanel()
+		&& HandScreen->GetCraftingPanel() && StationScreen->GetCraftingPanel() != HandScreen->GetCraftingPanel())) { return false; }
+	TestTrue(TEXT("Station screen opens"), StationScreen->OpenForCraftingStation(Fixture.Station()));
+	TestTrue(TEXT("Station screen lists Workbench recipes"), StationScreen->GetCraftingPanel()->GetListedRecipes() == Production.WorkbenchList());
+	TestFalse(TEXT("Hand screen is unaffected"), HandScreen->IsCraftingStationScreen() || HandScreen->GetCraftingPanel()->HasStationContext());
+	TestTrue(TEXT("Hand screen lists hand recipes"), HandScreen->GetCraftingPanel()->GetListedRecipes() == Production.HandList());
+
+	// Closing the station screen clears its context; it does not touch the hand screen.
+	StationScreen->CloseInventory();
+	TestFalse(TEXT("Closed station screen has no context"), StationScreen->IsCraftingStationScreen() || StationScreen->GetCraftingPanel()->HasStationContext());
+	TestTrue(TEXT("Closed station screen panel lists hand recipes"), StationScreen->GetCraftingPanel()->GetListedRecipes() == Production.HandList());
+	TestTrue(TEXT("Hand screen still lists hand recipes"), HandScreen->GetCraftingPanel()->GetListedRecipes() == Production.HandList());
+
+	// Reopening the same screen for another bench uses only the new station.
+	TestTrue(TEXT("Reopen for the second bench"), StationScreen->OpenForCraftingStation(SecondBench->GetCraftingStationComponent()));
+	TestTrue(TEXT("Context is the second bench"), StationScreen->GetCraftingStation() == SecondBench->GetCraftingStationComponent()
+		&& StationScreen->GetCraftingPanel()->GetCraftingStation() == SecondBench->GetCraftingStationComponent());
+	Fixture.Bench->Destroy();
+	TestTrue(TEXT("Destroying the first bench does not close a screen opened for the second"), StationScreen->ValidateCraftingStationContext());
+
+	// Repeated opens and closes never stack delegate bindings.
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		StationScreen->OpenForCraftingStation(SecondBench->GetCraftingStationComponent());
+		StationScreen->CloseInventory();
+	}
+	TestTrue(TEXT("Station screen panel delegates bound once"), C8CBoundOnce(Fixture, StationScreen->GetCraftingPanel()));
+	TestTrue(TEXT("Hand screen panel delegates bound once"), C8CBoundOnce(Fixture, HandScreen->GetCraftingPanel()));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCraftingC8CHandShowsStationCraftTest,
+	"NullTide.Crafting.C8C.HandScreenShowsActiveWorkbenchCraft",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCraftingC8CHandShowsStationCraftTest::RunTest(const FString& Parameters)
+{
+	const FC8CProduction Production;
+	if (!Production.IsValid(*this)) { return false; }
+	FC8CFixture Fixture(Production);
+	if (!Fixture.IsValid(*this) || !Fixture.Bench || !C8AAdd(*this, Fixture.Inventory.Get(), Production.Wood, 5)
+		|| !C8AAdd(*this, Fixture.Inventory.Get(), Production.Scrap, 4) || !C8AAdd(*this, Fixture.Inventory.Get(), Production.Stone, 5)) { return false; }
+	Fixture.StartObserving();
+
+	// Start ShortSword at the Workbench, then close that screen.
+	TStrongObjectPtr<UInventoryScreenWidget> StationScreen(Fixture.CreateScreen(Production));
+	if (!TestTrue(TEXT("Station screen opens"), StationScreen && StationScreen->OpenForCraftingStation(Fixture.Station()))) { return false; }
+	C8CClickCraft(StationScreen->GetCraftingPanel());
+	if (!TestTrue(TEXT("Workbench craft running"), Fixture.Crafting->GetActiveCraftRecipe() == Production.RecipeShortSword)) { return false; }
+	StationScreen->CloseInventory();
+	Fixture.AdvanceTime(1.f);
+
+	// Open the hand screen (I/Tab): no ShortSword in the list, but progress, remaining time and CANCEL follow the craft.
+	TStrongObjectPtr<UInventoryScreenWidget> HandScreen(Fixture.CreateScreen(Production));
+	if (!TestTrue(TEXT("Hand screen"), HandScreen && HandScreen->GetCraftingPanel())) { return false; }
+	UCraftingPanelWidget* HandPanel = HandScreen->GetCraftingPanel();
+	TestTrue(TEXT("Hand list still excludes ShortSword"), HandPanel->GetListedRecipes() == Production.HandList());
+	TestFalse(TEXT("ShortSword is not selected or inserted"), HandPanel->GetSelectedRecipe() == Production.RecipeShortSword);
+	TestEqual(TEXT("Hand button reads CANCEL"), C8CText(HandPanel, TEXT("CraftButtonText")), FString(TEXT("CANCEL")));
+	const UProgressBar* Bar = Cast<UProgressBar>(C8CFind(HandPanel, TEXT("CraftProgressBar")));
+	TestTrue(TEXT("Hand progress bar shows the Workbench craft"), Bar && Bar->GetVisibility() == ESlateVisibility::HitTestInvisible
+		&& FMath::IsNearlyEqual(Bar->GetPercent(), 0.25f, 0.02f));
+	TestTrue(TEXT("Hand status shows the ShortSword craft and its remaining time"),
+		C8CText(HandPanel, TEXT("CraftStatusText")).Contains(TEXT("Short Sword")) && C8CText(HandPanel, TEXT("CraftStatusText")).Contains(TEXT("3.0 s")));
+	TestTrue(TEXT("CANCEL is enabled"), Cast<UButton>(C8CFind(HandPanel, TEXT("CraftButton")))->GetIsEnabled());
+
+	// A hand recipe cannot start while the Workbench craft runs; CANCEL cancels the Workbench craft from the hand screen.
+	const FC8AUnchanged Before(Fixture);
+	TestTrue(TEXT("Hand start is refused while crafting"),
+		Fixture.Crafting->TryStartCraft(Production.RecipePickaxe).Result == ECraftingTransactionResult::CraftInProgress);
+	C8CClickCraft(HandPanel);
+	TestFalse(TEXT("CANCEL from the hand screen cancelled the Workbench craft"), Fixture.Crafting->IsCrafting());
+	TestTrue(TEXT("Reason Explicit"), Fixture.Listener->LastCancelReason == ECraftCancelReason::Explicit);
+	TestEqual(TEXT("Cancel feedback"), C8CText(HandPanel, TEXT("CraftStatusText")), FString(TEXT("Crafting cancelled.")));
+	TestEqual(TEXT("Hand button back to CRAFT"), C8CText(HandPanel, TEXT("CraftButtonText")), FString(TEXT("CRAFT")));
+	Before.Check(*this, Fixture, TEXT("Cancel from the hand screen"));
+	Fixture.AdvanceTime(5.f);
+	TestEqual(TEXT("Cancelled craft never completes"), Fixture.Listener->ResultEvents, 1);
+
+	// Hand crafting is unchanged: Pickaxe (timed hand recipe) runs and completes from the hand screen.
+	HandPanel->SelectRecipe(Production.RecipePickaxe);
+	C8CClickCraft(HandPanel);
+	TestTrue(TEXT("Hand Pickaxe started"), Fixture.Crafting->GetActiveCraftRecipe() == Production.RecipePickaxe
+		&& Fixture.Crafting->GetActiveCraftStation() == nullptr);
+	Fixture.AdvanceTime(3.1f);
+	TestEqual(TEXT("Pickaxe completed by hand"), Fixture.Inventory->GetTotalQuantity(
+		LoadClass<UItemDefinition>(nullptr, TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_Pickaxe.Item_Pickaxe_C"))), 1);
+	TestTrue(TEXT("Hand panel delegates bound once"), C8CBoundOnce(Fixture, HandPanel));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCraftingC8CTabFocusTest,
+	"NullTide.Crafting.C8C.TabClosesScreenFromFocusedChild",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FCraftingC8CTabFocusTest::RunTest(const FString& Parameters)
+{
+	const FC8CProduction Production;
+	if (!Production.IsValid(*this)) { return false; }
+	FC8CFixture Fixture(Production);
+	if (!Fixture.IsValid(*this) || !Fixture.Bench || !C8AAdd(*this, Fixture.Inventory.Get(), Production.Wood, 2)
+		|| !C8AAdd(*this, Fixture.Inventory.Get(), Production.Scrap, 4)) { return false; }
+	auto Key = [](const FKey& InKey) { return FKeyEvent(InKey, FModifierKeysState(), 0, false, 0, 0); };
+
+	// Real Slate widgets: each screen lives in a host panel so closing it (RemoveFromParent) is observable.
+	TStrongObjectPtr<UVerticalBox> StationHost(NewObject<UVerticalBox>(GetTransientPackage()));
+	TStrongObjectPtr<UInventoryScreenWidget> StationScreen(Fixture.CreateScreen(Production));
+	if (!TestTrue(TEXT("Workbench screen in its host"), StationScreen && StationScreen->OpenForCraftingStation(Fixture.Station()))) { return false; }
+	StationHost->AddChild(StationScreen.Get());
+	StationHost->TakeWidget();
+	C8CClickCraft(StationScreen->GetCraftingPanel());
+	if (!TestTrue(TEXT("A Workbench craft is running"), Fixture.Crafting->IsCrafting())) { return false; }
+
+	// The bug: a focusable child (the CRAFT/CANCEL button, like a selected slot or recipe entry) consumes Tab as
+	// keyboard focus navigation in its own OnKeyDown, so the key never bubbles back to the screen's OnKeyDown.
+	UButton* ChildButton = Cast<UButton>(C8CFind(StationScreen->GetCraftingPanel(), TEXT("CraftButton")));
+	if (!TestNotNull(TEXT("Focusable child button"), ChildButton)) { return false; }
+	const FReply ChildReply = ChildButton->TakeWidget()->OnKeyDown(FGeometry(), Key(EKeys::Tab));
+	TestTrue(TEXT("A focused child turns Tab into focus navigation (the reported bug)"),
+		ChildReply.IsEventHandled() && ChildReply.GetNavigationType() == EUINavigation::Next);
+
+	// The fix: the screen's preview (tunnelling) pass runs before the focused child and closes on Tab.
+	const TSharedRef<SWidget> StationSlate = StationScreen->TakeWidget();
+	TestFalse(TEXT("Arrow keys are left to normal navigation"), StationSlate->OnPreviewKeyDown(FGeometry(), Key(EKeys::Down)).IsEventHandled());
+	TestFalse(TEXT("Other keys are left alone"), StationSlate->OnPreviewKeyDown(FGeometry(), Key(EKeys::A)).IsEventHandled());
+	TestTrue(TEXT("Screen still open after other keys"), StationScreen->GetParent() == StationHost.Get() && StationScreen->IsCraftingStationScreen());
+	TestTrue(TEXT("Tab is handled by the screen before the child"), StationSlate->OnPreviewKeyDown(FGeometry(), Key(EKeys::Tab)).IsEventHandled());
+	TestNull(TEXT("Tab closed the Workbench screen"), StationScreen->GetParent());
+	TestFalse(TEXT("Closing cleared the Workbench context"), StationScreen->IsCraftingStationScreen() || StationScreen->GetCraftingPanel()->HasStationContext());
+	TestTrue(TEXT("Closing with Tab does not cancel the craft"), Fixture.Crafting->IsCrafting());
+
+	// The hand screen: Tab, I and Esc all close it through the same path.
+	TStrongObjectPtr<UVerticalBox> HandHost(NewObject<UVerticalBox>(GetTransientPackage()));
+	TStrongObjectPtr<UInventoryScreenWidget> HandScreen(Fixture.CreateScreen(Production));
+	if (!TestNotNull(TEXT("Hand screen"), HandScreen.Get())) { return false; }
+	for (const FKey& CloseKey : { EKeys::Tab, EKeys::I, EKeys::Escape })
+	{
+		HandHost->AddChild(HandScreen.Get());
+		HandHost->TakeWidget();
+		const FString Name = CloseKey.GetDisplayName().ToString();
+		TestTrue(Name + TEXT(" is handled in the preview pass"), HandScreen->TakeWidget()->OnPreviewKeyDown(FGeometry(), Key(CloseKey)).IsEventHandled());
+		TestNull(Name + TEXT(" closed the hand screen"), HandScreen->GetParent());
+	}
+	TestFalse(TEXT("The hand screen never gets a station context"), HandScreen->IsCraftingStationScreen());
+
+	Fixture.AdvanceTime(4.1f);
+	TestEqual(TEXT("The Workbench craft completed after the screen closed"), Fixture.Inventory->GetTotalQuantity(Production.ShortSword), 1);
 	return true;
 }
 

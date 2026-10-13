@@ -7,6 +7,8 @@
 #include "Components/TextBlock.h"
 #include "Crafting/CraftingComponent.h"
 #include "Crafting/CraftingRecipeDefinition.h"
+#include "Crafting/CraftingStationComponent.h"
+#include "Crafting/CraftingStationDefinition.h"
 #include "GameFramework/Pawn.h"
 #include "Inventory/InventoryComponent.h"
 #include "UI/CraftingRecipeEntryWidget.h"
@@ -62,6 +64,11 @@ void UCraftingPanelWidget::NativeTick(const FGeometry& MyGeometry, const float I
 	{
 		RefreshCraftProgress();
 	}
+	if (IsStationContextLost() && !ListedRecipes.IsEmpty())
+	{
+		// The station went away under an open panel: stop offering its recipes.
+		RefreshCraftingView();
+	}
 	if (ExplicitCrafting)
 	{
 		if (ExplicitCrafting != ObservedCrafting || ExplicitCrafting->GetInventory() != ObservedInventory)
@@ -90,6 +97,51 @@ void UCraftingPanelWidget::SetCraftingSource(UCraftingComponent* InCrafting)
 	{
 		RebindToPawn(GetOwningPlayerPawn());
 	}
+}
+
+void UCraftingPanelWidget::SetCraftingStation(UCraftingStationComponent* InStation)
+{
+	UCraftingStationComponent* Station = ::IsValid(InStation) ? InStation : nullptr;
+	if (bHasStationContext != (Station != nullptr) || StationContext.Get() != Station)
+	{
+		// A different context starts fresh: no previous message, and the selection becomes the active craft when it
+		// is listed, otherwise the first listed recipe (a station's own recipe comes first).
+		bHasFeedback = false;
+		FeedbackText = FText::GetEmpty();
+		SelectedRecipe = nullptr;
+	}
+	StationContext = Station;
+	bHasStationContext = Station != nullptr;
+	RefreshCraftingView();
+}
+
+UCraftingStationComponent* UCraftingPanelWidget::GetCraftingStation() const
+{
+	UCraftingStationComponent* Station = StationContext.Get();
+	return ::IsValid(Station) && Station->IsStationUsable() ? Station : nullptr;
+}
+
+bool UCraftingPanelWidget::IsStationContextLost() const
+{
+	return bHasStationContext && !GetCraftingStation();
+}
+
+FCraftingRecipeView UCraftingPanelWidget::BuildView(TSubclassOf<UCraftingRecipeDefinition> RecipeClass) const
+{
+	return UCraftingViewLibrary::BuildRecipeViewAtStation(ObservedCrafting, RecipeClass, GetCraftingStation());
+}
+
+void UCraftingPanelWidget::RefreshTitle()
+{
+	if (!PanelTitle)
+	{
+		return;
+	}
+	const UCraftingStationComponent* Station = GetCraftingStation();
+	const UCraftingStationDefinition* Definition = Station ? Station->GetValidStationDefinition() : nullptr;
+	PanelTitle->SetText(Definition && !Definition->StationName.IsEmpty()
+		? Definition->StationName.ToUpper()
+		: LOCTEXT("CraftingTitle", "CRAFTING"));
 }
 
 void UCraftingPanelWidget::RebindToPawn(APawn* Pawn)
@@ -155,7 +207,7 @@ void UCraftingPanelWidget::HandleCraftStarted(TSubclassOf<UCraftingRecipeDefinit
 
 void UCraftingPanelWidget::HandleCraftCancelled(TSubclassOf<UCraftingRecipeDefinition> RecipeClass, ECraftCancelReason Reason)
 {
-	ShowFeedback(UCraftingViewLibrary::GetCraftCancelledText(Reason), false);
+	ShowFeedback(UCraftingViewLibrary::GetCraftCancelledTextForRecipe(Reason, RecipeClass), false);
 	RefreshCraftingView();
 }
 
@@ -182,6 +234,12 @@ void UCraftingPanelWidget::RequestCraftSelectedRecipe()
 		RefreshDetails();
 		return;
 	}
+	if (IsStationContextLost())
+	{
+		ShowFeedback(LOCTEXT("FeedbackStationLost", "The workstation is no longer available."), false);
+		RefreshDetails();
+		return;
+	}
 	if (!SelectedRecipe)
 	{
 		ShowFeedback(LOCTEXT("FeedbackNoSelection", "Select a recipe."), false);
@@ -196,7 +254,14 @@ void UCraftingPanelWidget::RequestCraftSelectedRecipe()
 			CraftButton->SetIsEnabled(false);
 		}
 		// Feedback comes from OnCraftingResult; the returned result is intentionally not displayed.
-		ObservedCrafting->TryStartCraft(SelectedRecipe);
+		if (UCraftingStationComponent* Station = GetCraftingStation())
+		{
+			ObservedCrafting->TryStartCraftAtStation(SelectedRecipe, Station);
+		}
+		else
+		{
+			ObservedCrafting->TryStartCraft(SelectedRecipe);
+		}
 	}
 	RefreshDetails();
 }
@@ -245,10 +310,14 @@ void UCraftingPanelWidget::SelectRecipe(TSubclassOf<UCraftingRecipeDefinition> R
 
 void UCraftingPanelWidget::RefreshCraftingView()
 {
-	const TArray<TSubclassOf<UCraftingRecipeDefinition>> Recipes = ObservedCrafting
-		? ObservedCrafting->GetAvailableRecipes()
+	// Hand context lists hand recipes only; a station lists its own recipes first, then hand recipes.
+	// A station context whose station is gone lists nothing.
+	const TArray<TSubclassOf<UCraftingRecipeDefinition>> Recipes = ObservedCrafting && !IsStationContextLost()
+		? ObservedCrafting->GetRecipesForStation(GetCraftingStation())
 		: TArray<TSubclassOf<UCraftingRecipeDefinition>>();
-	// While a timed craft runs (also after reopening the screen), show the recipe being crafted.
+	RefreshTitle();
+	// While a timed craft runs (also after reopening the screen), show the recipe being crafted when it is listed.
+	// An active craft that is not listed here (a station craft seen by hand) keeps its progress and CANCEL below.
 	const TSubclassOf<UCraftingRecipeDefinition> ActiveRecipe = ObservedCrafting ? ObservedCrafting->GetActiveCraftRecipe() : nullptr;
 	if (ActiveRecipe && Recipes.Contains(ActiveRecipe))
 	{
@@ -267,7 +336,7 @@ void UCraftingPanelWidget::RefreshCraftingView()
 	{
 		if (Entry)
 		{
-			Entry->SetRecipe(UCraftingViewLibrary::BuildRecipeView(ObservedCrafting, Entry->GetRecipeClass()),
+			Entry->SetRecipe(BuildView(Entry->GetRecipeClass()),
 				Entry->GetRecipeClass() == SelectedRecipe);
 		}
 	}
@@ -301,7 +370,7 @@ void UCraftingPanelWidget::RebuildRecipeEntries(const TArray<TSubclassOf<UCrafti
 			continue;
 		}
 		// Seed the entry with its recipe so it knows its class before the first refresh.
-		Entry->SetRecipe(UCraftingViewLibrary::BuildRecipeView(ObservedCrafting, RecipeClass), RecipeClass == SelectedRecipe);
+		Entry->SetRecipe(BuildView(RecipeClass), RecipeClass == SelectedRecipe);
 		Entry->OnRecipeSelected.AddUniqueDynamic(this, &UCraftingPanelWidget::HandleRecipeEntrySelected);
 		RecipeList->AddChild(Entry);
 		RecipeEntries.Add(Entry);
@@ -311,7 +380,7 @@ void UCraftingPanelWidget::RebuildRecipeEntries(const TArray<TSubclassOf<UCrafti
 void UCraftingPanelWidget::RefreshDetails()
 {
 	SelectedView = SelectedRecipe
-		? UCraftingViewLibrary::BuildRecipeView(ObservedCrafting, SelectedRecipe)
+		? BuildView(SelectedRecipe)
 		: FCraftingRecipeView();
 	const bool bHasRecipe = SelectedView.bIsValid;
 	if (SelectedRecipeIcon)
@@ -321,7 +390,8 @@ void UCraftingPanelWidget::RefreshDetails()
 	}
 	if (SelectedRecipeName)
 	{
-		SelectedRecipeName->SetText(bHasRecipe ? SelectedView.RecipeName : LOCTEXT("NoRecipe", "No recipes available"));
+		SelectedRecipeName->SetText(bHasRecipe ? SelectedView.RecipeName
+			: IsStationContextLost() ? LOCTEXT("StationUnavailable", "Workstation unavailable") : LOCTEXT("NoRecipe", "No recipes available"));
 	}
 	if (SelectedRecipeDescription)
 	{

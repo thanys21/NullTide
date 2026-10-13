@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Crafting C7 (Timed Crafting) complete and approved. Crafting C8 (Workstations): design approved; C8A (station data model and authority) COMPLETE / APPROVED; C8B (Workbench actor and interaction) COMPLETE / APPROVED; C8C (workstation crafting UI) NEXT, not started. Crafting queue and the inventory/crafting UI-UX pass are deferred.
+> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Next planned major phase: Phase 5 Building (not started; needs explicit approval). Crafting queue and the inventory/crafting UI-UX pass are deferred.
 
 ---
 
@@ -812,9 +812,11 @@ Crafting C6B Craft Execution from UI ✅
 Crafting C7 Timed Crafting          ✅
 Crafting C8A Station Data/Authority  ✅
 Crafting C8B Workbench Actor/Interaction ✅
+Crafting C8C Workstation Crafting UI  ✅
+Phase 4 Crafting                    ✅
 
 NEXT:
-Crafting C8C Workstation Crafting UI (not started)
+Phase 5 Building (not started; needs explicit approval)
 ```
 
 ---
@@ -1113,7 +1115,7 @@ Approved design (details in `CRAFTING_PLAN.md`, C8):
 - Checkpoints:
   - C8A: data model and authority. COMPLETE / APPROVED; adds `Station_Workbench` and `Recipe_ShortSword` (Wood x2 + Scrap x4 -> ShortSword x1, 4 s, Workbench), not yet registered.
   - C8B: `ACraftingStationActor`, `BP_Workbench`, one bench placed in `Lvl_TopDown`. COMPLETE / APPROVED.
-  - C8C: UI integration, registration, PIE.
+  - C8C: UI integration, `Recipe_ShortSword` registered fourth, `BP_Workbench` opens `W_Inventory`. COMPLETE / APPROVED.
 
 ---
 
@@ -1445,13 +1447,13 @@ Do not implement without a dedicated milestone.
 
 ## Crafting — C8 Workstations
 
-C7 is complete and approved. The C8 design is approved (all nine decisions; see `CRAFTING_PLAN.md`, C8). C8A is complete and approved. C8B is complete and approved (183/183, cook PASS, manual rendered PIE 8 PASS + 1 N/A; see `CRAFTING_PROGRESS.md`, C8B). C8C is NEXT and not started.
+C7 is complete and approved. The C8 design is approved (all nine decisions; see `CRAFTING_PLAN.md`, C8). C8A is complete and approved. C8B is complete and approved (183/183, cook PASS, manual rendered PIE 8 PASS + 1 N/A; see `CRAFTING_PROGRESS.md`, C8B). C8C is complete and approved (190/190, cook PASS; manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; see `CRAFTING_PROGRESS.md`, C8C). C8 Workstations and Phase 4 Crafting are COMPLETE.
 
 Claude/Codex instruction:
 
 ```text
-1. Read CRAFTING_PLAN.md (C8) and CRAFTING_PROGRESS.md (C8A and C8B sections).
-2. Start C8C only after explicit approval.
+1. Read CRAFTING_PLAN.md (C8) and CRAFTING_PROGRESS.md (C8A, C8B and C8C sections).
+2. C8 is complete. Next work (Phase 5 Building, crafting queue, UI-UX pass) needs explicit approval.
 3. C8B: ACraftingStationActor (same shape as AStorageContainerActor),
    BP_Workbench implementing BPI_Interactable, one placed bench
    (World Partition external actor; the user saves it with Ctrl+S).
@@ -1526,6 +1528,16 @@ Full permanent suite                                                       183/1
 ```
 
 C8B Windows cook (editor closed): `Done!`, 0 errors, 2 environment warnings (621 cooked / 7 platform-skipped / 628 total); `BP_Workbench` and `Station_Workbench` cooked. One new World Partition external actor package (`C8B_Workbench`). Manual rendered PIE for C8B (performed and reported by the user): 8 PASS, 1 N/A (no door in `Lvl_TopDown`), 0 FAIL, 0 NOT TESTED.
+
+At the completion of Crafting C8C (approved; Phase 4 Crafting complete):
+
+```text
+Focused Crafting C8C                                                              7/7
+Crafting C1-C8C                                                                 69/69
+Full permanent suite                                                       190/190
+```
+
+C8C Windows cook (editor closed): `Done!`, 0 errors, 2 environment warnings (622 cooked / 7 platform-skipped / 629 total); `Station_Workbench`, `Recipe_ShortSword`, `BP_Workbench`, `W_Inventory` and `W_CraftingPanel` are all cooked. Content: `BP_Workbench` and `BP_TopDownCharacter` modified; World Partition unchanged. Manual rendered PIE for C8C (performed and reported by the user): 13 PASS, 1 N/A (station destruction, automation-covered), 0 FAIL. The user then found that `Tab` did not close the screen after a child widget took keyboard focus; it is fixed in `UInventoryScreenWidget::NativeOnPreviewKeyDown` with a regression test, and the user retest passed 6/6.
 
 Manual rendered PIE for C7 (performed and reported by the user): 12 PASS, 1 NOT TESTED. The click-to-move cancel case could not be run (cursor hidden in game mode) and remains a deferred manual verification; displacement cancel is covered by automation. Final pre-commit Windows cook: `Done!`, 0 errors (619/7/626).
 
@@ -1689,12 +1701,12 @@ Current input:
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
-- Crafting C8B 3/3 (C8A 11/11)
-- crafting C1-C8B 62/62
-- full 183/183
+- Crafting C8C 7/7 (C8B 3/3, C8A 11/11)
+- crafting C1-C8C 69/69
+- full 190/190
 
 Next:
-Crafting C8C (workstation crafting UI), after explicit approval.
+Phase 5 Building (next planned major phase; not started, needs explicit approval). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1724,7 +1736,7 @@ Phase 3  Resource Gathering                 ✅
 
          Inventory Stacking                 ✅
 
-Phase 4  Crafting                           ⏭ IN PROGRESS
+Phase 4  Crafting                           ✅
          C1 Recipe Data Model               ✅
          C2 Quantity Queries                ✅
          C3/C4 Atomic Craft Transaction     ✅
@@ -1733,12 +1745,12 @@ Phase 4  Crafting                           ⏭ IN PROGRESS
          C6A Crafting UI Foundation         ✅
          C6B Craft Execution from UI        ✅
          C7 Timed Crafting                  ✅
-         C8 Workstations                    ⏭ IN PROGRESS
+         C8 Workstations                    ✅
                 C8A Station data/authority  ✅
                 C8B Workbench actor          ✅
-                C8C Station crafting UI      ⏭ NEXT
+                C8C Station crafting UI      ✅
 
-Phase 5  Building
+Phase 5  Building                           ⏭ NEXT (not started)
 
 Phase 6  Colony
 

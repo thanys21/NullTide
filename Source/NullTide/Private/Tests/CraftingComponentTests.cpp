@@ -309,9 +309,10 @@ bool FCraftingC5RegistrationTest::RunTest(const FString& Parameters)
 	UClass* RecipeAxe = C5LoadRecipe(TEXT("Axe"));
 	UClass* RecipeWoodArrow = C5LoadRecipe(TEXT("WoodArrow"));
 	UClass* RecipePickaxe = C5LoadRecipe(TEXT("Pickaxe"));
-	TestTrue(TEXT("Production recipes load"), RecipeAxe && RecipeWoodArrow && RecipePickaxe);
-	TestTrue(TEXT("Production registration is Recipe_Axe, Recipe_WoodArrow, Recipe_Pickaxe in that order"),
-		Templates[0]->GetAvailableRecipes() == FC5RecipeList({ RecipeAxe, RecipeWoodArrow, RecipePickaxe }));
+	UClass* RecipeShortSword = C5LoadRecipe(TEXT("ShortSword"));
+	TestTrue(TEXT("Production recipes load"), RecipeAxe && RecipeWoodArrow && RecipePickaxe && RecipeShortSword);
+	TestTrue(TEXT("Production registration is Recipe_Axe, Recipe_WoodArrow, Recipe_Pickaxe, Recipe_ShortSword in that order"),
+		Templates[0]->GetAvailableRecipes() == FC5RecipeList({ RecipeAxe, RecipeWoodArrow, RecipePickaxe, RecipeShortSword }));
 	return true;
 }
 

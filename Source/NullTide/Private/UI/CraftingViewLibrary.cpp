@@ -2,6 +2,8 @@
 
 #include "Crafting/CraftingComponent.h"
 #include "Crafting/CraftingRecipeDefinition.h"
+#include "Crafting/CraftingStationComponent.h"
+#include "Crafting/CraftingStationDefinition.h"
 #include "Inventory/InventoryComponent.h"
 #include "Items/ItemDefinition.h"
 
@@ -26,10 +28,45 @@ FCraftingRequirementView MakeRequirementView(const FCraftingItemQuantity& Entry,
 	View.bSatisfied = bIsOutput || View.OwnedQuantity >= View.RequiredQuantity;
 	return View;
 }
+
+FText GetStationRequiredText(const FText& StationName)
+{
+	return StationName.IsEmpty()
+		? LOCTEXT("StationRequiredGeneric", "Requires a workstation.")
+		: FText::Format(LOCTEXT("StationRequired", "Requires {0}."), StationName);
+}
+
+FText GetStationOutOfRangeText(const FText& StationName)
+{
+	return StationName.IsEmpty()
+		? LOCTEXT("StationOutOfRangeGeneric", "Too far from the workstation.")
+		: FText::Format(LOCTEXT("StationOutOfRange", "Too far from the {0}."), StationName);
+}
 }
 
 FCraftingRecipeView UCraftingViewLibrary::BuildRecipeView(const UCraftingComponent* Crafting,
 	TSubclassOf<UCraftingRecipeDefinition> RecipeClass)
+{
+	return BuildRecipeViewAtStation(Crafting, RecipeClass, nullptr);
+}
+
+FText UCraftingViewLibrary::GetRequiredStationName(TSubclassOf<UCraftingRecipeDefinition> RecipeClass)
+{
+	const UClass* Class = RecipeClass.Get();
+	const UCraftingRecipeDefinition* Recipe = Class && !Class->HasAnyClassFlags(CLASS_Abstract)
+		? Class->GetDefaultObject<UCraftingRecipeDefinition>()
+		: nullptr;
+	const UClass* StationClass = IsValid(Recipe) ? Recipe->RequiredStation.Get() : nullptr;
+	if (!StationClass)
+	{
+		return FText::GetEmpty();
+	}
+	const UCraftingStationDefinition* Station = StationClass->GetDefaultObject<UCraftingStationDefinition>();
+	return IsValid(Station) && !Station->StationName.IsEmpty() ? Station->StationName : FText::FromString(StationClass->GetName());
+}
+
+FCraftingRecipeView UCraftingViewLibrary::BuildRecipeViewAtStation(const UCraftingComponent* Crafting,
+	TSubclassOf<UCraftingRecipeDefinition> RecipeClass, UCraftingStationComponent* Station)
 {
 	FCraftingRecipeView View;
 	View.RecipeClass = RecipeClass;
@@ -57,10 +94,11 @@ FCraftingRecipeView UCraftingViewLibrary::BuildRecipeView(const UCraftingCompone
 		View.Outputs.Add(MakeRequirementView(Output, Inventory, true));
 	}
 	View.RecipeIcon = Recipe->RecipeIcon ? Recipe->RecipeIcon.Get() : (View.Outputs.IsEmpty() ? nullptr : View.Outputs[0].ItemIcon.Get());
+	View.RequiredStationName = GetRequiredStationName(RecipeClass);
 
 	if (IsValid(Crafting))
 	{
-		View.CraftResult = Crafting->CanCraftRecipe(RecipeClass);
+		View.CraftResult = Crafting->CanCraftRecipeAtStation(RecipeClass, Station);
 	}
 	else
 	{
@@ -100,6 +138,10 @@ FText UCraftingViewLibrary::GetCraftStatusText(const FCraftingRecipeView& View)
 		return LOCTEXT("StatusTimed", "This recipe takes time to craft.");
 	case ECraftingTransactionResult::InventoryRejected:
 		return LOCTEXT("StatusRejected", "The inventory cannot accept this craft.");
+	case ECraftingTransactionResult::StationRequired:
+		return GetStationRequiredText(View.RequiredStationName);
+	case ECraftingTransactionResult::StationOutOfRange:
+		return GetStationOutOfRangeText(View.RequiredStationName);
 	case ECraftingTransactionResult::InvalidRecipe:
 	default:
 		return LOCTEXT("StatusInvalid", "This recipe cannot be crafted.");
@@ -145,6 +187,10 @@ FText UCraftingViewLibrary::GetCraftFeedbackText(const UCraftingComponent* Craft
 		return FText::Format(LOCTEXT("FeedbackStarted", "Crafting {0}..."), View.RecipeName);
 	case ECraftingTransactionResult::TimedCraftRequired:
 		return LOCTEXT("FeedbackTimed", "This recipe takes time to craft.");
+	case ECraftingTransactionResult::StationRequired:
+		return GetStationRequiredText(View.RequiredStationName);
+	case ECraftingTransactionResult::StationOutOfRange:
+		return GetStationOutOfRangeText(View.RequiredStationName);
 	case ECraftingTransactionResult::InventoryRejected:
 	default:
 		return LOCTEXT("FeedbackFailed", "Crafting failed.");
@@ -153,12 +199,25 @@ FText UCraftingViewLibrary::GetCraftFeedbackText(const UCraftingComponent* Craft
 
 FText UCraftingViewLibrary::GetCraftCancelledText(const ECraftCancelReason Reason)
 {
+	return GetCraftCancelledTextForRecipe(Reason, nullptr);
+}
+
+FText UCraftingViewLibrary::GetCraftCancelledTextForRecipe(const ECraftCancelReason Reason,
+	TSubclassOf<UCraftingRecipeDefinition> RecipeClass)
+{
 	switch (Reason)
 	{
 	case ECraftCancelReason::Movement:
 		return LOCTEXT("CancelledMovement", "Crafting cancelled: you moved.");
 	case ECraftCancelReason::Jump:
 		return LOCTEXT("CancelledJump", "Crafting cancelled: you jumped.");
+	case ECraftCancelReason::StationLost:
+	{
+		const FText StationName = GetRequiredStationName(RecipeClass);
+		return StationName.IsEmpty()
+			? LOCTEXT("CancelledStationLostGeneric", "Crafting cancelled: the workstation is gone.")
+			: FText::Format(LOCTEXT("CancelledStationLost", "Crafting cancelled: the {0} is gone."), StationName);
+	}
 	case ECraftCancelReason::Explicit:
 	default:
 		return LOCTEXT("CancelledExplicit", "Crafting cancelled.");

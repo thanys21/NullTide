@@ -13,7 +13,7 @@ Plan and design decisions: `CRAFTING_PLAN.md`.
 | C6A Crafting UI Foundation | COMPLETE (approved; manual rendered PIE 12/12 PASS, user-confirmed) |
 | C6B Craft Execution from UI | COMPLETE (manual rendered PIE 12/12 PASS, user-confirmed) |
 | C7 Timed Crafting | COMPLETE / APPROVED (manual rendered PIE: 12 PASS, 1 NOT TESTED; user-confirmed) |
-| C8 Workstations | IN PROGRESS: design approved; C8A COMPLETE / APPROVED (180/180); C8B COMPLETE / APPROVED (183/183, cook PASS, manual rendered PIE 8 PASS + 1 N/A, user-confirmed); C8C NEXT, not started |
+| C8 Workstations | COMPLETE / APPROVED: C8A (180/180), C8B (183/183, PIE 8 PASS + 1 N/A), C8C (190/190, cook PASS, PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS). Phase 4 Crafting COMPLETE. |
 
 ## C1 - Recipe Data Model
 
@@ -655,6 +655,126 @@ Expected C8B behaviour: `F` on the bench does nothing visible. The Output Log sh
 
 PIE results (performed and reported by the user; the agent did not run or observe PIE): **8 PASS, 1 N/A, 0 FAIL, 0 NOT TESTED**. Items 1-6, 8 and 9 passed; item 7 (door) is N/A because no door actor exists in `Lvl_TopDown`.
 
+## C8C - Workstation Crafting UI Integration
+
+### Baseline and Scope
+
+- Baseline: `49f38ca` (C8B approved and committed; C8A and C8B not pushed). Previous full automation 183/183.
+- Goal: the Workbench loop. `F` at the bench opens `W_Inventory` in Workbench context, ShortSword is crafted on the player's `UCraftingComponent` in 4 s, and ingredients are consumed atomically at completion.
+- COMPLETE / APPROVED by the user. Manual rendered PIE: 13 PASS, 1 N/A; the Tab focus regression found in that run is fixed (`NativeOnPreviewKeyDown`) and the retest passed 6/6. Final automation 190/190, cook PASS. Committed as the C8C milestone; this completes C8 Workstations and Phase 4 Crafting.
+
+### Source Files
+
+- `Public/Crafting/CraftingStationActor.h` + `Private/Crafting/CraftingStationActor.cpp`: real open path and a cached screen.
+- `Public/UI/InventoryScreenWidget.h` + `.cpp`: `CraftingPanel` binding, station context, close on station loss; `CloseInventory` is now public.
+- `Public/UI/CraftingPanelWidget.h` + `.cpp`: station context, filtered list, station-aware queries and requests, title, lost-station state.
+- `Public/UI/CraftingViewLibrary.h` + `.cpp`: `BuildRecipeViewAtStation`, `RequiredStationName`, station texts, `GetCraftCancelledTextForRecipe`, `GetRequiredStationName`.
+- Tests:
+  - `Private/Tests/CraftingStationTests.cpp`: new C8C tests, plus two updated assertions. C8A `ProductionStationAssets` now expects `Recipe_ShortSword` to be registered. C8B expects `BP_Workbench` to open `W_Inventory`, and a valid request is checked for `Ready` without opening a screen.
+  - `Private/Tests/CraftingComponentTests.cpp`: the C5 registration test expects four recipes.
+- Not changed: `UCraftingComponent`, inventory, storage, gathering, `IMC_Default`, `BP_TopDownController`.
+
+### Behaviour
+
+- **Opening (`ACraftingStationActor::OpenCraftingForInteractor`).**
+  - `GetOpenCraftingResult` must be `Ready`.
+  - The station reuses its cached `CraftingScreenClass` instance (a weak pointer) when the same player opens it again; a different player gets a new instance.
+  - `OpenForCraftingStation(Station)` runs before the screen is added to the viewport. If it fails, nothing is shown and input is untouched.
+  - After success: add to the viewport (Z-order 100), show the cursor, set UI-only input focused on the screen, set keyboard focus. `I`, `Tab` and `Esc` close it through the existing `NativeOnKeyDown`.
+- **Station screen (`UInventoryScreenWidget`).**
+  - `OpenForCraftingStation` requires a usable station and a bound `CraftingPanel`.
+  - It stores a weak station pointer and forwards it to the panel.
+  - `CloseInventory` and `NativeDestruct` clear the context (the panel returns to hand), so a reused instance never comes back with a stale station.
+  - `ValidateCraftingStationContext` runs every tick and closes the screen, restoring game input and the hidden cursor, when the station actor is destroyed or the station component or its definition becomes invalid.
+  - The controller-owned hand screen never gets a context. Backpack, details, equipment and drag/drop are untouched.
+- **Panel (`UCraftingPanelWidget`).**
+  - `SetCraftingStation` keeps a weak UI context only.
+  - Hand context: `GetRecipesForStation(nullptr)` (Axe, WoodArrow, Pickaxe; ShortSword never appears), `CanCraftRecipe` through the view builder, `TryStartCraft`.
+  - Workbench context: `GetRecipesForStation(Station)` (ShortSword, Axe, WoodArrow, Pickaxe), `CanCraftRecipeAtStation`, `TryStartCraftAtStation`, and the title "WORKBENCH" (station name in upper case) on the existing `PanelTitle`.
+  - A context change resets the selection to the listed active craft or the first listed recipe.
+  - A lost station context lists nothing, shows "Workstation unavailable" and refuses CRAFT; CANCEL of an active craft still works.
+  - Progress, remaining time and CANCEL always follow the player's active craft. A Workbench craft seen from the hand screen shows its progress and can be cancelled without ShortSword being added to the hand list.
+- **Text:** "Requires Workbench.", "Too far from the Workbench.", "Crafting cancelled: the Workbench is gone.", all built from the recipe's `RequiredStation` name.
+
+### Content (through Unreal MCP)
+
+- `BP_Workbench`: `CraftingScreenClass = W_Inventory`.
+- `BP_TopDownCharacter`: `CraftingComponent.AvailableRecipes = [Recipe_Axe, Recipe_WoodArrow, Recipe_Pickaxe, Recipe_ShortSword]`; the existing order is unchanged.
+- Both were compiled with warnings as errors and saved by explicit path.
+- `W_CraftingPanel` and `W_Inventory` were not modified. `W_Inventory`'s existing `CraftingPanel` widget binds to the new native property; MCP reports it as inherited.
+- Blueprint and UMG compile with warnings as errors after the final build: `W_CraftingRequirementRow`, `W_CraftingRecipeEntry`, `W_CraftingPanel`, `W_Inventory`, `BP_Workbench`, `BP_TopDownCharacter` and `BP_TopDownController` all passed. None became dirty.
+- Content delta: 2 modified (`BP_Workbench`, `BP_TopDownCharacter`), 0 added. World Partition unchanged: 91 external actor packages and 3 external object packages, no map change.
+
+### Validation
+
+- `NullTideEditor Win64 Development` build with the editor closed: succeeded, no compiler warnings.
+- Focused `NullTide.Crafting.C8C`: 6/6 passed.
+  - `WorkbenchAndHandRecipeLists`: ordering, ShortSword filtering, title, selection, single delegate bindings.
+  - `StationRequiredAndOutOfRangeFeedback`: "Requires Workbench." and "Too far from the Workbench." in status and feedback, CRAFT disabled out of range, no mutation.
+  - `WorkbenchShortSwordCraft`: CRAFT through `W_Inventory` at the Workbench, 4 s, CANCEL label and progress, closing the screen does not cancel, Wood 2 and Scrap 4 consumed from existing stacks, ShortSword x1, exactly one revision, one inventory event and one result; atomic refusal without Scrap.
+  - `StationLostAndInvalidatedScreens`: StationLost feedback, the panel becomes unusable, and the screen closes and clears its context when the station actor is destroyed, the station component is destroyed or the definition is cleared; rejected opens leave a hand screen.
+  - `ScreenContextIsolationAndReopen`: two `W_Inventory` instances keep separate contexts; close and reopen at another bench have no stale context; repeated open and close never stack bindings.
+  - `HandScreenShowsActiveWorkbenchCraft`: the hand list excludes ShortSword while CANCEL, 25 % progress and "3.0 s" follow the Workbench craft; CANCEL from the hand screen cancels it with no consumption; a hand Pickaxe still crafts afterwards.
+- The first C8C run failed 4 tests because the panel kept the previous selection (Axe) after switching to the Workbench context. This was fixed in the panel (a context change resets the selection) and all tests reran green.
+- Crafting `NullTide.Crafting`: 68/68 (C1 5, C2 5, C3C4 8, C5 9, C6A 6, C6B 6, C7 9, C8A 11, C8B 3, C8C 6).
+- Inventory 53, Gameplay 50, ResourceGathering 18, all passed (Inventory includes G7 storage).
+- Full permanent automation `NullTide`: 189/189 (183 previous + 6 C8C); 190/190 after the Tab focus fix (+1 regression test).
+- Windows cook with the editor closed: `Done!`, `Success - 0 error(s), 2 warning(s)` (environment only); 622 cooked, 7 platform-skipped, 629 total. `Station_Workbench`, `Recipe_ShortSword`, `BP_Workbench`, `W_Inventory` and `W_CraftingPanel` are all in the cooked asset registry; `Recipe_ShortSword` is newly cooked now that it is registered.
+
+### Manual Rendered PIE Checklist (for the user; not run by the agent)
+
+Setup tip: pick up Wood and Scrap (the Scrap nodes need no tool), or use existing pickups, so you have Wood x2 and Scrap x4.
+
+1. `F` at the Workbench opens the inventory and crafting screen.
+2. The crafting column title reads WORKBENCH.
+3. The recipe list order is Short Sword, Axe, Wood Arrow, Pickaxe, with Short Sword selected.
+4. Closing it and opening the hand screen with `I` or `Tab` shows CRAFTING and no Short Sword.
+5. Crafting Short Sword at the bench completes after about 4 seconds.
+6. Wood -2 and Scrap -4 are consumed once, and one Short Sword is added.
+7. The CANCEL button cancels a running Short Sword craft with no consumption.
+8. Starting a Short Sword craft, closing the screen and moving cancels it: no Short Sword appears and nothing is consumed. The cancel message is not shown after reopening; that is the known C7 limitation in the deferred UI/UX pass.
+9. Closing the screen without moving does not cancel; the craft completes.
+10. During a Workbench craft, the hand screen (`I`/`Tab`) shows the Short Sword progress and remaining time, and its CANCEL cancels it, while the hand list still excludes Short Sword.
+11. Storage interaction still works.
+12. Tree, Rock and Scrap gathering still work.
+13. No cursor or focus lock after closing either screen, and no duplicate screens (`F` again reopens one screen; `I`/`Tab`/`Esc` close it).
+14. Station invalidation or destruction: NOT safely testable in normal play (no in-game way to destroy the bench); covered by automation.
+
+PIE results (performed and reported by the user; the agent did not run or observe PIE): **13 PASS, 1 N/A, 0 FAIL** on the checklist above. Item 14 is N/A (station destruction and invalidation are covered by automation). The user accepted C8C gameplay, with one condition below.
+
+### Tab Focus Regression (found by the user during C8C PIE; fixed before commit)
+
+- **Symptom.** After clicking or selecting an inventory item (or recipe entry), `Tab` no longer closed the inventory or Workbench screen. Instead Slate moved keyboard focus and drew a blue focus outline on another widget (the user's screenshot shows the outline on a recipe entry).
+- **Cause.** For any focusable widget, `SWidget::OnKeyDown` maps `Tab` to `EUINavigation::Next` and returns `Handled().SetNavigation(...)`. Once a slot, recipe entry or button had keyboard focus, `Tab` was consumed there as focus navigation and never bubbled up to `UInventoryScreenWidget::NativeOnKeyDown`. `I` and `Esc` are not navigation keys, so they still reached the screen. The bug exists since C6A added `Tab`; C8C made it visible because the station screen is used with many focusable children.
+- **Fix (source only).**
+  - `UInventoryScreenWidget::NativeOnPreviewKeyDown`: the preview (tunnelling) pass runs from the screen down to the focused child, so the screen sees the key first. `I`, `Tab` and `Esc` close the screen there.
+  - `NativeOnKeyDown` keeps the same handling for the case where the screen itself has focus.
+  - Both use one `IsCloseKey` check and the existing `CloseInventory` path: context cleared, game input and hidden cursor restored, crafting not cancelled.
+  - Only this screen class is affected. Arrow keys and other keys keep normal navigation, and `Tab` navigation elsewhere in the game is untouched. No change to `IMC_Default`, `BP_TopDownController`, the storage screen or any asset.
+- **Regression test.** `NullTide.Crafting.C8C.TabClosesScreenFromFocusedChild` uses the real Slate widgets.
+  - It shows that a focusable child (the CRAFT/CANCEL `SButton`) consumes `Tab` as `Next` navigation, which is the bug mechanism.
+  - The screen's `SObjectWidget::OnPreviewKeyDown(Tab)` closes the Workbench screen: removed from its host, context cleared, the running ShortSword craft continues and later completes.
+  - Down and `A` are not handled.
+  - `Tab`, `I` and `Esc` each close the hand screen.
+- **Validation after the fix.**
+  - Clean rebuild (Clean, then Build) succeeded with no compiler warnings.
+  - Focused C8C: 7/7. Crafting: 69/69 (C8C 7). Inventory 53 (including G7 storage), Gameplay 50 (G4 inventory UI 13 and G5 drag/drop 3 among them), ResourceGathering 18.
+  - Full automation: **190/190** (189 + 1).
+  - Windows cook (editor closed): `Done!`, 0 errors, 2 environment warnings; 622/7/629.
+  - Content and World Partition unchanged by the fix (still only `BP_Workbench` and `BP_TopDownCharacter` modified; 91 external actor and 3 external object packages).
+  - No Blueprint-visible property changed (only a native virtual override), so no Blueprint or UMG asset needed recompiling or saving.
+
+### Manual PIE Retest (Tab fix; for the user)
+
+1. Hand screen (`I` or `Tab`): click an inventory slot, then press `Tab`. The screen closes, the cursor hides, and the character moves normally.
+2. Same with a crafting recipe entry clicked first.
+3. Workbench screen (`F`): click a slot or a recipe entry, then press `Tab`. The screen closes.
+4. With a Workbench craft running, close with `Tab` after clicking a slot. The craft continues and completes.
+5. `I` and `Esc` still close both screens after clicking a slot.
+6. Storage screen: `I` and `Esc` still close it (unchanged; `Tab` was never a storage close key).
+
+PIE retest results (performed and reported by the user; the agent did not run or observe PIE): **6/6 PASS**. Across both C8C runs: 19 PASS, 1 N/A, no blocking failures.
+
 ## Next Checkpoint
 
-C8C - Workstation crafting UI: NEXT, not started (needs explicit go-ahead). Crafting queue and the inventory/crafting UI-UX pass remain deferred.
+Phase 4 Crafting is COMPLETE (C1-C8). The next planned major phase is Phase 5 Building (not started; needs explicit approval). Crafting queue and the inventory/crafting UI-UX pass remain deferred.

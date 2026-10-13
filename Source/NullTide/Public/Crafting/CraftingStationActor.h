@@ -51,9 +51,10 @@ public:
 	ECraftingStationOpenResult GetOpenCraftingResult(AActor* Interactor) const;
 
 	/**
-	 * Call from the BPI_Interactable Interact event. Validates the request and opens the crafting screen for
-	 * this station. Any rejected request opens nothing and leaves input mode, cursor and movement unchanged.
-	 * The crafting screen is wired in C8C; until then this always returns false.
+	 * Call from the BPI_Interactable Interact event. Validates the request, puts this station's cached
+	 * CraftingScreenClass instance (W_Inventory) in station context, then shows it with the cursor, UI-only input
+	 * and keyboard focus (I, Tab and Esc close it). Any rejected request opens nothing and leaves input mode,
+	 * cursor and movement unchanged.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Crafting|Station|Interaction")
 	bool OpenCraftingForInteractor(AActor* Interactor);
@@ -77,6 +78,9 @@ protected:
 	TSubclassOf<UInventoryScreenWidget> CraftingScreenClass;
 
 private:
+	/** This station's screen; reused across openings for the same player. Its station context is reset on close. */
+	TWeakObjectPtr<UInventoryScreenWidget> ActiveCraftingScreen;
+
 	/** The interacting pawn and its player controller; either may be null. */
 	static void ResolveInteractor(AActor* Interactor, APawn*& OutPawn, APlayerController*& OutController);
 };

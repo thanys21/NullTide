@@ -6,6 +6,8 @@
 #include "Components/TextBlock.h"
 #include "Components/WrapBox.h"
 #include "Components/Widget.h"
+#include "Crafting/CraftingRecipeDefinition.h"
+#include "Crafting/CraftingStationComponent.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
@@ -14,6 +16,7 @@
 #include "Items/Fragments/ItemFragment_Tool.h"
 #include "Items/ItemInstance.h"
 #include "ToolLoadout/ToolLoadoutComponent.h"
+#include "UI/CraftingPanelWidget.h"
 #include "UI/InventoryDragDropOperation.h"
 #include "UI/InventorySlotWidget.h"
 
@@ -34,6 +37,8 @@ void UInventoryScreenWidget::NativeConstruct()
 
 void UInventoryScreenWidget::NativeDestruct()
 {
+	// A reused station screen must never come back with a stale station.
+	ClearCraftingStation();
 	ReleaseInventoryBinding();
 	if (ObservedController)
 	{
@@ -49,6 +54,10 @@ void UInventoryScreenWidget::NativeDestruct()
 void UInventoryScreenWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+	if (!ValidateCraftingStationContext())
+	{
+		return;
+	}
 	APawn* CurrentPawn = GetOwningPlayerPawn();
 	UInventoryComponent* CurrentInventory = CurrentPawn ? CurrentPawn->FindComponentByClass<UInventoryComponent>() : nullptr;
 	UToolLoadoutComponent* CurrentToolLoadout = CurrentPawn ? CurrentPawn->FindComponentByClass<UToolLoadoutComponent>() : nullptr;
@@ -58,9 +67,26 @@ void UInventoryScreenWidget::NativeTick(const FGeometry& MyGeometry, const float
 	}
 }
 
+bool UInventoryScreenWidget::IsCloseKey(const FKey& Key)
+{
+	return Key == EKeys::I || Key == EKeys::Tab || Key == EKeys::Escape;
+}
+
+FReply UInventoryScreenWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
+{
+	// Slate turns Tab into focus navigation on any focusable child before the key bubbles back to this screen,
+	// so the close keys are taken in the preview (tunnelling) pass. Other keys keep their normal navigation.
+	if (IsCloseKey(InKeyEvent.GetKey()))
+	{
+		CloseInventory();
+		return FReply::Handled();
+	}
+	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
+}
+
 FReply UInventoryScreenWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
-	if (InKeyEvent.GetKey() == EKeys::I || InKeyEvent.GetKey() == EKeys::Tab || InKeyEvent.GetKey() == EKeys::Escape)
+	if (IsCloseKey(InKeyEvent.GetKey()))
 	{
 		CloseInventory();
 		return FReply::Handled();
@@ -177,8 +203,48 @@ void UInventoryScreenWidget::HandleSlotSelected(const FGuid ItemId)
 	RefreshToolLoadout();
 }
 
+bool UInventoryScreenWidget::OpenForCraftingStation(UCraftingStationComponent* Station)
+{
+	if (!IsValid(Station) || !Station->IsStationUsable() || !CraftingPanel)
+	{
+		return false;
+	}
+	CraftingStation = Station;
+	bCraftingStationScreen = true;
+	CraftingPanel->SetCraftingStation(Station);
+	return true;
+}
+
+UCraftingStationComponent* UInventoryScreenWidget::GetCraftingStation() const
+{
+	UCraftingStationComponent* Station = CraftingStation.Get();
+	return bCraftingStationScreen && IsValid(Station) && Station->IsStationUsable() ? Station : nullptr;
+}
+
+bool UInventoryScreenWidget::ValidateCraftingStationContext()
+{
+	if (!bCraftingStationScreen || GetCraftingStation())
+	{
+		return true;
+	}
+	// The station actor was destroyed or its station component became invalid: close, never keep a dead context.
+	CloseInventory();
+	return false;
+}
+
+void UInventoryScreenWidget::ClearCraftingStation()
+{
+	if (bCraftingStationScreen && CraftingPanel)
+	{
+		CraftingPanel->SetCraftingStation(nullptr);
+	}
+	CraftingStation.Reset();
+	bCraftingStationScreen = false;
+}
+
 void UInventoryScreenWidget::CloseInventory()
 {
+	ClearCraftingStation();
 	if (APlayerController* PlayerController = GetOwningPlayer())
 	{
 		PlayerController->SetShowMouseCursor(false);

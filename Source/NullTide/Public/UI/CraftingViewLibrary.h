@@ -8,6 +8,7 @@
 
 class UCraftingComponent;
 class UCraftingRecipeDefinition;
+class UCraftingStationComponent;
 class UItemDefinition;
 class UTexture2D;
 
@@ -78,6 +79,10 @@ struct NULLTIDE_API FCraftingRecipeView
 	/** Player-facing status line for CraftResult. */
 	UPROPERTY(BlueprintReadOnly, Category = "Crafting|UI")
 	FText StatusText;
+
+	/** Display name of the recipe's RequiredStation ("Workbench"); empty for hand recipes. */
+	UPROPERTY(BlueprintReadOnly, Category = "Crafting|UI")
+	FText RequiredStationName;
 };
 
 /** Builds crafting display data. Reads only; never crafts or changes inventory. */
@@ -87,8 +92,14 @@ class NULLTIDE_API UCraftingViewLibrary : public UBlueprintFunctionLibrary
 	GENERATED_BODY()
 
 public:
+	/** Hand context: the view's CraftResult is UCraftingComponent::CanCraftRecipe. */
 	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
 	static FCraftingRecipeView BuildRecipeView(const UCraftingComponent* Crafting, TSubclassOf<UCraftingRecipeDefinition> RecipeClass);
+
+	/** Station context (null = hand): the view's CraftResult is UCraftingComponent::CanCraftRecipeAtStation. */
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	static FCraftingRecipeView BuildRecipeViewAtStation(const UCraftingComponent* Crafting,
+		TSubclassOf<UCraftingRecipeDefinition> RecipeClass, UCraftingStationComponent* Station);
 
 	/** Status line for a craft result; names the missing ingredient when the view has it. */
 	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
@@ -105,6 +116,14 @@ public:
 	/** Message for a cancelled timed craft: "Crafting cancelled.", "... you moved.", "... you jumped." */
 	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
 	static FText GetCraftCancelledText(ECraftCancelReason Reason);
+
+	/** GetCraftCancelledText, naming the recipe's station for StationLost ("Crafting cancelled: the Workbench is gone."). */
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	static FText GetCraftCancelledTextForRecipe(ECraftCancelReason Reason, TSubclassOf<UCraftingRecipeDefinition> RecipeClass);
+
+	/** Display name of a recipe's RequiredStation; empty for hand recipes and invalid classes. */
+	UFUNCTION(BlueprintPure, Category = "Crafting|UI")
+	static FText GetRequiredStationName(TSubclassOf<UCraftingRecipeDefinition> RecipeClass);
 
 	/** "Crafting Pickaxe... 1.4 s" for the component's active timed craft; empty when idle. */
 	UFUNCTION(BlueprintPure, Category = "Crafting|UI")

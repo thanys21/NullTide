@@ -1,6 +1,6 @@
 # Null Tide — Master Project Plan
 
-> **Purpose:** Single source of truth for Claude Code / Codex / human development.
+> **Purpose:** Single source of truth for Claude Code and human development.
 >
 > **Project:** Null Tide  
 > **Engine:** Unreal Engine 5.8.2  
@@ -69,7 +69,7 @@ Main map:
 - Visual Studio Code
 - Visual Studio 2022 C++ toolchain
 - Claude Code
-- OpenAI Codex
+- OpenAI Codex (optional read-only reviewer, only when the user brings it in)
 - Unreal MCP
 - Git / GitHub
 
@@ -99,7 +99,7 @@ Generate project files:
 
 # 3. Critical Development Rules
 
-These rules apply to Claude Code, Codex, and human edits.
+These rules apply to Claude Code, any other agent, and human edits.
 
 ## Unreal asset safety
 
@@ -130,11 +130,11 @@ Every milestone should normally use:
 5. Windows cook
 6. Content/map audit
 7. report/progress docs
-8. independent Codex code review and finding resolution
+8. self-review (including a fresh-context review pass for native code) and the handoff report
 9. user-approved Git commit
 ```
 
-These steps run inside the nine-step checkpoint workflow in `AGENTS.md` (section "Multi-Agent Workflow — Claude Implementer / Codex Reviewer"). That workflow also adds the plan review and user approval gate before implementation, and it defines the review handoff.
+These steps run inside the nine-step checkpoint workflow in `AGENTS.md` (section "Development Workflow — Claude Plans and Implements, User Approves"). That workflow also adds the plan self-critique and user approval gate before implementation, and it defines the self-review and the handoff report.
 
 Do not fabricate manual PIE observations.
 
@@ -195,19 +195,18 @@ Claude should use Unreal MCP for:
 - asset validation;
 - Unreal automation.
 
-## Multi-agent rule
+## Agent roles
 
-The roles are fixed:
+The user decided on 2026-10-14 that Claude does both planning and implementation, and the user approves:
 
 ```text
-Claude Code → sole implementer and write owner (code, tests, docs, Content, Git)
-Codex       → independent read-only review of plans and code
-User        → final approval, disagreements, manual PIE, commit and push authorization
+Claude Code → plans, self-critiques, implements, validates, self-reviews; sole write owner (code, tests, docs, Content, Git)
+User        → approves plans and decisions, manual PIE, commit and push authorization
 ```
 
-Only Claude writes to the repository or modifies Unreal assets. Codex never modifies files, assets or Git state.
+No standing reviewer agent is used. Another agent takes part only when the user explicitly brings one in for a specific task, and then only as a read-only reviewer. Only Claude writes to the repository or modifies Unreal assets.
 
-The detailed workflow is in `AGENTS.md`, section "Multi-Agent Workflow — Claude Implementer / Codex Reviewer", and that section is the authority. It covers roles, the checkpoint steps, the review handoff, the review quality contract and finding resolution.
+The detailed workflow is in `AGENTS.md`, section "Development Workflow — Claude Plans and Implements, User Approves", and that section is the authority. It covers roles, the checkpoint steps, the self-review, the handoff report and the handling of findings.
 
 ---
 
@@ -1497,7 +1496,7 @@ Content/map audit
     +
 Progress/report docs
     +
-Independent Codex review, findings resolved
+Self-review (fresh-context pass for native code), findings resolved
     +
 User-approved Git commit
 ```
@@ -1628,7 +1627,7 @@ When Claude starts a task:
 10. Stop before the next milestone.
 ```
 
-Follow the checkpoint workflow in `AGENTS.md`: stop after a new plan for Codex review and user approval, and stop before every commit with the review handoff defined in `CLAUDE.md`.
+Follow the checkpoint workflow in `AGENTS.md`: stop after a new plan (with its self-critique) for user approval, and stop before every commit with the handoff report defined in `CLAUDE.md`.
 
 When touching Unreal Content:
 

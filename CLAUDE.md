@@ -81,7 +81,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
-- `NullTide.Building.{B1,B2}`
+- `NullTide.Building.{B1,B2,B3}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -163,7 +163,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - `ValidatePlacement` is read-only. It recomputes surface, layer and transform (never trusts the caller) and checks, in order: definition, shape, range (600 cm), support surface (`WorldStatic` or `Active` floor; slope ≤ 30°, unevenness ≤ 25 cm), occupancy, blocking collision (Pawn channel, ground excluded geometrically, not by identity), builder safety.
 - `UBuildingPieceComponent` holds per-piece metadata and state (`Provisional`/`Active`/`Removing`). `ABuildingPieceActor` is a thin host whose `SetProvisional` hides the piece and removes collision and navigation.
 - Building never changes inventory, crafting, storage or interaction authority. The construction transaction (B2) uses only `UInventoryComponent::TryApplyDefinitionTransaction`.
-- `UConstructionComponent` (B2) is a builder's construction authority (the `UCraftingComponent` pattern; not yet on `BP_TopDownCharacter`, that is B3).
+- `UConstructionComponent` (B2) is a builder's construction authority (the `UCraftingComponent` pattern). Since B3, `BP_TopDownCharacter` has one, named `ConstructionComponent`, with `AvailableBuildings = [Building_WoodFloor]`.
   - It holds `AvailableBuildings` and exposes `GetAvailableBuildings`, `CanBuild` (exact read-only preflight) and `TryBuild`.
   - `OnBuildResult` fires exactly once per non-reentrant request; a nested request returns `BuildInProgress` without notifying.
   - **`TryBuild` activates first and pays last** (`BUILDING_PLAN.md` 5.2.3):
@@ -199,6 +199,10 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - The main map is `/Game/TopDown/Lvl_TopDown`.
 - `BP_TopDownCharacter` holds the components and `BP_TopDownController` opens the inventory UI on `IA_OpeningInventory` (`I` or `Tab` in `IMC_Default`). The open screen closes on `I`, `Tab` or `Esc`.
 - `BP_PickUpItem` is the generic world pickup.
+- Building assets live in `Content/LevelPrototyping/BuildingSystem/`:
+  - `Pieces/BP_BuildFloor`: a child of `ABuildingPieceActor`. It only sets the inherited `PieceMesh`; it adds no components and keeps an unscaled root.
+  - `Definitions/Building_WoodFloor`: Wood × 4.
+- The `Lvl_TopDown` ground `Floor_0` is `WorldDynamic` (`BlockAllDynamic`). B1 placement validation does not treat it as support yet; B4 decides this.
 
 ## Milestone docs
 

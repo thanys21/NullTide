@@ -8,8 +8,9 @@ Plan and design decisions: `BUILDING_PLAN.md`.
 | --- | --- |
 | B0 Architecture audit and design | APPROVED (user) |
 | B1 Data model, grid coordinates, occupancy and placement validation | COMPLETE / APPROVED (8/8; full automation 198/198; cook PASS; no manual PIE required) |
-| B2 Construction authority | IMPLEMENTED AND VALIDATED — awaiting user acceptance (20/20; full automation 219/219; cook PASS; no manual PIE required). Design approved 2026-10-14 (D1–D8, D3 option (a)). |
-| B3–B6 | NOT STARTED |
+| B2 Construction authority | COMPLETE / APPROVED (20/20; full automation 219/219; cook PASS; no manual PIE required; commit `bccd0bc`, pushed). Design approved 2026-10-14 (D1–D8, D3 option (a)). |
+| B3 First buildable: Wooden Floor | IMPLEMENTED AND VALIDATED — awaiting user acceptance (4/4; full automation 223/223; cook PASS 624/7/631; no manual PIE required). Plan approved 2026-10-15. |
+| B4–B6 | NOT STARTED |
 
 ## B1 - Data Model, Grid Coordinates, Occupancy and Placement Validation
 
@@ -358,8 +359,78 @@ P2 findings and their resolution (fixed before the clean build, then the full va
   - The piece root must be unscaled, because the exact-transform check compares scale.
 - **Wiring:** the component is not on `BP_TopDownCharacter` yet (B3).
 
+## B3 - First Buildable: Wooden Floor
+
+### Baseline and Scope
+
+- **Baseline:** `bccd0bc` (B2 committed and pushed). Full automation 219/219, cook 622/7/629.
+- **Scope (user-approved 2026-10-15, `BUILDING_PLAN.md` section 7 B3; decisions B3-1 to B3-3 as recommended):**
+  - the production floor piece and definition;
+  - `UConstructionComponent` on the player;
+  - 4 tests.
+- **Not in scope:** input, building mode or UI (B4), walls, doors, demolition, map changes, art. No production C++ change.
+
+### Assets (Unreal MCP; saved by explicit path)
+
+| Asset | Content |
+| --- | --- |
+| `/Game/LevelPrototyping/BuildingSystem/Pieces/BP_BuildFloor` (new) | Blueprint child of `ABuildingPieceActor`, created with `BlueprintTools.create`. The inherited `PieceMesh` was set on the class default object (`ObjectTools.set_properties`):<br>• `/Engine/BasicShapes/Cube`, relative location (0, 0, 5), scale (2, 2, 0.1), so 200 × 200 × 10 cm with its top at 10 cm;<br>• collision stays the native `BlockAllDynamic`;<br>• default engine material (B3-1).<br>The root is unscaled; no added components; no graph logic. |
+| `/Game/LevelPrototyping/BuildingSystem/Definitions/Building_WoodFloor` (new) | Data-only `UBuildingDefinition`: "Wooden Floor" with a description, Foundation, GridCell, 1 × 1, 90°. `PieceActorClass` is `BP_BuildFloor`. Cost [`Item_Wood` × 4], refund 0.5, default range, no icon (B3-3). The data was set on the CDO before the first compile. |
+| `/Game/TopDown/Blueprints/BP_TopDownCharacter` (modified) | One `UConstructionComponent` named `ConstructionComponent` (`ActorTools.add_component`), with `AvailableBuildings = [Building_WoodFloor]`. Nothing else changed. |
+
+- **Compile:** all three compiled with warnings as errors.
+- **Save-time data validation:** validated 3 assets, no errors.
+- **Before saving, other packages were confirmed not dirty:**
+  - `Lvl_TopDown`, `BP_TopDownController`;
+  - `InventoryManagerComponent`, `Item_Wood`, `BP_PickUpItem`;
+  - `W_Inventory`, `BP_Workbench`, `Recipe_Axe`;
+  - `PlayerInteractionComponent`.
+- **Plan risk R-1 (MCP editing an inherited native component) did not occur.**
+
+### Tests `NullTide.Building.B3.*` (4, in `ConstructionTests.cpp`, reusing the B2 fixture)
+
+| Test | Covers |
+| --- | --- |
+| `ProductionDefinition` | `Building_WoodFloor` is valid; name, category, mode, footprint, step; cost exactly `Item_Wood` × 4; refund 0.5; default range; piece `BP_BuildFloor`; no icon; `IsDataValid`. |
+| `ProductionPieceContract` | `BP_BuildFloor`: <br>• is a child of `ABuildingPieceActor` and adds no SCS components; <br>• has an unscaled root, no `ChildActorComponent` and no custom navigation marked `EvenIfNotCollidable`; <br>• has one mesh, the engine cube, that blocks pawns; <br>• bounds 200 × 200 × 10 cm with its top at 10 cm. |
+| `PlayerRegistration` | `BP_TopDownCharacter` has exactly one `UConstructionComponent` with `[Building_WoodFloor]`, still one crafting and one tool-loadout component. |
+| `ProductionFloorEndToEnd` | A native builder with production `Item_Wood` × 8. <br>• **Provisional:** the production piece is hidden, has no collision and no navigation influence (runtime check of the Blueprint contract). <br>• **Success:** −4 Wood, +1 revision, +1 event, +1 result. The piece is a `BP_BuildFloor`, Active, registered, visible, collidable and navigation-relevant. <br>• **Support:** a wall on its edge stands at 10 cm, layer 0. <br>• **Then:** same cell → `Occupied`; another cell → `Success`; no Wood → `InsufficientResources`; registry clean. |
+
+### Validation
+
+- **Build:** clean editor build with the editor closed. 0 errors, 0 warnings. Only test code changed.
+- **In-editor run** (MCP automation, before the final build): `NullTide.Building` 32/33.
+  - The failure was a test-only defect: `ProductionFloorEndToEnd` counted the inventory event raised when the test added its production Wood after binding the listener.
+  - Fixed by measuring deltas from just before the build.
+- **Final, command line:** `NullTide` **223/223**:
+  - Building 33 (B1 9, B2 20, B3 4);
+  - Crafting 69, including C5 and C8 player-registration checks;
+  - Gameplay 50;
+  - Inventory 53;
+  - ResourceGathering 18, including RG3 on the player.
+
+  No warnings, errors or ensures.
+- **Windows cook** (editor closed): `Done!`, 0 errors, 2 environment warnings. Packages 624 cooked, 7 skipped by platform, 631 total (+2). `Building_WoodFloor` and `BP_BuildFloor` are in the cooked asset registry.
+- **Content audit:**
+  - 2 added assets (`Content/LevelPrototyping/BuildingSystem/`) and 1 modified (`BP_TopDownCharacter`);
+  - no map or Config change;
+  - `__ExternalActors__` 91 and `__ExternalObjects__` 3, unchanged.
+- **Manual PIE:** none (B3-2; no input path yet).
+- **Self-review:**
+  - The diff is test code plus the three assets.
+  - With no production native change, no fresh-context pass was required by the workflow.
+  - The asset contract is enforced by `ProductionPieceContract` and the runtime provisional check.
+
+### Finding for B4 (plan risk R-6, read-only MCP check)
+
+- The `Lvl_TopDown` ground, `Floor_0` (`/Engine/MapTemplates/SM_Template_Map_Floor`, scale 4 × 4 × 1), uses `BlockAllDynamic`, so its object type is **`WorldDynamic`**.
+- B1 `ValidatePlacement` accepts only `WorldStatic` or an Active floor as support, and reports a solid non-support actor under a sample as `Blocked`. So every placement on the main ground in PIE would fail with `Blocked`.
+- B3 changes nothing here. The B4 plan must decide between two options:
+  - change the ground's collision (a map and World Partition change);
+  - widen the B1 support rule (for example by mobility, a tag, or an explicit support marker).
+
 ## Next Checkpoint
 
-B2 is implemented and validated. It waits for the user's acceptance and commit approval.
+B3 is implemented and validated; it waits for the user's acceptance and commit approval.
 
-After that, B3 (Wooden Floor end to end: assets through MCP, `UConstructionComponent` on `BP_TopDownCharacter`) needs its own plan and approval. B3 must apply the piece Blueprint contract listed under the B2 known limitations. Phase 5 stays IN PROGRESS.
+Next after B3: the B4 plan (building mode, ghost preview, placement input; first manual PIE). The plan must resolve the ground support-surface finding above (`Floor_0` is `WorldDynamic`). Phase 5 stays IN PROGRESS.

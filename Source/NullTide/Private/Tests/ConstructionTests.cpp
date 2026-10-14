@@ -4,17 +4,30 @@
 #include "Building/BuildingPieceComponent.h"
 #include "Building/BuildingSubsystem.h"
 #include "Building/ConstructionComponent.h"
+#include "Components/ChildActorComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Crafting/CraftingComponent.h"
+#include "Crafting/CraftingRecipeDefinition.h"
+#include "Engine/Blueprint.h"
+#include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/Engine.h"
+#include "Engine/SCS_Node.h"
+#include "Engine/SimpleConstructionScript.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Character.h"
 #include "Inventory/InventoryComponent.h"
+#include "Items/ItemDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "ToolLoadout/ToolLoadoutComponent.h"
 #include "UObject/StrongObjectPtr.h"
+
+#if WITH_EDITOR
+#include "Misc/DataValidation.h"
+#endif
 
 namespace
 {
@@ -1137,6 +1150,224 @@ bool FBuildingB2ExactlyOnceTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Each notification matches its returned result, in order"), bSameOrder);
 	TestEqual(TEXT("Two pieces"), Fixture.LivePieces(), 2);
 	Fixture.Clean(*this, TEXT("Exactly once"));
+	return true;
+}
+
+// ---- B3: production Wooden Floor ----
+
+namespace
+{
+const TCHAR* B3FloorDefinitionPath = TEXT("/Game/LevelPrototyping/BuildingSystem/Definitions/Building_WoodFloor.Building_WoodFloor_C");
+const TCHAR* B3FloorPiecePath = TEXT("/Game/LevelPrototyping/BuildingSystem/Pieces/BP_BuildFloor.BP_BuildFloor_C");
+const TCHAR* B3WoodPath = TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_Wood.Item_Wood_C");
+const TCHAR* B3PlayerPath = TEXT("/Game/TopDown/Blueprints/BP_TopDownCharacter.BP_TopDownCharacter");
+
+struct FB3Assets
+{
+	TSubclassOf<UBuildingDefinition> Floor;
+	TSubclassOf<ABuildingPieceActor> Piece;
+	TSubclassOf<UItemDefinition> Wood;
+
+	static FB3Assets Load()
+	{
+		FB3Assets Assets;
+		Assets.Floor = LoadClass<UBuildingDefinition>(nullptr, B3FloorDefinitionPath);
+		Assets.Piece = LoadClass<ABuildingPieceActor>(nullptr, B3FloorPiecePath);
+		Assets.Wood = LoadClass<UItemDefinition>(nullptr, B3WoodPath);
+		return Assets;
+	}
+
+	bool IsValid(FAutomationTestBase& Test) const
+	{
+		return Test.TestTrue(TEXT("Building_WoodFloor, BP_BuildFloor and Item_Wood load"), Floor && Piece && Wood);
+	}
+};
+
+bool B3AnyNavigationRelevant(const AActor& Actor)
+{
+	TInlineComponentArray<UPrimitiveComponent*> Primitives(&Actor);
+	for (const UPrimitiveComponent* Primitive : Primitives)
+	{
+		if (Primitive && Primitive->IsNavigationRelevant())
+		{
+			return true;
+		}
+	}
+	return false;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB3ProductionDefinitionTest,
+	"NullTide.Building.B3.ProductionDefinition",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB3ProductionDefinitionTest::RunTest(const FString& Parameters)
+{
+	const FB3Assets Assets = FB3Assets::Load();
+	if (!Assets.IsValid(*this)) { return false; }
+	const UBuildingDefinition* Floor = Assets.Floor->GetDefaultObject<UBuildingDefinition>();
+	FString Diagnostic;
+	TestTrue(FString::Printf(TEXT("Building_WoodFloor is valid (%s)"), *Diagnostic), Floor->ValidateBuilding(Diagnostic));
+	TestEqual(TEXT("Name"), Floor->BuildingName.ToString(), FString(TEXT("Wooden Floor")));
+	TestTrue(TEXT("Foundation on grid cells, 1 x 1, 90 degree steps"), Floor->Category == EBuildingCategory::Foundation
+		&& Floor->PlacementMode == EBuildingPlacementMode::GridCell && Floor->Footprint == FIntPoint(1, 1) && Floor->RotationStep == 90);
+	TestTrue(TEXT("Cost is exactly Item_Wood x 4"), Floor->Cost.Num() == 1 && Floor->Cost[0].DefinitionClass == Assets.Wood
+		&& Floor->Cost[0].Quantity == 4);
+	TestTrue(TEXT("50% refund, default range"), FMath::IsNearlyEqual(Floor->RefundFraction, 0.5f) && Floor->BuildRangeOverride == 0.f);
+	TestTrue(TEXT("The piece is BP_BuildFloor"), Floor->PieceActorClass == Assets.Piece);
+	TestNull(TEXT("No icon until the B4 HUD (B3-3)"), Floor->BuildingIcon.Get());
+#if WITH_EDITOR
+	FDataValidationContext Context;
+	TestTrue(TEXT("Editor data validation passes"), Floor->IsDataValid(Context) != EDataValidationResult::Invalid);
+#endif
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB3ProductionPieceContractTest,
+	"NullTide.Building.B3.ProductionPieceContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB3ProductionPieceContractTest::RunTest(const FString& Parameters)
+{
+	const FB3Assets Assets = FB3Assets::Load();
+	if (!Assets.IsValid(*this)) { return false; }
+	TestTrue(TEXT("BP_BuildFloor derives from ABuildingPieceActor"), Assets.Piece->IsChildOf(ABuildingPieceActor::StaticClass()));
+
+	// The Blueprint only sets the inherited native mesh: no added components (so no child actors or extra authorities).
+	int32 AddedComponents = 0;
+	if (const UBlueprintGeneratedClass* Generated = Cast<UBlueprintGeneratedClass>(Assets.Piece.Get()))
+	{
+		if (const USimpleConstructionScript* ConstructionScript = Generated->SimpleConstructionScript)
+		{
+			AddedComponents = ConstructionScript->GetAllNodes().Num();
+		}
+	}
+	TestEqual(TEXT("BP_BuildFloor adds no components"), AddedComponents, 0);
+
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ABuildingPieceActor* Piece = Fixture.World->SpawnActor<ABuildingPieceActor>(Assets.Piece, FVector(300.0, 300.0, 0.0), FRotator::ZeroRotator, Params);
+	if (!TestNotNull(TEXT("BP_BuildFloor spawns"), Piece)) { return false; }
+	TestTrue(TEXT("Unscaled root"), Piece->GetRootComponent() && Piece->GetRootComponent()->GetRelativeScale3D().Equals(FVector::OneVector));
+	TInlineComponentArray<UChildActorComponent*> ChildActors(Piece);
+	TestEqual(TEXT("No child actor components"), ChildActors.Num(), 0);
+	TInlineComponentArray<UPrimitiveComponent*> Primitives(Piece);
+	bool bCustomNavigationEvenIfNotCollidable = false;
+	for (const UPrimitiveComponent* Primitive : Primitives)
+	{
+		bCustomNavigationEvenIfNotCollidable |= Primitive && Primitive->HasCustomNavigableGeometry() == EHasCustomNavigableGeometry::EvenIfNotCollidable;
+	}
+	TestFalse(TEXT("No custom navigable geometry marked EvenIfNotCollidable"), bCustomNavigationEvenIfNotCollidable);
+
+	TInlineComponentArray<UStaticMeshComponent*> Meshes(Piece);
+	if (!TestEqual(TEXT("One mesh (the inherited PieceMesh)"), Meshes.Num(), 1)) { return false; }
+	const UStaticMeshComponent* Mesh = Meshes[0];
+	TestTrue(TEXT("Engine cube placeholder"), Mesh->GetStaticMesh() && Mesh->GetStaticMesh()->GetPathName() == TEXT("/Engine/BasicShapes/Cube.Cube"));
+	TestTrue(TEXT("The floor blocks pawns"), Mesh->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block
+		&& Mesh->GetCollisionEnabled() != ECollisionEnabled::NoCollision);
+	const FBox Bounds = Mesh->Bounds.GetBox();
+	TestTrue(FString::Printf(TEXT("200 x 200 x 10 cm with its top at 10 cm (got %s)"), *Bounds.ToString()),
+		Bounds.Min.Equals(FVector(200.0, 200.0, 0.0), 0.5) && Bounds.Max.Equals(FVector(400.0, 400.0, UBuildingSubsystem::FloorThickness), 0.5));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB3PlayerRegistrationTest,
+	"NullTide.Building.B3.PlayerRegistration",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB3PlayerRegistrationTest::RunTest(const FString& Parameters)
+{
+	const FB3Assets Assets = FB3Assets::Load();
+	if (!Assets.IsValid(*this)) { return false; }
+	UBlueprint* PlayerBlueprint = LoadObject<UBlueprint>(nullptr, B3PlayerPath);
+	if (!TestNotNull(TEXT("Production player Blueprint loads"), PlayerBlueprint)) { return false; }
+	TArray<const UConstructionComponent*> Construction;
+	int32 Crafting = 0;
+	int32 ToolLoadout = 0;
+	if (const USimpleConstructionScript* ConstructionScript = PlayerBlueprint->SimpleConstructionScript)
+	{
+		for (const USCS_Node* Node : ConstructionScript->GetAllNodes())
+		{
+			if (const UConstructionComponent* Template = Node ? Cast<UConstructionComponent>(Node->ComponentTemplate) : nullptr)
+			{
+				Construction.Add(Template);
+			}
+			Crafting += Node && Cast<UCraftingComponent>(Node->ComponentTemplate) ? 1 : 0;
+			ToolLoadout += Node && Node->ComponentClass && Node->ComponentClass->IsChildOf<UToolLoadoutComponent>() ? 1 : 0;
+		}
+	}
+	if (!TestEqual(TEXT("Production player has exactly one ConstructionComponent"), Construction.Num(), 1)) { return false; }
+	TestTrue(TEXT("Registered buildings are [Building_WoodFloor]"), Construction[0]->GetAvailableBuildings() == FB2Buildings({ Assets.Floor }));
+	TestTrue(TEXT("The crafting and tool-loadout components are unchanged (one each)"), Crafting == 1 && ToolLoadout == 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB3ProductionFloorEndToEndTest,
+	"NullTide.Building.B3.ProductionFloorEndToEnd",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB3ProductionFloorEndToEndTest::RunTest(const FString& Parameters)
+{
+	const FB3Assets Assets = FB3Assets::Load();
+	if (!Assets.IsValid(*this)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { Assets.Floor }, 0);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid() && Builder.Inventory)) { return false; }
+	TestTrue(TEXT("8 production Wood"), Builder.Inventory->TryAddDefinitionQuantity(Assets.Wood, 8).IsSuccess());
+	auto Floor = [&Assets](const FVector& Cell)
+	{
+		return UBuildingSubsystem::MakePlacementFromWorld(*Assets.Floor->GetDefaultObject<UBuildingDefinition>(), Cell, 0);
+	};
+
+	// The production piece honours the provisional contract at runtime (covers anything its Blueprint adds).
+	bool bChecked = false;
+	const TSubclassOf<ABuildingPieceActor> PieceClass = Assets.Piece;
+	Builder.Construction->BeforeActivate = [this, &bChecked, PieceClass](ABuildingPieceActor& Piece)
+	{
+		bChecked = true;
+		TestTrue(TEXT("Provisional production piece: hidden, no actor collision, no navigation influence"), Piece.IsA(PieceClass)
+			&& Piece.IsHidden() && !Piece.GetActorEnableCollision() && !B3AnyNavigationRelevant(Piece));
+	};
+
+	// Measured from here: adding the production Wood above already raised one inventory event.
+	const int32 WoodBefore = Builder.Inventory->GetTotalQuantity(Assets.Wood);
+	const int32 RevisionBefore = Builder.Inventory->GetRevision();
+	const int32 EventsBefore = Builder.Listener->InventoryEvents;
+	const int32 ResultsBefore = Builder.Listener->BuildResults.Num();
+	const FBuildingConstructionResult Built = Builder.Construction->TryBuild(Assets.Floor, Floor(B2CellA));
+	if (!B2Expect(*this, TEXT("Build the production floor"), Built, EBuildResult::Success)) { return false; }
+	Builder.Construction->BeforeActivate = nullptr;
+	TestTrue(TEXT("The provisional state was inspected"), bChecked);
+	TestTrue(FString::Printf(TEXT("4 Wood consumed, one revision, one event, one result (wood %d -> %d, revision %+d, events %+d, results %+d)"),
+		WoodBefore, Builder.Inventory->GetTotalQuantity(Assets.Wood), Builder.Inventory->GetRevision() - RevisionBefore,
+		Builder.Listener->InventoryEvents - EventsBefore, Builder.Listener->BuildResults.Num() - ResultsBefore),
+		Builder.Inventory->GetTotalQuantity(Assets.Wood) == WoodBefore - 4 && Builder.Inventory->GetRevision() == RevisionBefore + 1
+		&& Builder.Listener->InventoryEvents == EventsBefore + 1 && Builder.Listener->BuildResults.Num() == ResultsBefore + 1);
+	const ABuildingPieceActor* Piece = Cast<ABuildingPieceActor>(Built.Piece.Get());
+	TestTrue(TEXT("A BP_BuildFloor instance, Active, registered, visible, collidable and navigation-relevant"), Piece && Piece->IsA(Assets.Piece)
+		&& Piece->GetBuildingPieceComponent()->IsActivePiece() && Fixture.Subsystem->GetOccupyingPiece(B2Key(B2CellA)) == Piece->GetBuildingPieceComponent()
+		&& !Piece->IsHidden() && Piece->GetActorEnableCollision() && B3AnyNavigationRelevant(*Piece));
+
+	// The floor supports pieces on its edge at its top.
+	const FBuildingPlacement WallOnEdge = UBuildingSubsystem::MakePlacementFromWorld(*GetDefault<UBuildingTestWallDefinition>(),
+		FVector(300.0, 205.0, 0.0), 0);
+	const FBuildingPlacementResult Wall = Fixture.Subsystem->ValidatePlacement(UBuildingTestWallDefinition::StaticClass(), WallOnEdge, Builder.Pawn);
+	TestTrue(FString::Printf(TEXT("A wall on the floor's edge stands on its top (%s)"), *Wall.Diagnostic), Wall.IsSuccess()
+		&& FMath::IsNearlyEqual(Wall.Placement.SurfaceZ, static_cast<float>(UBuildingSubsystem::FloorThickness), 0.1f) && Wall.Placement.Layer == 0);
+
+	B2Expect(*this, TEXT("Second floor on the same cell"), Builder.Construction->TryBuild(Assets.Floor, Floor(B2CellA)), EBuildResult::Occupied);
+	B2Expect(*this, TEXT("Second floor elsewhere"), Builder.Construction->TryBuild(Assets.Floor, Floor(B2CellB)), EBuildResult::Success);
+	B2Expect(*this, TEXT("Third floor without Wood"), Builder.Construction->TryBuild(Assets.Floor, Floor(B2CellC)), EBuildResult::InsufficientResources);
+	TestEqual(TEXT("All Wood spent"), Builder.Inventory->GetTotalQuantity(Assets.Wood), 0);
+	TestEqual(TEXT("Two floors"), Fixture.LivePieces(), 2);
+	Fixture.Clean(*this, TEXT("Production floor"));
 	return true;
 }
 

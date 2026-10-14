@@ -162,7 +162,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - `AuditRegistry` must stay empty in tests.
 - `ValidatePlacement` is read-only. It recomputes surface, layer and transform (never trusts the caller) and checks, in order: definition, shape, range (600 cm), support surface (`WorldStatic` or `Active` floor; slope ≤ 30°, unevenness ≤ 25 cm), occupancy, blocking collision (Pawn channel, ground excluded geometrically, not by identity), builder safety.
 - `UBuildingPieceComponent` holds per-piece metadata and state (`Provisional`/`Active`/`Removing`). `ABuildingPieceActor` is a thin host whose `SetProvisional` hides the piece and removes collision and navigation.
-- Building never changes inventory, crafting, storage or interaction authority. The construction transaction (B2) uses only `UInventoryComponent::TryApplyDefinitionTransaction`. B2 has a pending design gate for the post-payment recovery contract.
+- Building never changes inventory, crafting, storage or interaction authority. The construction transaction (B2) uses only `UInventoryComponent::TryApplyDefinitionTransaction`. The B2 design is approved (`BUILDING_PLAN.md` 5.2): activate the piece first and pay last, so the single cost transaction is the commit point and there is no post-payment recovery.
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

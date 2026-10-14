@@ -8,7 +8,7 @@ Plan and design decisions: `BUILDING_PLAN.md`.
 | --- | --- |
 | B0 Architecture audit and design | APPROVED (user) |
 | B1 Data model, grid coordinates, occupancy and placement validation | COMPLETE / APPROVED (8/8; full automation 198/198; cook PASS; no manual PIE required) |
-| B2 Construction authority | NOT IMPLEMENTED — design gate proposal ready, awaiting approval (`BUILDING_PLAN.md` section 5.2, decisions D1–D8). |
+| B2 Construction authority | DESIGN APPROVED (user, 2026-10-14: D1–D8, D3 option (a); two independent review rounds) — implementation NOT STARTED (`BUILDING_PLAN.md` 5.2, 7). |
 | B3–B6 | NOT STARTED |
 
 ## B1 - Data Model, Grid Coordinates, Occupancy and Placement Validation
@@ -181,9 +181,11 @@ Plan and design decisions: `BUILDING_PLAN.md`.
 - **Authored pieces:** an `Active` piece with no keys does not register on `BeginPlay`. Authored building pieces in a level would need their keys resolved from their transform (not needed until Phase 7 save/load or authored bases).
 - **NPC builders:** the builder is any actor; range and builder safety use its location and root collision.
 
-### B2 Design Gate — PROPOSAL READY, AWAITING APPROVAL
+### B2 Design Gate — APPROVED (user, 2026-10-14)
 
-Design review only, against baseline `0681261` (full suite 198/198). No code, assets, commit or push. The full proposal is in `BUILDING_PLAN.md` section 5.2.
+Design review only, against baseline `0681261` (full suite 198/198). No code or assets were changed. The approved design is in `BUILDING_PLAN.md` section 5.2.
+
+**User decision:** D1, D2 and D4–D8 approved, and D3 option (a): a paid piece destroyed after payment reports `Success`, its weak `Piece` reads invalid, and there is no refund. Sections 4.1, 5, 7, 8 and 10 of the plan were rewritten to the approved design; the B0 recovery chain is marked superseded.
 
 - **Audit findings:**
   - `OnInventoryChanged` fires synchronously inside the inventory's mutation guard, after the deduction.
@@ -194,12 +196,42 @@ Design review only, against baseline `0681261` (full suite 198/198). No code, as
 - **Finding:** with the B0 order (pay, then finalize), listeners run in a post-payment window. Any failure there needs compensation that can itself fail, and Phase 5 cannot make that durable.
 - **Recommendation (D1):** activate the piece (commit the reservation, make it visible and collidable) **before** the single atomic cost transaction. The payment becomes the commit point with nothing fallible after it. Every earlier failure is a fail-closed rollback that never touches the inventory.
 - **Removed if approved:** the respawn → refund → pickup chain, its result codes and the G6 helper extraction. No pending-compensation record is needed.
-- **Remaining trade-offs (D2, D3):** an unpaid `Active` piece is observable by engine callbacks within one call. A paid piece destroyed by an `OnInventoryChanged` listener reports `Success` with a Warning and no refund.
-- **Fallback (D8):** the recovery chain with a runtime-only, explicitly non-durable pending-compensation record and `RecoveryFailed`.
-- **Tests specified:** 17 `NullTide.Building.B2.*` tests plus the B1 regression `OverlapOnlyVolumes`. Faults are injected through fixture actors, two protected virtual seams and inventory listeners; there are no debug switches.
+- **Remaining trade-offs (D2, D3):**
+  - **D2:** an unpaid `Active` piece is observable by engine callbacks within one call.
+  - **D3 (revised):** a paid piece destroyed after payment reports `Success` with an invalid weak `Piece` and no refund. Destruction during payment also logs a Warning and sets a diagnostic. A distinct result code is the alternative.
+- **D8 (revised):** Option A is not a pre-approved fallback. If D1 is rejected, B2 returns to design review.
+- **Tests specified:** 20 `NullTide.Building.B2.*` tests plus the B1 regression `OverlapOnlyVolumes`. Faults are injected through fixture actors, two protected virtual seams and inventory listeners; there are no debug switches.
+
+**Independent review round 1 (Codex, against `ab6a1d2`; resolutions in `BUILDING_PLAN.md` 5.2.14):**
+- All 5.2.1 source facts confirmed.
+- **CONFIRMED:**
+  - **R1 (P1):** B2 requires an `ABuildingPieceActor` piece class, checked at preflight.
+  - **R2 (P1):** the step 7 integrity check also covers transform, provisional, hidden and collision.
+  - **R3 (P1):** the result `Piece` is a weak reference, with destruction-during-result tests.
+  - **R4 (P2):** the guarantee wording covers B2's own mutations only.
+- **D3:** NEEDS USER DECISION.
+- **D8:** revised.
+- **Evidence obtained (read-only MCP and source scan):**
+  - no C++ overlap or hit handlers;
+  - `BP_PickUpItem` only reacts to actors with an `InventoryManagerComponent`;
+  - `PlayerInteractionComponent` only tracks `BPI_Interactable` actors in range (relevant to the B5 door);
+  - the storage and resource-node overlap events are empty;
+  - `BP_Workbench` has none.
+  - No current content reacts to an unpaid active piece by moving items, actors or collision.
+- No code, assets, tests or Git state changed.
+
+**Independent review round 2 (Codex; resolutions in `BUILDING_PLAN.md` 5.2.15):**
+- Round 1 status before this round's fixes: R1 and R4 CLOSED. R2, R3 and D8 needed further work.
+- **R2-1 (P1, CONFIRMED):** the result is built after the cost transaction returns. Destruction during payment gives a Warning and a diagnostic. Destruction during `OnBuildResult` only invalidates the weak `Piece`.
+- **R2-2 (P2, CONFIRMED):** step 7 checks every key's occupant through `GetOccupyingPiece` and `GetOccupancyKeys`.
+- **R2-3 (P2):** the navigation recheck is explicitly deferred to B5 as a D2 limitation.
+- **R2-4 (P2, CONFIRMED):** Option A is labelled an evaluated alternative, not a fallback.
+- **D2 evidence completed:** `Lvl_TopDown` and its Level Blueprint, `BP_TopDownCharacter`, and all external actor and object packages have no overlap or hit handlers.
+- **User direction:** instant placement on the grid with the cursor; materials are deducted only when the build succeeds.
+- D3 is still open. D1–D8 await formal approval. No code, assets, tests or Git state changed.
 
 B1 stays COMPLETE. G6, the inventory and B1 source are unchanged.
 
 ## Next Checkpoint
 
-Waiting for the user's decisions on the B2 gate (D1–D8 in `BUILDING_PLAN.md` 5.2.13). B2 implementation starts only after explicit approval. Phase 5 stays IN PROGRESS.
+B2 implementation, exactly as `BUILDING_PLAN.md` 5.2.3–5.2.12 and section 7 describe. It starts after the user authorizes it, once the approved design docs are committed. The checkpoint ends with a self-review (including a fresh-context review pass) and stops before its commit with the handoff report. Phase 5 stays IN PROGRESS.

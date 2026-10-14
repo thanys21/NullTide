@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building IN PROGRESS: B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 NOT IMPLEMENTED — design gate proposal awaiting approval (BUILDING_PLAN.md 5.2). Crafting queue and the inventory/crafting UI-UX pass are deferred.
+> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building IN PROGRESS: B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 design gate APPROVED (activate first, pay last; BUILDING_PLAN.md 5.2), implementation not started. Crafting queue and the inventory/crafting UI-UX pass are deferred.
 
 ---
 
@@ -808,7 +808,7 @@ Crafting C8C Workstation Crafting UI  ✅
 Phase 4 Crafting                    ✅
 
 NEXT:
-Phase 5 Building: IN PROGRESS — B0 approved, B1 complete; B2 design gate proposal awaiting approval (see BUILDING_PROGRESS.md)
+Phase 5 Building: IN PROGRESS — B0 approved, B1 complete; B2 design approved, implementation next (see BUILDING_PROGRESS.md)
 ```
 
 ---
@@ -1141,7 +1141,7 @@ Campfire / Workbench
 
 Building costs should use stack-aware inventory quantity authority.
 
-B0 design APPROVED (see `BUILDING_PLAN.md`); progress in `BUILDING_PROGRESS.md`. B1 is COMPLETE / APPROVED. Before B2: user approval of the design gate proposal (`BUILDING_PLAN.md` section 5.2, decisions D1–D8). Checkpoints:
+B0 design APPROVED (see `BUILDING_PLAN.md`); progress in `BUILDING_PROGRESS.md`. B1 is COMPLETE / APPROVED. B2 design gate APPROVED (`BUILDING_PLAN.md` section 5.2, decisions D1–D8, D3 option (a)). Checkpoints:
 - B1 data model and grid validation core;
 - B2 atomic construction authority;
 - B3 Wooden Floor end to end;
@@ -1445,28 +1445,32 @@ Do not implement without a dedicated milestone.
 
 # 15. Recommended Next Immediate Checkpoint
 
-## Building — B2 Design Review (Construction Authority)
+## Building — B2 Construction Authority (design approved)
 
 Phase 4 Crafting is COMPLETE (C1–C8; see `CRAFTING_PROGRESS.md`). Phase 5 Building is IN PROGRESS:
 - B0 architecture is APPROVED (`BUILDING_PLAN.md`).
 - B1 (data model, grid coordinates, occupancy, placement validation) is COMPLETE / APPROVED (`BUILDING_PROGRESS.md`; full automation 198/198, cook PASS, no manual PIE required).
-- **B2 is NOT IMPLEMENTED.** The design gate proposal is ready and awaiting approval (`BUILDING_PLAN.md` section 5.2: activate the piece before payment so nothing fallible runs after the deduction; decisions D1–D8).
+- **B2 design is APPROVED (user, 2026-10-14); implementation not started.** `BUILDING_PLAN.md` section 5.2: activate the piece before payment so nothing fallible runs after the deduction; decisions D1–D8, D3 option (a).
 
-Claude/Codex instruction:
+Claude instruction:
 
 ```text
 1. Read BUILDING_PLAN.md (sections 4.1 boundary, 5 construction, 5.2 gate)
    and BUILDING_PROGRESS.md (B1).
-2. Do not implement B2 until the user approves the section 5.2 proposal
-   (decisions D1-D8 in 5.2.13; scope 5.2.12; tests 5.2.10).
-   Follow the approved option exactly.
-3. B2 adds UConstructionComponent (AvailableBuildings, inventory preflight,
-   provisional AlwaysSpawn build, atomic cost via
-   TryApplyDefinitionTransaction, rollback). UBuildingSubsystem stays
-   inventory-free; the inventory stays generic.
+2. The section 5.2 design is APPROVED (D1-D8, D3 option (a); 2026-10-14).
+   Implement exactly 5.2.3 (sequence), 5.2.4 (rollback),
+   5.2.12 (scope) and 5.2.10 (20 tests + B1 OverlapOnlyVolumes).
+3. B2 adds UConstructionComponent: AvailableBuildings, preflight
+   (registration, ABuildingPieceActor class, inventory),
+   provisional AlwaysSpawn build, revalidation, activation,
+   integrity check, then the atomic cost via
+   TryApplyDefinitionTransaction as the last step, with a
+   fail-closed rollback. UBuildingSubsystem stays inventory-free;
+   the inventory stays generic. No G6 extraction; no B1 API change.
 4. No B3+ content, input, UI, door or demolition in B2.
 5. Build + focused tests + regression + full suite + cook + content/WP audit.
-6. Update BUILDING_PROGRESS.md and this plan. STOP for review.
+6. Update BUILDING_PROGRESS.md and this plan. STOP before commit with the
+   handoff report (AGENTS.md workflow; self-review includes a fresh-context review pass).
 ```
 
 This keeps Building incremental and keeps inventory, crafting, storage and interaction authority unchanged.
@@ -1723,7 +1727,7 @@ Current validation baseline:
 - full 198/198 (190 + 8 Building B1)
 
 Next:
-Phase 5 Building: user approval of the B2 design gate proposal (BUILDING_PLAN.md 5.2, D1-D8) before any B2 implementation. Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
+Phase 5 Building: B2 implementation (approved design, BUILDING_PLAN.md 5.2.3-5.2.12), then the self-review and the handoff report before commit. Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1767,7 +1771,7 @@ Phase 4  Crafting                           ✅
                 C8B Workbench actor          ✅
                 C8C Station crafting UI      ✅
 
-Phase 5  Building                           ⏭ IN PROGRESS (B0 ✅, B1 ✅, B2 gate proposal awaiting approval)
+Phase 5  Building                           ⏭ IN PROGRESS (B0 ✅, B1 ✅, B2 design approved — implementation next)
 
 Phase 6  Colony
 

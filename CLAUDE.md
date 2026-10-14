@@ -81,7 +81,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
-- `NullTide.Building.{B1}`
+- `NullTide.Building.{B1,B2}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -162,7 +162,22 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - `AuditRegistry` must stay empty in tests.
 - `ValidatePlacement` is read-only. It recomputes surface, layer and transform (never trusts the caller) and checks, in order: definition, shape, range (600 cm), support surface (`WorldStatic` or `Active` floor; slope ≤ 30°, unevenness ≤ 25 cm), occupancy, blocking collision (Pawn channel, ground excluded geometrically, not by identity), builder safety.
 - `UBuildingPieceComponent` holds per-piece metadata and state (`Provisional`/`Active`/`Removing`). `ABuildingPieceActor` is a thin host whose `SetProvisional` hides the piece and removes collision and navigation.
-- Building never changes inventory, crafting, storage or interaction authority. The construction transaction (B2) uses only `UInventoryComponent::TryApplyDefinitionTransaction`. The B2 design is approved (`BUILDING_PLAN.md` 5.2): activate the piece first and pay last, so the single cost transaction is the commit point and there is no post-payment recovery.
+- Building never changes inventory, crafting, storage or interaction authority. The construction transaction (B2) uses only `UInventoryComponent::TryApplyDefinitionTransaction`.
+- `UConstructionComponent` (B2) is a builder's construction authority (the `UCraftingComponent` pattern; not yet on `BP_TopDownCharacter`, that is B3).
+  - It holds `AvailableBuildings` and exposes `GetAvailableBuildings`, `CanBuild` (exact read-only preflight) and `TryBuild`.
+  - `OnBuildResult` fires exactly once per non-reentrant request; a nested request returns `BuildInProgress` without notifying.
+  - **`TryBuild` activates first and pays last** (`BUILDING_PLAN.md` 5.2.3):
+    1. guard, then validate (definition, registration, an `ABuildingPieceActor` piece class, an active inventory, B1 `ValidatePlacement`, the cost preflight);
+    2. reserve the keys;
+    3. spawn the piece deferred with `AlwaysSpawn` as provisional;
+    4. revalidate;
+    5. activate (`Active`, commit the reservation, `SetProvisional(false)`);
+    6. integrity check;
+    7. pay with one `TryApplyDefinitionTransaction`.
+
+    That transaction is the commit point. Every earlier failure is a fail-closed rollback that never touches the inventory, and nothing fallible runs after payment.
+  - `FBuildingConstructionResult` is built once after the payment returns. Its `Piece` is weak. A piece destroyed during payment still reports `Success`, with a Warning and a diagnostic and no refund (D3).
+  - `SpawnProvisionalPiece` and `ActivatePiece` are protected virtual test seams; there are no debug switches.
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

@@ -8,7 +8,7 @@ Plan and design decisions: `BUILDING_PLAN.md`.
 | --- | --- |
 | B0 Architecture audit and design | APPROVED (user) |
 | B1 Data model, grid coordinates, occupancy and placement validation | COMPLETE / APPROVED (8/8; full automation 198/198; cook PASS; no manual PIE required) |
-| B2 Construction authority | DESIGN APPROVED (user, 2026-10-14: D1–D8, D3 option (a); two independent review rounds) — implementation NOT STARTED (`BUILDING_PLAN.md` 5.2, 7). |
+| B2 Construction authority | IMPLEMENTED AND VALIDATED — awaiting user acceptance (20/20; full automation 219/219; cook PASS; no manual PIE required). Design approved 2026-10-14 (D1–D8, D3 option (a)). |
 | B3–B6 | NOT STARTED |
 
 ## B1 - Data Model, Grid Coordinates, Occupancy and Placement Validation
@@ -232,6 +232,134 @@ Design review only, against baseline `0681261` (full suite 198/198). No code or 
 
 B1 stays COMPLETE. G6, the inventory and B1 source are unchanged.
 
+## B2 - Construction Authority (activate first, pay last)
+
+### Baseline and Scope
+
+- **Baseline:** `6460ef6` (approved B2 design docs). B1 source unchanged since `0681261`. Full automation 198/198.
+- **Scope (user-approved, `BUILDING_PLAN.md` 5.2.12):** `UConstructionComponent`, the appended `EBuildResult` codes, test fixtures and 20 `NullTide.Building.B2.*` tests, plus the B1 regression `OverlapOnlyVolumes`.
+- **Out of scope:**
+  - assets; `BP_TopDownCharacter` (B3);
+  - input or UI (B4);
+  - demolition (B6);
+  - G6 extraction;
+  - any change to inventory, crafting, storage or interaction source.
+
+### Source Files
+
+- **New:** `Building/ConstructionComponent.h/.cpp`:
+  - `AvailableBuildings` (`EditDefaultsOnly`, plus `IsDataValid`);
+  - `GetAvailableBuildings`, `IsBuildingAvailable`, `CanBuild`, `TryBuild`, `IsBuildInProgress`, `GetInventory`;
+  - `OnBuildResult`;
+  - `FBuildingConstructionResult` (code, weak `Piece`, resolved placement, diagnostic);
+  - the protected virtual seams `SpawnProvisionalPiece` and `ActivatePiece`;
+  - `BeginPlay`/`EndPlay` tracking of `bEndPlayed`.
+- **Changed:** `Building/BuildingTypes.h` appends `BuildInProgress`, `NotAvailable`, `InvalidInventory`, `InsufficientResources`, `SpawnFailed`, `TransformMismatch`, `BuildInterrupted` and `ResourcesRejectedRolledBack` (existing values not reordered).
+- **Tests:**
+  - `Tests/BuildingTestTypes.h` (fixtures):
+    - a plain actor with a piece component;
+    - self-destroying, drifting and blocker-spawning pieces with their definitions;
+    - `UConstructionTestComponent` (seam hooks);
+    - `UConstructionTestListener`.
+  - New `Tests/ConstructionTests.cpp`.
+  - `Tests/BuildingTests.cpp`: B1 `OverlapOnlyVolumes`.
+- **Additions beyond the 5.2.12 list (harmless, recorded):** `IsBuildingAvailable`, `IsBuildInProgress`, `GetInventory`, `BeginPlay`.
+
+### As Implemented
+
+- **`TryBuild` (5.2.3):**
+  1. guard;
+  2. validate: definition, registration, an `ABuildingPieceActor` piece class, the component not ended, an active inventory, B1 `ValidatePlacement`, cost preflight;
+  3. `ReserveKeys`;
+  4. deferred `AlwaysSpawn`, `InitializePiece(Provisional, player-built)` and `SetProvisional(true)` before `FinishSpawning`;
+  5. exact transform check (0.1 cm, 0.01°, scale) and `ValidatePlacement` ignoring the own reservation and the piece, with identical keys, layer and transform;
+  6. `SetPieceState(Active)`, `CommitReservation`, `SetProvisional(false)`;
+  7. integrity check: valid, Active, exact key set, `GetOccupyingPiece` per key, transform, not provisional or hidden, collision on, builder not ended, inventory active;
+  8. one `TryApplyDefinitionTransaction(Cost, {})`;
+  9. the result built once after the payment returns, broadcast once inside the guard, returned.
+- **Fail-closed rollback (5.2.4):** provisional again, `UnregisterPiece`, `ReleaseReservation` (both by object key), `Destroy`. A piece that survives `Destroy` logs an Error. The rollback never touches the inventory.
+- **Cost preflight mapping:**
+  - `InsufficientQuantity` → `InsufficientResources`;
+  - `NotInitialized` or `Busy` → `InvalidInventory`;
+  - rejected cost data → `InvalidDefinition`.
+- **D3 (a):** a piece destroyed during payment reports `Success`, with an invalid weak `Piece`, the "destroyed during payment" diagnostic, a Warning and no refund. Destruction during `OnBuildResult` only invalidates the weak `Piece`.
+
+### Validation
+
+- **Build:** clean Development editor build with the editor closed. 0 errors, 0 compiler warnings. The base `UnrealEditor-NullTide.dll` was rebuilt, not a hot-reload module. An earlier build with the editor open produced a hot-reload `-0001` module, which was discarded; all results below come from the clean build.
+- **Focused:** `NullTide.Building` 29/29 (B1 9/9 including `OverlapOnlyVolumes`, B2 20/20), command line `-NullRHI`.
+- **Full suite:** `NullTide` **219/219**:
+  - Building 29;
+  - Crafting 69;
+  - Gameplay 50;
+  - Inventory 53;
+  - ResourceGathering 18.
+
+  No warnings, errors or ensures during the run. The expected D3 Warning is asserted by `PieceDestroyedAfterPayment`.
+- **Windows cook** (editor closed): `Done!`, 0 errors, 2 environment warnings (NTFS journal on D:, MCP EULA notice). Packages 622 cooked, 7 skipped by platform, 629 total (unchanged).
+- **Content and World Partition audit:** no Content, Config or map change. `__ExternalActors__` 91 and `__ExternalObjects__` 3, unchanged.
+- **Manual PIE:** none required (no asset, input or UI).
+
+### Tests `NullTide.Building.B2.*` (20)
+
+Each test asserts:
+- the result code;
+- the exact revision, inventory-event, build-result and Wood deltas;
+- the live piece count;
+- a free cell and a clean `AuditRegistry` with no reserved keys after every failure.
+
+`BuildInterrupted` cases also assert the diagnostic, which proves the branch.
+
+| Test | Covers |
+| --- | --- |
+| `Success` | `CanBuild` read-only, exact cost +1 / 1 / 1, piece Active, player-built, registered, visible, collidable and owned by the builder; a 90° build at the exact yaw |
+| `ValidationFailures` | `InvalidDefinition` (null, abstract), `NotAvailable`, `OutOfRange`, `Occupied` (existing piece, another owner's reservation), `Blocked`; `CanBuild` agrees |
+| `InventoryPreflight` | `InsufficientResources`, `InvalidInventory` (no inventory, legacy mode) |
+| `SpawnFailure` | Piece destroyed while spawning; seam returns null |
+| `TransformMismatch` | Piece drifts in `OnConstruction` |
+| `CollisionChangedDuringSpawn` | Blocker spawned by the piece → `Blocked` at revalidation |
+| `BlockerAfterPreview` | Green preview, then a blocker → `Blocked` |
+| `InventoryBusyAtCommit` | Build from the inventory's own broadcast → `Busy` → `ResourcesRejectedRolledBack` |
+| `ResourcesChangedDuringActivation` | Seam removes Wood → payment short → rollback; only the seam's +1 / 1 |
+| `ActivationInterrupted` | Piece destroyed after activation; builder ended after activation; builder ended before the commit (registry refuses) |
+| `PieceDestroyedAfterPayment` | D3 Warning, diagnostic and no refund, seen identically by the listener and the caller |
+| `PieceDestroyedDuringBuildResult` | Order-independent: one listener sees a valid piece and destroys it; the other listener and the caller see it invalid, with no diagnostic |
+| `BuilderEndedDuringPayment` | `Success`, piece stays Active, guard released, one result, +1 / 1 / 1 |
+| `ActivationCallbackAltersPiece` | Moved, hidden, collision disabled, made provisional, unregistered → `BuildInterrupted` with the matching diagnostic |
+| `UnsupportedPieceClass` | B1-valid plain actor → `InvalidDefinition` in `CanBuild` and `TryBuild` |
+| `Reentrancy` | Nested `CanBuild`/`TryBuild` from `OnInventoryChanged` and `OnBuildResult` → `BuildInProgress`, no extra events |
+| `TwoBuilders` | Second builder `Occupied` on the reserved and on the activated cell; succeeds elsewhere |
+| `ProvisionalInvariants` | Hidden, no collision, no navigation-relevant primitive, unregistered, key reserved, no occupant; navigation restored after activation |
+| `RetryAfterFailure` | After Insufficient, Occupied, Blocked at validation and at revalidation, TransformMismatch, SpawnFailed, Interrupted and Rejected, the same cell succeeds |
+| `ExactlyOnce` | Mixed sequence: results = non-nested calls (5), revisions = successes (2) |
+
+### Self-Review (including a fresh-context review pass)
+
+The fresh-context review (a read-only review subagent) found no P0 or P1 defect. Every step and rollback path matches 5.2.3 and 5.2.4. It found no path that charges twice, and no path that charges without an Active registered piece outside the accepted D3 window.
+
+P2 findings and their resolution (fixed before the clean build, then the full validation above was run):
+
+| Finding | Resolution |
+| --- | --- |
+| `bEndPlayed` never reset; preflight ignored it | **CONFIRMED.** Reset in `BeginPlay`; preflight refuses an ended component (`InvalidPlacement`). |
+| `GetAvailableBuildings` listed unconstructible buildings | **CONFIRMED.** Filtered by the `ABuildingPieceActor` contract (shared helper, also used by preflight and `IsDataValid`). |
+| Coarse cost-preflight mapping | **CONFIRMED.** Mapped per code (see above). |
+| Result struct placed in the B1 file | **CONFIRMED.** Moved to `ConstructionComponent.h`, as 5.2.12 says. |
+| Missing assertions | **CONFIRMED.** Added: deltas in `BuilderEndedDuringPayment`, branch diagnostics, a rotated build, and more failure kinds in `RetryAfterFailure`. "No Warning" in `PieceDestroyedDuringBuildResult` is verified by code inspection (no log on that path; the full-run log has no warnings). |
+| Blueprint-added primitives, child actors and scaled roots are not covered by native tests | **Deferred to B3** as an asset contract (see Known Limitations). |
+| Rollback acts on whatever actor a seam returns | **REJECTED:** only a test seam could return a foreign actor; production always spawns a fresh one. |
+
+### Known Limitations Carried Forward
+
+- **D2 (accepted):** callback-created blockers and per-primitive navigation are not re-checked after activation.
+- **B3 piece Blueprint contract.** Inspect each piece read-only through MCP before review:
+  - Primitives that a Blueprint adds are masked only by actor-level hidden and collision. Custom navigable geometry marked `EvenIfNotCollidable` would leak navigation.
+  - `ChildActorComponent` children are separate actors and are not provisional. They would also block their own piece at revalidation.
+  - The piece root must be unscaled, because the exact-transform check compares scale.
+- **Wiring:** the component is not on `BP_TopDownCharacter` yet (B3).
+
 ## Next Checkpoint
 
-B2 implementation, exactly as `BUILDING_PLAN.md` 5.2.3–5.2.12 and section 7 describe. It starts after the user authorizes it, once the approved design docs are committed. The checkpoint ends with a self-review (including a fresh-context review pass) and stops before its commit with the handoff report. Phase 5 stays IN PROGRESS.
+B2 is implemented and validated. It waits for the user's acceptance and commit approval.
+
+After that, B3 (Wooden Floor end to end: assets through MCP, `UConstructionComponent` on `BP_TopDownCharacter`) needs its own plan and approval. B3 must apply the piece Blueprint contract listed under the B2 known limitations. Phase 5 stays IN PROGRESS.

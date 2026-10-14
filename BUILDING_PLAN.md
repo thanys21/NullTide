@@ -6,7 +6,7 @@ Phase 5 of `NULLTIDE_MASTER_PLAN.md`. Building is delivered in small checkpoints
 - **B0 is APPROVED** (architecture, review refinements and the final decisions in section 10.3).
 - **B1 is COMPLETE / APPROVED:** data model, grid coordinates, occupancy and placement validation logic (see `BUILDING_PROGRESS.md`; full automation 198/198, cook PASS, no manual PIE required).
 - **B2 design gate is APPROVED (user, 2026-10-14):** decisions D1–D8 in 5.2.13, with D3 option (a). The design activates the piece before payment, so nothing fallible runs after the deduction. It was reviewed independently in two rounds (5.2.14, 5.2.15).
-- **B2 implementation is NOT STARTED.** B3–B6 are not started. Phase 5 is IN PROGRESS.
+- **B2 is IMPLEMENTED AND VALIDATED, awaiting user acceptance** (20 B2 tests, full automation 219/219, cook PASS; see `BUILDING_PROGRESS.md`). B3–B6 are not started. Phase 5 is IN PROGRESS.
 
 Baseline: `bbfcc08` (Phase 4 Crafting complete, C8A–C8C pushed). Full automation 190/190, Windows cook PASS.
 
@@ -700,7 +700,7 @@ Status after round 2: R1–R4, R2-1 to R2-4 and D8 are resolved in this text.
 
 **User decision (2026-10-14):** D3 option (a); D1, D2 and D4–D8 approved. The gate is closed. B2 is implemented exactly as 5.2.3–5.2.12 describe.
 
-Status: **APPROVED (user, 2026-10-14) after independent review rounds 1 and 2.** B2 implementation has not started. B1 does not implement or depend on any of this. No B2 code, G6 change or helper extraction exists.
+Status: **APPROVED (user, 2026-10-14) after independent review rounds 1 and 2.** B2 is implemented as described (see `BUILDING_PROGRESS.md`, B2). No G6 change or helper extraction exists.
 
 **NPC extensibility:** the authority takes its builder from its owner, and the subsystem is world-level. A future colonist with `UInventoryComponent` and `UConstructionComponent` (or a job system calling the same subsystem plus inventory transaction) builds through the same rules, without a second authority.
 
@@ -758,7 +758,7 @@ Status: **APPROVED (user, 2026-10-14) after independent review rounds 1 and 2.**
   - **Ground exclusion is geometric:** the collision box starts 1 cm above the highest support sample. No actor is ignored except the builder and the caller's `IgnoreActor`.
   - **Reservations purge stale entries first**, so a dead holder never blocks a new reservation.
 
-### B2 — Construction Authority (activate first, pay last) — DESIGN APPROVED, NOT STARTED
+### B2 — Construction Authority (activate first, pay last) — IMPLEMENTED AND VALIDATED, awaiting user acceptance
 The design gate is approved (5.2, 2026-10-14). The exact scope is in 5.2.12 and the test matrix in 5.2.10.
 - **Source:**
   - `Building/ConstructionComponent.h/.cpp`:
@@ -777,6 +777,7 @@ The design gate is approved (5.2, 2026-10-14). The exact scope is in 5.2.12 and 
 
 ### B3 — First Buildable: Wooden Floor (no UI)
 - **Assets (MCP):** `/Game/LevelPrototyping/BuildingSystem/Pieces/BP_BuildFloor` (child of `ABuildingPieceActor`, placeholder `/Engine/BasicShapes/Cube` 200×200×10), `/Game/LevelPrototyping/BuildingSystem/Definitions/Building_WoodFloor` (Wood ×4, approved), `BP_TopDownCharacter`: add `UConstructionComponent` with `AvailableBuildings = [Building_WoodFloor]`.
+- **Piece Blueprint contract (from the B2 self-review):** inspect `BP_BuildFloor` read-only through MCP before review. It needs an unscaled root (the exact-transform check compares scale), no `ChildActorComponent` (children are not provisional and would block their own piece), and no custom navigable geometry marked `EvenIfNotCollidable` (Blueprint-added primitives are masked only by actor-level hidden and collision).
 - **Tests:** production asset contract; an end-to-end build of the production floor in a transient world (cost consumed once, piece registered, second floor on the same cell → `Occupied`).
 - **PIE:** none required (no input yet). **Cook:** the new assets are cooked through the character reference. **Content/WP:** only the new assets and `BP_TopDownCharacter`; no map change.
 

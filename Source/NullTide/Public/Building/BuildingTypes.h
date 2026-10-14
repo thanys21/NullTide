@@ -76,7 +76,23 @@ enum class EBuildResult : uint8
 	/** A blocking actor (world, pawn or physics body) overlaps the piece. */
 	Blocked,
 	/** The piece would overlap the builder. */
-	BlocksBuilder
+	BlocksBuilder,
+	/** A build is already running on this construction component (reentrant request; nothing changed, no notification). */
+	BuildInProgress,
+	/** The building is not registered on the construction component. */
+	NotAvailable,
+	/** The builder has no inventory, or its native inventory authority is not active. */
+	InvalidInventory,
+	/** The builder's inventory does not hold the full cost. */
+	InsufficientResources,
+	/** The piece actor could not be spawned or did not survive spawning. */
+	SpawnFailed,
+	/** The spawned piece is not at the resolved transform, keys or layer. */
+	TransformMismatch,
+	/** Activation was refused or undone by a callback before payment; the piece was rolled back. */
+	BuildInterrupted,
+	/** The cost transaction failed at payment; the piece was rolled back and the inventory is unchanged. */
+	ResourcesRejectedRolledBack
 };
 
 /** One occupancy slot: a floor cell, a canonical edge or a furniture cell, on one height layer. */

@@ -5,6 +5,8 @@
 #include "Building/BuildingPieceActor.h"
 #include "Building/BuildingPieceComponent.h"
 #include "Building/BuildingSubsystem.h"
+#include "Components/BoxComponent.h"
+#include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
@@ -707,6 +709,64 @@ bool FBuildingB1PlacementValidationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Validation is deterministic"), Subsystem->ValidatePlacement(FloorClass, Floor(FVector(300.0, -100.0, 0.0)), Builder).Diagnostic
 		== Subsystem->ValidatePlacement(FloorClass, Floor(FVector(300.0, -100.0, 0.0)), Builder).Diagnostic);
 	Fixture.Audit(*this, TEXT("Placement validation"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB1OverlapOnlyVolumesTest,
+	"NullTide.Building.B1.OverlapOnlyVolumes",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB1OverlapOnlyVolumesTest::RunTest(const FString& Parameters)
+{
+	FB1World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	UBuildingSubsystem* Subsystem = Fixture.Subsystem;
+	AActor* Ground = Fixture.SpawnBox(FVector(300.0, 0.0, -50.0), FVector(700.0, 700.0, 50.0));
+	ACharacter* Builder = Fixture.SpawnCharacter(FVector(0.0, 0.0, 92.0));
+	if (!TestTrue(TEXT("World set up"), Ground && Builder)) { return false; }
+	const TSubclassOf<UBuildingDefinition> FloorClass = UBuildingTestFloorDefinition::StaticClass();
+	const FBuildingPlacement Cell = UBuildingSubsystem::MakePlacementFromWorld(B1Floor(), FVector(300.0, 300.0, 0.0), 0);
+	auto SpawnVolume = [](UShapeComponent* Shape, const FVector& Location)
+	{
+		AActor* Owner = Shape->GetOwner();
+		Owner->SetRootComponent(Shape);
+		Owner->AddInstanceComponent(Shape);
+		Shape->SetWorldLocation(Location);
+		Shape->RegisterComponent();
+		return Owner;
+	};
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	// Mirrors BP_PickUpItem "Sphere" (read through MCP for B2): WorldDynamic, QueryOnly, overlaps Pawn only, radius 32.
+	AActor* PickupActor = Fixture.World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity, Params);
+	USphereComponent* Sphere = NewObject<USphereComponent>(PickupActor, TEXT("Sphere"));
+	Sphere->SetSphereRadius(32.f);
+	Sphere->SetCollisionObjectType(ECC_WorldDynamic);
+	Sphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	Sphere->SetCollisionResponseToAllChannels(ECR_Ignore);
+	Sphere->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
+	Sphere->SetGenerateOverlapEvents(true);
+	SpawnVolume(Sphere, FVector(300.0, 300.0, 32.0));
+
+	// Mirrors the InteractionBounds of ACraftingStationActor and AStorageContainerActor: QueryOnly, overlaps every channel.
+	AActor* BoundsActor = Fixture.World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity, Params);
+	UBoxComponent* Bounds = NewObject<UBoxComponent>(BoundsActor, TEXT("InteractionBounds"));
+	Bounds->SetBoxExtent(FVector(150.0, 120.0, 110.0));
+	Bounds->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	Bounds->SetCollisionResponseToAllChannels(ECR_Overlap);
+	Bounds->SetGenerateOverlapEvents(true);
+	SpawnVolume(Bounds, FVector(300.0, 300.0, 90.0));
+
+	const FBuildingPlacementResult WithVolumes = Subsystem->ValidatePlacement(FloorClass, Cell, Builder);
+	TestTrue(FString::Printf(TEXT("Overlap-only pickup sphere and interaction bounds never block (%s)"), *WithVolumes.Diagnostic),
+		WithVolumes.IsSuccess());
+
+	AActor* Control = Fixture.SpawnBox(FVector(350.0, 350.0, 30.0), FVector(15.0, 15.0, 30.0), FRotator::ZeroRotator, TEXT("BlockAllDynamic"));
+	const FBuildingPlacementResult WithControl = Subsystem->ValidatePlacement(FloorClass, Cell, Builder);
+	TestTrue(TEXT("A BlockAllDynamic control in the same cell blocks"), WithControl.Result == EBuildResult::Blocked && WithControl.BlockingActor == Control);
+	Fixture.Audit(*this, TEXT("Overlap-only volumes"));
 	return true;
 }
 

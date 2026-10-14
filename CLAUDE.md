@@ -23,6 +23,33 @@ Do not start the next milestone until the current milestone is validated and com
 - Compile after C++ changes. After Blueprint changes, compile the affected Blueprints. Past milestones compiled them with `warnings_as_errors=true`.
 - Item data split: static data goes in `UItemDefinition` and its fragments, runtime state goes in `UItemInstance`, and inventory logic goes in `UInventoryComponent`. Use composition (fragments) instead of item subclasses.
 
+## Multi-agent workflow (Claude implements, Codex reviews)
+
+The shared workflow is in the `AGENTS.md` section "Multi-Agent Workflow — Claude Implementer / Codex Reviewer". Read it at the start of every checkpoint. The roles are:
+- Claude is the only agent that writes.
+- Codex reviews read-only.
+- The user decides.
+
+- **Plan gate:** after producing a new architecture plan, stop. Implement only after Codex has reviewed the plan and the user has approved it.
+- **Implementation:** implement only the approved checkpoint, run its validation, self-review the diff and record the evidence in the `*_PROGRESS.md`.
+- **Review handoff:** before any commit, stop and give a review handoff that includes:
+  1. the checkpoint and the baseline commit SHA;
+  2. `git status` and the exact changed files, including untracked files (which `git diff <baseline>` does not show);
+  3. an implementation summary;
+  4. the relevant invariants and architecture decisions, with references to the `*_PLAN.md`;
+  5. build, test and cook evidence: commands, counts, warnings, and what was not run;
+  6. a Content and World Partition audit: changed assets, plus `__ExternalActors__` and `__ExternalObjects__` counts;
+  7. known risks and untested cases;
+  8. the specific areas you want Codex to review.
+- **During the review:** do not change the working tree while Codex reviews.
+- **Classifying findings:** classify each Codex finding as CONFIRMED, REJECTED WITH EVIDENCE or NEEDS USER DECISION.
+  - Fix confirmed findings and rerun the relevant tests.
+  - Reject only with precise source, test or runtime evidence.
+  - A fix that changes an approved architecture decision needs the user.
+  - Do not blindly implement every reviewer suggestion.
+  - Record the resolutions in the `*_PROGRESS.md`. List any change made after the review in a delta handoff.
+- **Commits and pushes:** commit only on explicit user approval. Push only on a separate explicit instruction. Never advance to the next checkpoint automatically.
+
 ## Build
 
 The engine is installed at `D:/game/epic/UE_5.8`.

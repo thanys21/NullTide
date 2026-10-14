@@ -130,8 +130,11 @@ Every milestone should normally use:
 5. Windows cook
 6. Content/map audit
 7. report/progress docs
-8. Git commit
+8. independent Codex code review and finding resolution
+9. user-approved Git commit
 ```
+
+These steps run inside the nine-step checkpoint workflow in `AGENTS.md` (section "Multi-Agent Workflow — Claude Implementer / Codex Reviewer"). That workflow also adds the plan review and user approval gate before implementation, and it defines the review handoff.
 
 Do not fabricate manual PIE observations.
 
@@ -147,16 +150,14 @@ Manual PIE should record only visible behavior actually observed.
 
 ## Git discipline
 
-After every completed milestone:
+Commits and pushes are authorized by the user (see the workflow in `AGENTS.md`):
 
-```bash
-git status
-git add .
-git commit -m "<milestone message>"
-git push
-```
-
-Do not begin the next major milestone before the previous clean checkpoint is committed.
+- Commit only after the user explicitly approves that commit.
+- Stage selectively: only the approved files or hunks (`git add <path>`, `git add -p <path>`). Do not use `git add .` or `git add -A`.
+- Inspect `git diff --cached` before committing. Nothing unapproved may be staged.
+- Keep unrelated changes in separate commits.
+- Push only on a separate explicit user instruction. Never push automatically.
+- Do not start the next checkpoint or milestone without user approval, and never before the previous clean checkpoint is committed.
 
 ---
 
@@ -196,25 +197,17 @@ Claude should use Unreal MCP for:
 
 ## Multi-agent rule
 
-Claude and Codex may both be used, but:
+The roles are fixed:
 
 ```text
-ONLY ONE AGENT OWNS WRITES AT A TIME.
+Claude Code → sole implementer and write owner (code, tests, docs, Content, Git)
+Codex       → independent read-only review of plans and code
+User        → final approval, disagreements, manual PIE, commit and push authorization
 ```
 
-Example:
+Only Claude writes to the repository or modifies Unreal assets. Codex never modifies files, assets or Git state.
 
-```text
-Claude → implementation
-Codex  → audit/review
-
-or
-
-Codex  → implementation
-Claude → audit/review
-```
-
-Never allow both to modify Unreal assets concurrently.
+The detailed workflow is in `AGENTS.md`, section "Multi-Agent Workflow — Claude Implementer / Codex Reviewer", and that section is the authority. It covers roles, the checkpoint steps, the review handoff, the review quality contract and finding resolution.
 
 ---
 
@@ -1504,7 +1497,9 @@ Content/map audit
     +
 Progress/report docs
     +
-Manual Git commit
+Independent Codex review, findings resolved
+    +
+User-approved Git commit
 ```
 
 Only then advance the roadmap.
@@ -1632,6 +1627,8 @@ When Claude starts a task:
 9. Validate.
 10. Stop before the next milestone.
 ```
+
+Follow the checkpoint workflow in `AGENTS.md`: stop after a new plan for Codex review and user approval, and stop before every commit with the review handoff defined in `CLAUDE.md`.
 
 When touching Unreal Content:
 

@@ -8,7 +8,7 @@ Plan and design decisions: `BUILDING_PLAN.md`.
 | --- | --- |
 | B0 Architecture audit and design | APPROVED (user) |
 | B1 Data model, grid coordinates, occupancy and placement validation | COMPLETE / APPROVED (8/8; full automation 198/198; cook PASS; no manual PIE required) |
-| B2 Construction authority | NEXT — DESIGN REVIEW REQUIRED (design gate OPEN; see `BUILDING_PLAN.md` section 5.2). Not started. |
+| B2 Construction authority | NOT IMPLEMENTED — design gate proposal ready, awaiting approval (`BUILDING_PLAN.md` section 5.2, decisions D1–D8). |
 | B3–B6 | NOT STARTED |
 
 ## B1 - Data Model, Grid Coordinates, Occupancy and Placement Validation
@@ -181,14 +181,25 @@ Plan and design decisions: `BUILDING_PLAN.md`.
 - **Authored pieces:** an `Active` piece with no keys does not register on `BeginPlay`. Authored building pieces in a level would need their keys resolved from their transform (not needed until Phase 7 save/load or authored bases).
 - **NPC builders:** the builder is any actor; range and builder safety use its location and root collision.
 
-### B2 Design Gate — OPEN (required before B2 implementation)
+### B2 Design Gate — PROPOSAL READY, AWAITING APPROVAL
 
-The post-payment recovery chain **respawn → exact refund → world pickup** is accepted as a direction only. Before B2 is implemented, the design must:
-- specify each branch: respawn failure, exact-refund failure, world-pickup failure (including partial), terminal failure reporting, recovery-state retention and diagnosis, inventory revision and event counts per branch, and fault-injection tests per branch (the full checklist is in `BUILDING_PLAN.md` section 5.2);
-- record what the system guarantees in that case and how it is surfaced (result code, log, telemetry).
+Design review only, against baseline `0681261` (full suite 198/198). No code, assets, commit or push. The full proposal is in `BUILDING_PLAN.md` section 5.2.
 
-Until then, no "resources are always preserved" claim is made. B1 did not modify G6 or extract any world-pickup helper.
+- **Audit findings:**
+  - `OnInventoryChanged` fires synchronously inside the inventory's mutation guard, after the deduction.
+  - Failed transactions cost 0 revisions and 0 events.
+  - `CanApplyDefinitionTransaction` does not report `Busy`.
+  - The G6 pickup class is file-local, so building cannot spawn pickups without an inventory refactor.
+  - The B1 registry API is sufficient: reservations are owner-held, `CommitReservation` refuses a dead owner, and `ReleaseReservation` works by object key.
+- **Finding:** with the B0 order (pay, then finalize), listeners run in a post-payment window. Any failure there needs compensation that can itself fail, and Phase 5 cannot make that durable.
+- **Recommendation (D1):** activate the piece (commit the reservation, make it visible and collidable) **before** the single atomic cost transaction. The payment becomes the commit point with nothing fallible after it. Every earlier failure is a fail-closed rollback that never touches the inventory.
+- **Removed if approved:** the respawn → refund → pickup chain, its result codes and the G6 helper extraction. No pending-compensation record is needed.
+- **Remaining trade-offs (D2, D3):** an unpaid `Active` piece is observable by engine callbacks within one call. A paid piece destroyed by an `OnInventoryChanged` listener reports `Success` with a Warning and no refund.
+- **Fallback (D8):** the recovery chain with a runtime-only, explicitly non-durable pending-compensation record and `RecoveryFailed`.
+- **Tests specified:** 17 `NullTide.Building.B2.*` tests plus the B1 regression `OverlapOnlyVolumes`. Faults are injected through fixture actors, two protected virtual seams and inventory listeners; there are no debug switches.
+
+B1 stays COMPLETE. G6, the inventory and B1 source are unchanged.
 
 ## Next Checkpoint
 
-B1 is complete and approved (committed as the B1 milestone). Next: the B2 design review. The section 5.2 design gate must be resolved and approved before any B2 implementation. Phase 5 stays IN PROGRESS.
+Waiting for the user's decisions on the B2 gate (D1–D8 in `BUILDING_PLAN.md` 5.2.13). B2 implementation starts only after explicit approval. Phase 5 stays IN PROGRESS.

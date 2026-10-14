@@ -5,7 +5,7 @@ Phase 5 of `NULLTIDE_MASTER_PLAN.md`. Building is delivered in small checkpoints
 **Status:**
 - **B0 is APPROVED** (architecture, review refinements and the final decisions in section 10.3).
 - **B1 is COMPLETE / APPROVED:** data model, grid coordinates, occupancy and placement validation logic (see `BUILDING_PROGRESS.md`; full automation 198/198, cook PASS, no manual PIE required).
-- **B2 is NEXT — DESIGN REVIEW REQUIRED:** the design gate in section 5.2 is OPEN and must be resolved before any B2 implementation. B3–B6 are not started. Phase 5 is IN PROGRESS.
+- **B2 is NOT IMPLEMENTED — design gate proposal ready, awaiting approval:** section 5.2 recommends activating the piece before payment so that nothing fallible runs after the deduction (decisions D1–D8 in 5.2.13). No B2 code exists. B3–B6 are not started. Phase 5 is IN PROGRESS.
 
 Baseline: `bbfcc08` (Phase 4 Crafting complete, C8A–C8C pushed). Full automation 190/190, Windows cook PASS.
 
@@ -324,7 +324,7 @@ The ghost preview is a client-side `ABuildingPreviewActor` (mesh copied from the
 - `OnBuildResult(Definition, Result)` and `OnDemolishResult(Piece, Result)` fire exactly once per non-reentrant request.
 - `FBuildingPlacement` (USTRUCT): grid anchor (`FIntPoint`), edge axis, rotation, resolved world transform (computed by the subsystem, never trusted from UI without re-snapping).
 
-**`TryBuild` sequence (provisional actor state, refined per review):**
+**`TryBuild` sequence — B0 baseline (refined per review).** The B2 gate (5.2.3) proposes moving finalization (step 7) before the cost commit (step 6) and dropping the finalization recovery below. If D1 is approved, 5.2.3 replaces steps 6–8, the finalization recovery and the result-code list here.
 
 | Step | Action | On failure |
 | --- | --- | --- |
@@ -368,19 +368,248 @@ The ghost preview is a client-side `ABuildingPreviewActor` (mesh copied from the
 | `UBuildingSubsystem` | Grid, occupancy, placement validation (new) | — |
 | `UConstructionComponent` | Build and demolish transactions per builder (new) | — |
 
-### 5.2 B2 Design Gate — OPEN (must be resolved and approved before B2 implementation)
+### 5.2 B2 Design Gate — PROPOSAL READY, AWAITING APPROVAL (no B2 code exists)
 
-The recovery direction after a successful cost commit is **respawn the building → exact inventory refund → world pickups**. It is a direction only. **No unconditional resource-preservation claim is made** until this gate is closed. Before any B2 code, the B2 design must specify, and the user must approve:
+The B0 recovery direction after a successful cost commit was **respawn the building → exact inventory refund → world pickups**. It was accepted as a direction only. This section is the gate review. It recommends replacing that chain with an ordering in which **nothing fallible runs after payment**. Until the user approves it, sections 5 and 7 (B2) describe the B0 baseline and **no unconditional resource-preservation claim is made**. The original checklist (respawn, refund, pickup and terminal failure; retention; revision counts; fault injection) is answered in 5.2.3 to 5.2.8.
 
-1. **Respawn failure:** which conditions count as failure (keys no longer reservable, blocked transform, spawn returns null, the new actor fails revalidation), and whether respawn is attempted once or retried.
-2. **Refund failure:** the behaviour when `TryApplyDefinitionTransaction({}, Cost)` returns `Busy`, `InventoryFull`/capacity or `NotInitialized`, including whether a `Busy` refund can be deferred safely.
-3. **World-pickup failure:** the behaviour when the world-pickup spawn also fails for some or all cost lines (no safe transform, spawn null), including partial success across lines.
-4. **Terminal failure reporting:** the result code (for example a dedicated `RecoveryFailed`), the log severity, and what the player sees.
-5. **Recovery state retention and diagnosis:** whether lost resources are recorded (for example on the construction component or a diagnostic log entry with definition, quantities and builder), whether that record survives until a save exists (Phase 7), and how a developer inspects it.
-6. **Inventory revision and event counts per branch:** commit only, commit plus respawn, commit plus refund, commit plus partial or no refund plus pickups, and terminal failure. Each needs exact revision and `OnInventoryChanged` counts.
-7. **Fault-injection tests per branch:** a test seam (for example a test-only hook or test listeners) that forces respawn failure, refund failure and pickup-spawn failure independently and together, with assertions on result codes, inventory contents, revisions, events, occupancy (`AuditRegistry` clean) and world actors.
+#### 5.2.1 Source facts verified for this gate (commit `0681261`)
 
-Status: **OPEN**. B1 does not implement or depend on any of this. G6 is unchanged, and no world-pickup helper has been extracted.
+| Fact | Source | Consequence for B2 |
+| --- | --- | --- |
+| `TryApplyDefinitionTransaction` broadcasts `OnInventoryChanged` **synchronously, inside `TGuardValue bMutationInProgress`**, after `++Revision`. | `InventoryComponent.cpp` transaction tail | Listeners run after the deduction and before the call returns. They cannot mutate this inventory (`Busy`), but they can destroy actors, call other inventories, the subsystem or another builder. |
+| Failed transactions (`NotInitialized`, `Busy`, preflight failure, staging failure) return **before** `++Revision` and the broadcast. | same | Every pre-commit failure costs 0 revisions and 0 events. |
+| `CanApplyDefinitionTransaction` checks `CanOperate` and the plan, **not** `bMutationInProgress`. There is no public "busy" query. | same | A `TryBuild` nested in this inventory's own broadcast passes the preflight and gets `Busy` only at the commit. This is reachable and must roll back. |
+| `TryDropItemToWorld` is resolve → spawn → remove → rollback. The spawn and transform seams are protected virtual. The pickup class comes from a **file-local** `GetWorldPickupClass()`. | `InventoryComponent.h:132-141`, `.cpp:151, 614-740` | Building cannot spawn a world pickup without a new shared helper (an inventory/G6 refactor). |
+| `ReserveKeys` is all-or-nothing, purges stale entries first, and returns unique, never-reused ids. | `BuildingSubsystem.cpp:331` | Matches B2 needs. |
+| `CommitReservation` fails without change when the handle is stale or foreign, **the owner is no longer valid**, the piece is invalid or registered, or the key sets differ. On success it consumes the handle. | `:381` | Commit is deterministic given a live owner and an unregistered piece with the reserved keys. |
+| `ReleaseReservation` matches the owner by `FObjectKey`, so it works even after the owner object became garbage. | `:362` | Rollback can always release its own handle. |
+| A reservation is held by its **owner** (the construction component), not by a piece. A dead owner makes it count as free; it is purged on the next `ReserveKeys` or `PurgeStaleEntries`. | `IsOccupantAlive` | Destroying a provisional piece never invalidates the reservation. Owner death does. |
+| `UBuildingPieceComponent` unregisters on `EndPlay` and `OnComponentDestroyed`. `InitializePiece` is refused while registered. `SetPieceState` does not touch the registry. A piece registers itself on `BeginPlay` only when `Active` with keys. | `BuildingPieceComponent.cpp` | A committed piece that is destroyed frees its keys by itself. A deferred spawn initialized as `Provisional` never self-registers. |
+| `SetProvisional` is actor-wide for hidden and collision. It records navigation primitives at call time. Engine nav relevance requires query collision unless a primitive has `EvenIfNotCollidable` custom geometry. | `BuildingPieceActor.cpp`, engine `UPrimitiveComponent::IsNavigationRelevant` | Blueprint-added primitives created during `FinishSpawning` are also non-colliding and therefore not nav-relevant while provisional. A B2 test asserts this. No B1 change is needed. |
+
+#### 5.2.2 Review of the proposed nine-step transaction (pay, then activate)
+
+| # | Step | Mutation done when it fails | Cleanup | Registry | Actor | Inventory | Result | Notification |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Guard | none | none | — | — | — | `BuildInProgress` | none (nested) |
+| 2 | Resolve and validate (B1 `ValidatePlacement`) | none | none | unchanged | none | unchanged | B1 code | `OnBuildResult` ×1 |
+| 3 | Registered, inventory preflight | none | none | unchanged | none | unchanged | `NotAvailable`, `InvalidInventory`, `InsufficientResources` | ×1 |
+| 4 | Reserve | none | none | unchanged | none | unchanged | `Occupied` | ×1 |
+| 5 | Spawn deferred `AlwaysSpawn`, provisional | reservation | destroy partial actor, release | clean | destroyed | unchanged | `SpawnFailed` | ×1 |
+| 6 | Revalidate transform, surface, collision | reservation, actor | destroy, release | clean | destroyed | unchanged | `TransformMismatch`, `Blocked`, `NoGround`… | ×1 |
+| 7 | **Commit removal** | reservation, actor | destroy, release | clean | destroyed | unchanged (the commit failed atomically) | `ResourcesRejectedRolledBack` | ×1 |
+| — | **window** | **resources deducted**, listeners run | — | — | — | — | — | — |
+| 8 | Commit reservation, activate | **payment**, reservation, actor | **recovery chain needed** | — | — | — | — | — |
+| 9 | Broadcast | — | — | — | — | — | `Success` | ×1 |
+
+**Finding.** Steps 1–7 are clean and reversible. The window between 7 and 8 is real: `OnInventoryChanged` listeners run after the deduction. In it, the provisional actor can be destroyed, the builder can end play (which makes step 8's `CommitReservation` fail, because the owner is dead), or the world can change. Every post-payment failure needs compensation, and compensation can itself fail. With the nine-step order, no design can promise exact preservation without a durable compensation record, and Phase 5 has no persistence.
+
+#### 5.2.3 Recommended design: activate first, pay last (Option B)
+
+Move every fallible step before the payment. **The successful return of the one cost transaction is the commit point.** Nothing after it can fail.
+
+| # | Step | On failure |
+| --- | --- | --- |
+| 1 | `bBuildInProgress` guard (shared with the future `TryDemolish`). | Nested: return `BuildInProgress`; no side effects, no `OnBuildResult`. |
+| 2 | Resolve: definition registered in `AvailableBuildings`; builder inventory resolved and `CanOperate`; B1 `ValidatePlacement(Def, Request, Builder)` (re-snaps the request and never trusts a UI transform); `CanApplyDefinitionTransaction(Cost, {})`. | Specific code; nothing reserved or spawned. |
+| 3 | `Handle = ReserveKeys(this, Resolved.Keys)`. | `Occupied` (defensive: no code runs between steps 2 and 3, so this cannot be reached in practice). |
+| 4 | `SpawnActorDeferred(PieceActorClass, Resolved.WorldTransform, Owner = builder, AlwaysSpawn)` → `InitializePiece(Def, Resolved.Placement, Keys, Provisional, bPlayerBuilt = true)` → `SetProvisional(true)` → `FinishSpawning`. Require a valid, non-garbage actor of class `ABuildingPieceActor` with its piece component. | Destroy any partial actor, `ReleaseReservation`, `SpawnFailed`. |
+| 5 | Revalidate: transform equals the resolved one (0.1 cm, 0.01°); `ValidatePlacement(Def, Request, Builder, IgnoreReservation = Handle, IgnoreActor = Piece)` succeeds with identical keys, layer and transform. | Destroy, release, the B1 code or `TransformMismatch`. |
+| 6 | **Activate (unpaid):** `SetPieceState(Active)` → `CommitReservation(Handle, this, Piece)` → `SetProvisional(false)`. The keys become `Occupied` by the piece and the handle is consumed. | Commit refused (for example, the owner died): destroy, release, `BuildInterrupted`. |
+| 7 | **Integrity check:** the actor and piece are valid and not pending kill, the piece is registered with exactly those keys and is `Active`, the component has not ended play, and the inventory is still valid. Engine callbacks fired by enabling collision and navigation in step 6 could have changed any of these. | **Fail-closed rollback** (5.2.4); `BuildInterrupted`. |
+| 8 | **Pay (commit point):** `Inventory->TryApplyDefinitionTransaction(Cost, {})`. | `Busy`, `InsufficientResources`, `NotInitialized` and so on: fail-closed rollback, `ResourcesRejectedRolledBack`. The inventory is untouched because the commit is atomic. |
+| 9 | Success. If a `OnInventoryChanged` listener destroyed the paid piece during step 8, log a Warning and report `Success` with a null piece (decision D3). Broadcast `OnBuildResult(Success)` inside the guard, then return. | — |
+
+**Why this closes the window.** The only work after the deduction is the inventory's own broadcast, our guard reset and our one `OnBuildResult`. At the instant of payment the piece is `Active`, registered, visible and collidable. Whatever a listener does afterwards is the normal lifecycle of a finished building, the same as gameplay destroying it one frame later. No respawn, refund, pickup or pending record is needed.
+
+**What it costs (decision D2).** For the length of one synchronous call, an *unpaid* `Active` piece can be observed by engine callbacks caused by step 6: collision-settings changes, possible overlap begin and end events, and nav-octree dirtying. It is never rendered, because no frame passes. If payment then fails, the piece is destroyed in the same call. That fires the matching end events, and its nav area rebuilds unchanged. No item quantity moves at any point before step 8.
+
+#### 5.2.4 Fail-closed rollback (steps 6–8)
+
+Run in order; every step is safe to repeat:
+1. `SetProvisional(true)` and `SetPieceState(Provisional)`: hidden, no collision, no navigation.
+2. `UBuildingSubsystem::UnregisterPiece(Piece)` if it is registered, or `ReleaseReservation(Handle, this)` if the handle is unconsumed. Both are no-ops when there is nothing to remove.
+3. `Destroy()`.
+4. If the actor is not pending kill after `Destroy()`, which is not expected for a runtime-spawned actor, log an **Error** with the actor, definition and placement. The leftover is inert: hidden, non-colliding, unregistered, `Provisional`, so it is neither a free building nor occupancy. `AuditRegistry` stays clean.
+
+Rollback never touches the inventory, so a rollback failure can never lose or duplicate items.
+
+#### 5.2.5 State transition table (one `TryBuild` call)
+
+| From | Event | To | Registry | Piece actor | Inventory |
+| --- | --- | --- | --- | --- | --- |
+| Idle | guard taken, validation and preflight pass | Validated | — | — | — |
+| Validated | `ReserveKeys` ok | Reserved | keys `Reserved` (owner = component) | — | — |
+| Reserved | spawn ok | Provisional | `Reserved` | hidden, no collision, `Provisional`, unregistered | — |
+| Provisional | revalidation ok | Revalidated | `Reserved` | same | — |
+| Revalidated | activation and integrity ok | Activated (unpaid) | keys `Occupied` by piece; handle consumed | `Active`, visible, collidable | — |
+| Activated | payment ok (**commit point**) | Committed → Idle | `Occupied` | `Active` | −Cost, Revision +1, 1 event |
+| Reserved / Provisional / Revalidated | failure | RolledBack → Idle | released | destroyed | unchanged |
+| Activated | failure (integrity or payment) | RolledBack → Idle | unregistered | deactivated, destroyed (or inert, Error) | unchanged |
+| any | nested `TryBuild` | (unchanged) | — | — | — |
+
+A reservation never outlives one `TryBuild` call. Between calls a builder holds no registry state.
+
+#### 5.2.6 Failure and recovery matrix (all cases requested by the gate)
+
+The "Option A" column is the fallback contract if D1 is rejected (pay at step 7, then recover; 5.2.7).
+
+| Case | Recommended (Option B) | Option A fallback |
+| --- | --- | --- |
+| Provisional actor destroyed during `OnInventoryChanged` | Cannot happen: no provisional actor exists at payment. The paid `Active` piece destroyed by a listener → `Success`, Warning, no refund (D3). Keys are freed by its `EndPlay`. | Detected after the commit → recovery chain. |
+| Reservation handle invalid | Consumed at step 6 before payment. If the commit is refused (dead owner) → rollback, `BuildInterrupted`, nothing paid. | The commit after payment fails → respawn reserves again or skips to refund. |
+| Another actor on the reserved keys | Registry: impossible, because the subsystem refuses (reserved or occupied, all-or-nothing). World blocker spawned before step 5 → `Blocked` pre-payment. A blocker spawned by an engine callback during step 6 is **not** re-validated (documented limitation). | The respawn revalidation fails → refund. |
+| Respawn failure | Not applicable (no respawn). | Attempted **once**. Failure = no reservation, spawn null, transform mismatch, blocked, or interrupted activation → refund. |
+| Refund `Busy` | Not applicable. | Unreachable after the commit returns (this inventory is free again); handled defensively as a refund failure → pickups. |
+| Refund capacity changed | Not applicable. | Full refund first (one transaction); otherwise per-line refunds (one transaction each); remaining lines → pickups. |
+| Pickup spawn failure | Not applicable. | That line stays in the pending record. |
+| Partial pickups | Not applicable. | Successful lines are removed from the record; failed lines stay; `RecoveryFailed`. |
+| Builder `EndPlay` | Before step 8 → rollback, `BuildInterrupted`, nothing paid. During the step 8 broadcast → `Success` (paid, piece `Active`). | Record lost with the component (Error log); not durable. |
+| World `EndPlay` | Cannot begin inside a synchronous game-thread call. `Deinitialize` clears the registry between frames. | same |
+| Reentrant `TryBuild` (same builder, from `OnInventoryChanged`, `OnBuildResult` or an engine callback) | `BuildInProgress`, no side effects, no `OnBuildResult`. | same |
+| Second builder from a callback | Its own guard; same keys → `Occupied` (step 3 reservation or step 6 occupancy); other keys → normal independent build. | same |
+| `TryBuild` nested in this inventory's own broadcast | Preflight passes; step 8 returns `Busy` → rollback, `ResourcesRejectedRolledBack`, 0 revisions. | same |
+| Retry after an earlier failure | Independent; no state carries over (no reservation or record survives a call). | Retry resolves the pending record first (exactly once per attempt id). |
+
+#### 5.2.7 Terminal-failure contract: options evaluated
+
+**Option A — post-payment recovery chain plus a pending-compensation record.**
+- Record: per attempt `FGuid AttemptId`, the builder, the definition, and the remaining `TArray<FInventoryDefinitionQuantity>`. It is decremented only after a verified successful refund transaction or a verified pickup spawn, which makes compensation exactly-once per attempt.
+- Result `RecoveryFailed` with an **Error** log (attempt id, definition, remaining lines, builder). A developer API retries the refund later.
+- **Limitations:**
+  - **runtime only**: lost on builder `EndPlay`, level unload, quit and **crash**, so it is not durable;
+  - Phase 7 would have to serialize it;
+  - it needs a G6 extraction for pickups;
+  - three new fallible branches each need tests;
+  - reentrancy rules apply inside every compensation broadcast;
+  - the player still sees a deduction without a building until the retry succeeds.
+
+**Option B — reorder so the payment is the last fallible step (recommended).**
+- Exactly-once holds by construction: one atomic transaction is the commit point.
+- No partial recovery or retry state exists.
+- The reentrancy surface is the same as crafting's.
+- Object lifetime is checked before payment only.
+- Survival across level unload, quit or crash: nothing is in flight between frames. A crash loses the inventory and the buildings of the session together; Phase 5 persists neither.
+- **Phase 7:** saves happen between frames, so a save sees either (not paid, no piece) or (paid, `Active` piece). There is no compensation record to persist.
+- **Limitations:**
+  - the unpaid-active observation interval (D2);
+  - no refund if gameplay destroys the paid piece inside the payment broadcast (D3);
+  - blockers created by engine callbacks during activation are not re-validated.
+
+**Honest guarantee statement (if B is approved).** Within a `TryBuild` call, resources are deducted only by the one atomic transaction, and only while the built piece is `Active` and registered. Every failure before it leaves the inventory unchanged, the registry clean and no usable piece. Nothing is claimed about durability across a crash: Phase 5 has no persistence for anything.
+
+#### 5.2.8 Inventory revision and `OnInventoryChanged` matrix (per `TryBuild` call; builder inventory)
+
+| Case | Option B: Revision / events / `OnBuildResult` | Option A: Revision / events |
+| --- | --- | --- |
+| Validation failure | 0 / 0 / 1 | 0 / 0 |
+| Reservation failure | 0 / 0 / 1 | 0 / 0 |
+| Spawn failure | 0 / 0 / 1 | 0 / 0 |
+| Transform mismatch, collision change | 0 / 0 / 1 | 0 / 0 |
+| Cost rejection at commit (`Busy`, short) | 0 / 0 / 1 | 0 / 0 |
+| Interrupted activation | 0 / 0 / 1 | n/a |
+| Success | +1 / 1 / 1 | +1 / 1 |
+| Respawn recovery | n/a | +1 / 1 |
+| Full refund | n/a | +2 / 2 |
+| Per-line refund (k lines succeed) | n/a | +1+k / 1+k |
+| Pickup compensation only | n/a | +1 / 1 (pickups do not touch the inventory) |
+| Partial pickup | n/a | +1+k / 1+k (k refunded lines) |
+| Terminal failure | n/a | +1 / 1 plus any refunded lines |
+| Nested request | the nested call 0 / 0 / 0; the outer call is unchanged | same |
+
+A test that mutates the inventory itself (a fault-injection removal) adds exactly its own +1 / 1. All quantities change only through `UInventoryComponent`; building never touches stacks.
+
+#### 5.2.9 Occupancy and lifecycle contract
+
+- **B1 API sufficiency:** sufficient. B2 uses only `ValidatePlacement`, `ReserveKeys`, `CommitReservation`, `ReleaseReservation`, `UnregisterPiece`, `IsPieceRegistered`, `AuditRegistry`, `InitializePiece`, `SetPieceState` and `SetProvisional`, with no bypass. **No B1 API change is required.** The only B1 file change is appending the B2 `EBuildResult` codes (already planned in B1).
+- **Ownership and identity:** the owner is the `UConstructionComponent`; the handle is a unique `int64` id, never reused, held in a local variable for one call.
+- **Release:** at steps 4–6 on any failure (`ReleaseReservation`, which works even if the owner became garbage). Otherwise consumed by `CommitReservation` at step 6.
+- **When keys become occupied:** at step 6, before payment, with holder = piece.
+- **Piece `EndPlay`:** cannot invalidate a reservation (the holder is the owner). After step 6 it unregisters its occupancy, which is also the rollback path.
+- **Forced piece destruction:** before step 6 the handle is released by rollback; after step 6 the piece's `EndPlay` unregisters; after payment it is normal destruction.
+- **Owner `EndPlay`:** sets `bEndPlayed`, which the integrity check reads. When idle there is nothing to clean. In flight, the reservation is stale and released by rollback (and would be purged anyway).
+- **Audit:** `AuditRegistry()` is empty and `GetReservedKeyCount() == 0` after every B2 test call.
+- **Duplicate prevention:**
+  - the guard;
+  - all-or-nothing reservation;
+  - `CommitReservation` refusing registered pieces;
+  - `InitializePiece` refused while registered;
+  - one spawn per call.
+
+#### 5.2.10 Test matrix `NullTide.Building.B2.*` (transient world; native fixtures only)
+
+All run in the CQTest-style world fixture (`FB1World` pattern). Each asserts the result code, exact inventory contents, the Revision delta, the `OnInventoryChanged` and `OnBuildResult` counts, the live piece-actor count, `AuditRegistry` empty and reserved keys 0.
+
+**Deterministic injection.**
+- Fixture piece actor classes in `BuildingTestTypes.h`:
+  - one that destroys itself in `BeginPlay` (spawn failure);
+  - one that offsets itself in `OnConstruction` (transform drift);
+  - one that spawns a blocking box at its own location in `BeginPlay` (collision change).
+- A test subclass `UConstructionTestComponent` overriding two protected virtual seams in the G6 style: `SpawnProvisionalPiece` (may return null) and `ActivatePiece` (calls Super, then runs a test lambda).
+- Test listeners on `OnInventoryChanged` and `OnBuildResult`.
+- No production debug switch.
+
+| Test | Scenario and key assertions |
+| --- | --- |
+| `Success` | Exact cost removed; +1 / 1 / 1; the piece is `Active`, registered with exact keys, visible and collidable; `bPlayerBuilt`. |
+| `ValidationFailures` | `InvalidDefinition`, `NotAvailable`, `OutOfRange`, `Occupied` (existing piece and another owner's reservation), `Blocked`; each 0 / 0 / 1, no actor spawned. |
+| `InventoryPreflight` | `InsufficientResources`, `InvalidInventory` (no inventory, `NotInitialized`); 0 / 0 / 1; nothing reserved. |
+| `SpawnFailure` | Self-destroying class and seam returning null → `SpawnFailed`; reservation released. |
+| `TransformMismatch` | Drifting class → `TransformMismatch`; piece destroyed; keys free. |
+| `CollisionChangedDuringSpawn` | Blocker-spawning class → `Blocked` at revalidation; 0 / 0 / 1. |
+| `BlockerAfterPreview` | `CanBuild` success, the test spawns a blocker, then `TryBuild` → `Blocked`. |
+| `InventoryBusyAtCommit` | `TryBuild` from the builder inventory's `OnInventoryChanged` → `ResourcesRejectedRolledBack`; only the trigger's +1 / 1; piece destroyed; keys free. |
+| `ResourcesChangedDuringActivation` | The `ActivatePiece` seam removes Wood through the inventory → payment short → rollback; only the seam's +1 / 1. |
+| `ActivationInterrupted` | The seam destroys the piece, then (separately) ends the builder's play → `BuildInterrupted`; 0 / 0 / 1. |
+| `PieceDestroyedAfterPayment` | An `OnInventoryChanged` listener destroys the paid piece → `Success`, Warning, +1 / 1 / 1, keys free. |
+| `BuilderEndedDuringPayment` | A listener destroys the builder pawn → `Success`; the piece stays `Active`. |
+| `Reentrancy` | Nested `TryBuild` from `OnInventoryChanged` and from `OnBuildResult` → `BuildInProgress`, 0 extra events; one piece. |
+| `TwoBuilders` | B targets A's keys from A's seam → `Occupied`; B on other keys succeeds; each inventory +1 / 1. |
+| `ProvisionalInvariants` | Inside the seam before activation: hidden, actor collision off, no nav-relevant primitive, `Provisional`, unregistered, keys `Reserved`, `GetOccupyingPiece` null. |
+| `RetryAfterFailure` | After each failure kind, the same placement then succeeds (no residue). |
+| `ExactlyOnce` | Over a mixed sequence, `OnBuildResult` count = non-nested call count; Revision delta = success count. |
+| **B1 regression** `NullTide.Building.B1.OverlapOnlyVolumes` | Overlap-only sphere (pickup-like) and box (interaction-bounds-like) over the footprint → `ValidatePlacement` `Success`; a `BlockAllDynamic` control → `Blocked`. Profiles mirror the production ones, confirmed read-only at implementation time. |
+
+**Not unit-testable without an extra seam (covered by code review):** `ReserveKeys` failing after a successful validation (unreachable), and `Destroy()` failing in rollback (the inert-actor Error path).
+
+#### 5.2.11 G6 pickup-helper extraction: assessment
+
+- **Option B: do not extract.** No building path spawns pickups. G6 and the inventory are untouched, and the previously planned B2 refactor is removed from scope.
+- **Option A only:** extract a native-only `SpawnWorldPickupForDefinition(World, Definition, Quantity, Transform)` holding today's file-local `GetWorldPickupClass` plus the body of `SpawnAndConfigureWorldDrop`:
+  - preserved: deferred spawn with `AdjustIfPossibleButDontSpawnIfColliding`, reflected `ItemDefinition`/`Quantity`, destroy on failure, `FinishSpawning`, `RefreshWorldPresentation`;
+  - the G6 virtual seams keep routing through it;
+  - building would also need its own transform resolution (the current one is pawn-based);
+  - validated by the unchanged G6 suite plus a helper test;
+  - risks: test subclass overrides and the reflected property names.
+
+#### 5.2.12 Exact B2 scope (proposed, Option B)
+
+- **New:** `Building/ConstructionComponent.h/.cpp`:
+  - `AvailableBuildings` (with `IsDataValid`);
+  - `GetAvailableBuildings`, `CanBuild` (exact read-only preflight: steps 2 and B1 validation), `TryBuild` (5.2.3);
+  - the `OnBuildResult` delegate;
+  - the guard, `EndPlay` flag, and two protected virtual seams.
+  - The result struct carries the code, the placed actor, the resolved placement and a diagnostic.
+- **Changed:** `BuildingTypes.h` appends `BuildInProgress`, `NotAvailable`, `InvalidInventory`, `InsufficientResources`, `SpawnFailed`, `TransformMismatch`, `BuildInterrupted` and `ResourcesRejectedRolledBack`. The B0 codes `SuccessRecovered`, `FinalizeFailedRefunded` and `FinalizeFailedDropped` are dropped (never implemented).
+- **Tests:** `BuildingTestTypes.h` fixtures, a new `ConstructionTests.cpp` (5.2.10) and the B1 overlap regression.
+- **Not in B2:**
+  - `TryDemolish`/`CanDemolish` (B6; same guard);
+  - assets, `BP_TopDownCharacter`, map or World Partition changes (B3+);
+  - input or UI;
+  - any change to inventory, G6, crafting, storage or interaction source.
+
+#### 5.2.13 Decisions requiring approval
+
+- **D1:** adopt Option B (activate first, pay last; the payment is the commit point) and drop the post-payment recovery chain (respawn → refund → pickups) together with its three result codes.
+- **D2:** accept that an unpaid `Active` piece is observable by synchronous engine callbacks for the length of one call (never rendered; destroyed if payment fails).
+- **D3:** a paid piece destroyed by an `OnInventoryChanged` listener during payment → `Success` with a Warning and no refund.
+- **D4:** the new result code `BuildInterrupted`, plus the appended codes in 5.2.12.
+- **D5:** test seams = two protected virtual hooks (`SpawnProvisionalPiece`, `ActivatePiece`) plus fixture actors; no debug switches.
+- **D6:** no G6 extraction in B2.
+- **D7:** B2 is build-only; demolition stays in B6.
+- **D8:** fallback if D1 is rejected: Option A with a runtime-only pending-compensation record and `RecoveryFailed` (explicitly non-durable), plus the G6 extraction in 5.2.11.
+
+Status: **PROPOSAL READY — AWAITING USER APPROVAL.** B1 does not implement or depend on any of this. No B2 code, G6 change or helper extraction exists.
 
 **NPC extensibility:** the authority takes its builder from its owner, and the subsystem is world-level. A future colonist with `UInventoryComponent` and `UConstructionComponent` (or a job system calling the same subsystem plus inventory transaction) builds through the same rules, without a second authority.
 
@@ -439,6 +668,8 @@ Status: **OPEN**. B1 does not implement or depend on any of this. G6 is unchange
   - **Reservations purge stale entries first**, so a dead holder never blocks a new reservation.
 
 ### B2 — Construction Authority (provisional build, atomic cost)
+> **Gate proposal (pending approval):** the exact proposed scope is in section 5.2.12 and the test matrix in 5.2.10. If D1 is approved, they replace the B0 list below, including the G6 helper extraction and the recovery-branch tests.
+
 - **Source:**
   - `Building/ConstructionComponent.h/.cpp`: `AvailableBuildings`, `CanBuild`/`TryBuild`, the guard, events, the provisional sequence of section 5, finalization recovery, and `EndPlay` releasing reservations.
   - Registration (`AvailableBuildings`) and the inventory preflight are checked by `UConstructionComponent` around the unchanged B1 `ValidatePlacement` (section 4.1); the subsystem stays inventory-free.
@@ -508,7 +739,7 @@ Status: **OPEN**. B1 does not implement or depend on any of this. G6 is unchange
 - **Walls before demolition:** B5 makes enclosure possible before B6 provides demolition (decision 10.2-4).
 - **World Partition:** runtime pieces are not saved and disappear at session end (expected until Phase 7). Pieces must never be created as editor-placed external actors.
 - **Spawn collision handling:** the engine's spawn adjustment is avoided. The piece spawns `AlwaysSpawn` as provisional, and the authority's own overlap test at the exact grid transform decides; a transform drift fails with `TransformMismatch`.
-- **Finalization after payment:** a listener destroying the provisional actor during the cost commit is the only post-payment failure; the recovery chain (respawn, then refund, then drop) is the accepted direction, but total recovery failure still needs a contract and tests at the B2 design gate before any "nothing is lost" guarantee is claimed. These branches are rare and must be covered by forced tests.
+- **Finalization after payment:** with the B0 order, `OnInventoryChanged` listeners run after the deduction and before finalization, so a post-payment failure needs compensation that can itself fail. The B2 gate (5.2) proposes activating before paying so that no fallible step follows the payment; the remaining trade-offs are decisions D2 and D3.
 - **Reentrancy and cross-builder races:** the per-builder guard plus subsystem reservations; nested calls return `BuildInProgress` without notifications.
 - **Height layers:** the 50 cm layer quantum and 25 cm unevenness tolerance are tuned for the current map (ground 0, plateau 200). A future map with gentle hills may need different tolerances.
 - **Door interface wiring:** needs one manual editor step (decision 10.2-1); until it is done, the door piece builds but cannot be opened. The B5 contract test catches a missing interface.
@@ -555,7 +786,7 @@ Refinements required by the review and integrated here:
    - **Recommended:** one manual editor step by the user in B5 (Class Settings → Implemented Interfaces → `BPI_Interactable`); everything else through MCP and C++.
    - Alternative: a native C++ interaction interface plus changes to the protected `PlayerInteractionComponent` so it accepts both.
 2. **Layer and terrain tolerances:** layer quantum 50 cm, unevenness tolerance 25 cm, maximum slope 30°, floor thickness 10 cm, wall height 250 cm.
-3. **Finalization recovery order:** respawn the piece (the player keeps what they paid for), then an exact refund, then dropped pickups. This requires extracting a small generic world-pickup spawn helper from the G6 drop code, with no behaviour change.
+3. **Finalization recovery order:** respawn the piece (the player keeps what they paid for), then an exact refund, then dropped pickups. This requires extracting a small generic world-pickup spawn helper from the G6 drop code, with no behaviour change. *(Superseded by the B2 gate proposal in section 5.2 if D1 is approved.)*
 4. **Checkpoint order for walls versus demolition:** B5 (walls and doors) before B6 (demolition) means a player could fully enclose themselves in B5 PIE without a way to remove walls except the door.
    - **Recommended:** keep the order and require a door in B5 PIE rooms.
    - Alternative: swap B5 and B6 (demolition first, floors only), or add a temporary debug "demolish all player-built" console command in B5.

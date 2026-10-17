@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Building/BuildingDefinition.h"
 #include "Building/BuildingPieceActor.h"
+#include "Building/BuildingPlacementComponent.h"
 #include "Building/ConstructionComponent.h"
 #include "BuildingTestTypes.generated.h"
 
@@ -177,6 +178,28 @@ protected:
 	virtual bool ActivatePiece(ABuildingPieceActor& Piece, const FBuildingReservationHandle& Handle) override;
 };
 
+/** Placement component with a scripted cursor and a viewport-free HUD (a transient world has no local player). */
+UCLASS(Transient, NotBlueprintable)
+class UBuildingPlacementTestComponent : public UBuildingPlacementComponent
+{
+	GENERATED_BODY()
+
+public:
+	bool bHasCursor = true;
+	FVector CursorLocation = FVector::ZeroVector;
+	int32 HudCreateCount = 0;
+	/** A transient world's player controller has no local player; tests decide whether it counts as local. */
+	bool bTreatControllerAsLocal = true;
+
+	void SetCursor(const FVector& Location) { CursorLocation = Location; bHasCursor = true; }
+	void SetHudClass(TSubclassOf<UBuildingHudWidget> InClass) { HudWidgetClass = InClass; }
+
+protected:
+	virtual bool GetCursorWorldLocation(FVector& OutLocation) const override;
+	virtual bool IsLocalBuilderController(const APlayerController& PlayerController) const override { return bTreatControllerAsLocal; }
+	virtual UBuildingHudWidget* CreateHudWidget(APlayerController& PlayerController) override;
+};
+
 /** Records inventory and build-result notifications and runs optional hooks inside them. */
 UCLASS(Transient, NotBlueprintable)
 class UConstructionTestListener : public UObject
@@ -190,6 +213,10 @@ public:
 	UFUNCTION()
 	void HandleBuildResult(TSubclassOf<UBuildingDefinition> DefinitionClass, const FBuildingConstructionResult& Result);
 
+	UFUNCTION()
+	void HandleBuildingModeChanged(bool bBuildingModeActive);
+
+	TArray<bool> ModeChanges;
 	TFunction<void()> InventoryHook;
 	TFunction<void(const FBuildingConstructionResult&)> BuildResultHook;
 	int32 InventoryEvents = 0;

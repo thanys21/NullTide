@@ -6,7 +6,7 @@ Phase 5 of `NULLTIDE_MASTER_PLAN.md`. Building is delivered in small checkpoints
 - **B0 is APPROVED** (architecture, review refinements and the final decisions in section 10.3).
 - **B1 is COMPLETE / APPROVED:** data model, grid coordinates, occupancy and placement validation logic (see `BUILDING_PROGRESS.md`; full automation 198/198, cook PASS, no manual PIE required).
 - **B2 design gate is APPROVED (user, 2026-10-14):** decisions D1–D8 in 5.2.13, with D3 option (a). The design activates the piece before payment, so nothing fallible runs after the deduction. It was reviewed independently in two rounds (5.2.14, 5.2.15).
-- **B2 is COMPLETE / APPROVED** (20 B2 tests, full automation 219/219, cook PASS; commit `bccd0bc`). **B3 (Wooden Floor) IMPLEMENTED AND VALIDATED, awaiting user acceptance** (4 B3 tests, full automation 223/223, cook PASS; section 7 B3, `BUILDING_PROGRESS.md`). B4–B6 are not started. Phase 5 is IN PROGRESS.
+- **B2 is COMPLETE / APPROVED** (20 B2 tests, full automation 219/219, cook PASS; commit `bccd0bc`). **B3 (Wooden Floor) is COMPLETE / APPROVED** (4 B3 tests, full automation 223/223, cook PASS; commit `ff04c0e`). **B4 (building mode, ghost, input) IMPLEMENTED AND VALIDATED, awaiting user acceptance** (7 B4 tests, full automation 230/230, cook PASS, manual PIE 8/8 PASS; section 7 B4, `BUILDING_PROGRESS.md`). B4–B6 are not started. Phase 5 is IN PROGRESS.
 
 Baseline: `bbfcc08` (Phase 4 Crafting complete, C8A–C8C pushed). Full automation 190/190, Windows cook PASS.
 
@@ -775,7 +775,7 @@ The design gate is approved (5.2, 2026-10-14). The exact scope is in 5.2.12 and 
 - **PIE:** none. **Content/WP:** no change. **Cook:** yes (source only).
 - **Review:** run a self-review that includes a fresh-context review pass over the native code. Then stop before the commit with the handoff report (`AGENTS.md`).
 
-### B3 — First Buildable: Wooden Floor (no UI) — IMPLEMENTED AND VALIDATED, awaiting user acceptance (plan approved 2026-10-15)
+### B3 — First Buildable: Wooden Floor (no UI) — COMPLETE / APPROVED (`ff04c0e`)
 
 **Goal:** the first production building exists and builds end to end through the B2 authority, on the real player Blueprint. There is no input or UI yet, so the player cannot trigger a build in PIE until B4.
 
@@ -872,14 +872,161 @@ The design gate is approved (5.2, 2026-10-14). The exact scope is in 5.2.12 and 
 - **R-6 Map support surface (B4 risk).** If the `Lvl_TopDown` ground is not `WorldStatic`, every PIE placement would fail with `Blocked` or `NoGround`. The B3 MCP check reports it early. Fixing it is B4 scope (a decision then), not B3.
 - **R-7 Piece contract drift.** The B2 limitations (Blueprint primitives, child actors, scaled root) are enforced by `ProductionPieceContract` and the provisional check in `ProductionFloorEndToEnd`, so a later art pass that breaks them fails a test.
 
-### B4 — Building Mode, Ghost Preview and Placement Input
-- **Source:** `Building/BuildingPlacementComponent.h/.cpp` (enter and exit, selection, per-frame cursor trace and snap, rotation, confirm and cancel, cursor state save and restore, exit when a UI-only screen opens), `Building/BuildingPreviewActor.h/.cpp`, a small HUD widget base `UI/BuildingHudWidget.h/.cpp` (selected piece, reason text).
-- **Assets (MCP):** `IMC_Building` and `IA_BuildToggle`, `IA_BuildConfirm`, `IA_BuildCancel`, `IA_BuildRotate`, `IA_BuildSelect` under `/Game/LevelPrototyping/BuildingSystem/Input/`; `M_BuildPreview` (translucent, a color parameter); `W_BuildingHud`; `BP_TopDownCharacter` adds `UBuildingPlacementComponent`.
-- **Tests:** mode state machine; exit on screen open, `EndPlay` and possession change; selection; rotation steps; a confirm calls `TryBuild` exactly once per press; cursor state restored; the preview never registers occupancy or collides.
-- **PIE (user):** enter and exit with `B`; ghost follows the cursor on the grid; green and red feedback with reasons; build a floor with LMB; RMB cancels; WASD still works; `F`/`I`/`Tab` exit building mode cleanly; no cursor or focus lock; storage, crafting and gathering unchanged.
-- **Content/WP:** new input, material and UMG assets plus the character; no map change.
+### B4 — Building Mode, Ghost Preview and Placement Input — IMPLEMENTED AND VALIDATED, awaiting user acceptance (plan approved 2026-10-15)
+
+**Goal:** the player builds the Wooden Floor in PIE.
+- `B` enters building mode.
+- A ghost follows the cursor on the grid, green or red with a reason.
+- LMB builds through `UConstructionComponent::TryBuild`.
+- RMB or `B` exits.
+
+This is the first Building checkpoint with manual rendered PIE.
+
+**Baseline:** `ff04c0e` (B3 committed and pushed). Full automation 223/223, cook 624/7/631.
+
+#### Audit (2026-10-15)
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| Normal gameplay has the cursor **hidden** and input mode **GameOnly**. Every screen's close path calls `SetShowMouseCursor(false)` and `SetInputMode_GameOnly`. Storage and workbench open with `SetShowMouseCursor(true)` and `SetInputMode_UIOnlyEx`. | `InventoryScreenWidget.cpp:245-251`, `StorageScreenWidget.cpp:88-96`, `StorageContainerActor.cpp:75-76`, `CraftingStationActor.cpp:130-131` | Building mode must show the cursor and restore it. Building mode must not be active when a screen opens, or a screen's close path and the mode's exit path would fight over the cursor. |
+| Input: Enhanced Input (`EnhancedPlayerInput`, `EnhancedInputComponent`). Viewport capture `CapturePermanently_IncludingInitialMouseDown`, lock `LockOnCapture`. | `Config/DefaultInput.ini:75-80` | Mapping contexts are added through the local player's `UEnhancedInputLocalPlayerSubsystem`. A higher-priority context whose actions consume input blocks lower-priority mappings of the same key. |
+| **The ground `Floor_0` is the only map geometry with a collision override:**<br>• `BlockAllDynamic`, so it is `WorldDynamic`;<br>• it also saves a `Mobility` value;<br>• external actor package `__ExternalActors__/TopDown/Lvl_TopDown/2/33/SKUR0WWL7JT7C3OXZMWAQS`.<br>The 53 prototype blocks (cube, ramp, quarter cylinder, cylinder) use the `StaticMeshActor` default (`BlockAll`, `WorldStatic`). | B3 MCP read-back; package string scan | B1 `ValidatePlacement` treats `Floor_0` as a non-support blocker, so every placement on the main ground is `Blocked`. The other level geometry already supports. See decision B4-1. |
+| No click-to-move, `B`, `R`, LMB or RMB game mapping exists. `I`/`Tab` (`IA_OpeningInventory`) and `F` (`IA_Interact`) open screens. | `BUILDING_PLAN.md` 3.1–3.2 (B0 audit), `CLAUDE.md` | No conflict for the building keys; `I`/`Tab`/`F` need decision B4-2. |
+| HUD precedent: `UGatherProgressPresenterComponent` creates and owns its widget. UMG assets on native bases were created through MCP in C8C. | `CLAUDE.md`, `CRAFTING_PROGRESS.md` C8C | Same pattern for the building HUD. |
+
+#### Scope (with the recommended decisions)
+
+**Source:**
+- **`Building/BuildingPlacementComponent.h/.cpp` (new), on `BP_TopDownCharacter`.** It is the player-side UX only; `UConstructionComponent` stays the authority.
+  - **Configuration:** the two mapping contexts and their actions, the preview material, the HUD widget class and the preview refresh interval.
+  - **API:** `EnterBuildingMode`, `ExitBuildingMode`, `ToggleBuildingMode`, `ConfirmPlacement`, `IsBuildingModeActive`, `GetSelectedBuilding` (the first registered building, decision B4-3), `GetPreviewResult`, and an `OnBuildingModeChanged` delegate.
+  - **Enter:**
+    - requires a local player controller and a construction component with at least one building;
+    - remembers `bShowMouseCursor` and shows the cursor (input mode stays GameOnly);
+    - adds `IMC_BuildingMode`;
+    - spawns one preview actor and creates the HUD;
+    - enables tick.
+  - **Tick (building mode only):**
+    - trace under the cursor (Visibility) through a protected virtual seam;
+    - snap with `MakePlacementFromWorld`;
+    - re-run `CanBuild` when the snapped placement changes or the refresh interval passes;
+    - move and tint the ghost; update the HUD.
+  - **Confirm:** one `TryBuild` per LMB press with the placement snapped at press time. The mode stays active. The HUD shows the result from `OnBuildResult`.
+  - **Exit** (B, RMB, `I`/`Tab`/`F`, `EndPlay`, controller change): destroy the ghost, remove the HUD and `IMC_BuildingMode`, restore the remembered cursor state, disable tick. It is safe to repeat.
+- **`Building/BuildingPreviewActor.h/.cpp` (new):**
+  - Copies the static meshes (mesh, relative transform) from the piece class: CDO components plus Blueprint SCS templates.
+  - Applies one dynamic material instance with a `Color` parameter (green or red).
+  - Has no collision, no navigation influence, no piece component and is never registered. It ignores the Visibility trace, so the cursor never hits it.
+- **`UI/BuildingHudWidget.h/.cpp` (new), a native base:**
+  - bound text widgets for the building name, cost (have/need) and status or reason;
+  - fixed hint text "LMB build · RMB / B exit".
+- **No change** to `UConstructionComponent`, `UBuildingSubsystem`, inventory, crafting, storage or the screens. (B4-1 alternative (b) would change B1.)
+
+**Assets (Unreal MCP; saved by explicit path):**
+- `/Game/LevelPrototyping/BuildingSystem/Input/`:
+  - `IA_BuildToggle`, `IA_BuildConfirm`, `IA_BuildCancel` (all digital, consume input);
+  - `IMC_Building` (`B` → `IA_BuildToggle`), added at possession;
+  - `IMC_BuildingMode`, higher priority, added only in building mode: LMB → `IA_BuildConfirm`; RMB, `I`, `Tab` and `F` → `IA_BuildCancel` (decision B4-2).
+- `/Game/LevelPrototyping/BuildingSystem/Materials/M_BuildPreview`: translucent, unlit, a `Color` vector parameter (decision B4-4).
+- `/Game/LevelPrototyping/BuildingSystem/UI/W_BuildingHud`: a child of `UBuildingHudWidget`, created and laid out through MCP. It sits at the top center and does not block the cursor (hit-test invisible).
+- `BP_TopDownCharacter`: one `BuildingPlacementComponent`, configured with the assets above.
+- **`Lvl_TopDown` `Floor_0`** (decision B4-1 (a)): collision profile `BlockAllDynamic` → `BlockAll` (`WorldStatic`), saved with `SceneTools.save_actor`. One external actor package changes; no actor is added or deleted.
+
+**Not in B4:**
+- walls, doors, edge placement;
+- rotation and the build-bar selection (B5, decision B4-3);
+- demolition (B6);
+- art; save/load.
+
+#### Tests `NullTide.Building.B4.*` (planned, 7, native fixtures)
+
+| Test | Assertions |
+| --- | --- |
+| `ModeStateMachine` | Enter and exit are idempotent. Enter is refused without a construction component, without a registered building, or without a local controller. `OnBuildingModeChanged` fires once per real change. Tick is only on in building mode. One preview actor exists in building mode, none outside. |
+| `CursorState` | Enter shows the cursor. Every exit path (toggle, cancel, `EndPlay`, controller change) restores the remembered state, both when it was hidden and when it was shown. |
+| `PreviewFollowsCursor` | A seam cursor hit produces the snapped transform. Green when `CanBuild` succeeds; red with the reason for `Occupied`, `OutOfRange` and `InsufficientResources`. The preview has no collision, is not navigation-relevant, has no piece component, is never registered, and never changes the registry or inventory (Revision unchanged). |
+| `ConfirmBuildsOnce` | One confirm → exactly one `OnBuildResult`, Wood −4, one piece; the mode stays active. A second confirm on the same cell → `Occupied`, no new piece. Confirm outside building mode does nothing. The HUD status shows the result. |
+| `ExitPaths` | Cancel, toggle, `EndPlay` and controller change each destroy the ghost, remove the HUD and stop ticking. A build that already finished is unaffected. |
+| `HudContent` | The real `W_BuildingHud` binds its widgets. Name "Wooden Floor"; cost "Wood 8 / 4" style have/need; reason text for red states. |
+| `ProductionAssets` | `BP_TopDownCharacter` has exactly one placement component, configured. `IMC_Building` and `IMC_BuildingMode` map exactly the keys above, and their actions consume input. `M_BuildPreview` is translucent with a `Color` parameter. `W_BuildingHud` derives from `UBuildingHudWidget`. |
+
+Input contexts reaching the local player subsystem, key routing, and the `Floor_0` change are proven in PIE and by MCP read-back. A transient test world has no real local player or viewport.
+
+#### Manual rendered PIE (user) — required
+
+1. `B` enters building mode: the cursor shows, a ghost follows it on the 200 cm grid, the HUD shows "Wooden Floor" and the cost.
+2. Green on free ground near the player. Red with a reason: too far, occupied, not enough Wood.
+3. LMB builds a floor: Wood −4 in the inventory; the floor stays; adjacent floors build; the player walks onto a floor.
+4. RMB exits; `B` exits; the cursor hides again.
+5. In building mode, `I`, `Tab` and `F` only exit building mode. A second press opens the inventory, storage or workbench as before.
+6. WASD and jump still work in building mode. There is no cursor or focus lock after exits and after opening and closing screens.
+7. Storage, crafting (hand and workbench) and gathering are unchanged.
+8. The ground and the prototype blocks both support floors. A floor on a block top sits on the block's height.
+
+#### Validation
+
+- **Build:** clean build with the editor closed.
+- **Compile with warnings as errors:** `BP_TopDownCharacter`, `W_BuildingHud`, `M_BuildPreview` (material compile).
+- **Data validation** on save.
+- **Tests:**
+  - focused `NullTide.Building.B4`;
+  - regression `NullTide.Building`, Crafting C5/C8, RG3, and Gameplay G6 (world drops trace the ground);
+  - full suite, expected 223 + 7 = 230.
+- **Cook:** the new assets are cooked.
+- **Content and World Partition audit:**
+  - the new input, material and UMG assets, plus `BP_TopDownCharacter`;
+  - **exactly one external actor package modified (`Floor_0`)**: still 91 `__ExternalActors__` and 3 `__ExternalObjects__`, none added or deleted.
+- **Manual PIE:** the checklist above, results recorded exactly as reported by the user.
+- **Self-review:** includes a fresh-context review pass (native code changes).
+
+#### Decisions — APPROVED by the user (2026-10-15): B4-1 to B4-5 as recommended
+
+- **B4-1 Ground support surface.**
+  - **Recommended: (a)** change `Floor_0`'s collision profile from `BlockAllDynamic` to `BlockAll` (`WorldStatic`), the same as every other map geometry. One external actor package changes; pawn collision is unchanged (both block pawns). Revert if PIE shows a side effect.
+  - (b) Widen the B1 support rule (for example static mobility or a support tag). This changes approved B1 code. It may not even cover `Floor_0`, which saves a non-default `Mobility`.
+- **B4-2 `I`/`Tab`/`F` in building mode.**
+  - **Recommended:** they only exit building mode. `IMC_BuildingMode` consumes them, so no screen opens on that press. Opening needs a second press. This is deterministic: no screen ever opens while the mode owns the cursor, and there is no ordering race with the screens' cursor-hiding close paths.
+  - Alternative: exit and open in the same press. This needs a cursor hand-off between the mode's exit and the screen's open, which depends on handler order.
+- **B4-3 Rotation and selection.**
+  - **Recommended:** defer `R` and the `1`/`2`/`3` build bar to B5, where walls and doors need them. With one registered building and a symmetric 1 × 1 floor, they add assets and tests without visible effect. B4 selects the first registered building.
+  - Alternative: include them now as B0 planned.
+- **B4-4 Preview material.**
+  - **Recommended:** a new translucent unlit `M_BuildPreview` with a `Color` parameter, created through MCP. If MCP cannot author the material graph, STOP and ask.
+  - Fallback: tint an existing opaque project material (`M_FlatCol`).
+- **B4-5 Preview refresh.**
+  - **Recommended:** re-run `CanBuild` when the snapped placement changes and at most every 0.1 s otherwise, so inventory and world changes appear quickly without a full validation every frame.
+  - Alternative: every frame.
+
+#### Self-critique (open risks)
+
+- **R-1 MCP authoring.** The riskiest assets to author through MCP are:
+  - input mapping contexts (key mappings and consume flags);
+  - a material graph (translucent, a parameter);
+  - the UMG layout (C8C precedent exists).
+
+  The fallbacks need approval:
+  - native runtime-created mapping contexts;
+  - an opaque fallback material.
+
+  STOP and ask rather than choosing silently.
+- **R-2 Cursor ownership.** The mode must restore only the state it changed. If anything opens a UI-only screen without these keys (none today), the mode could restore "hidden" over an open screen. Mitigations:
+  - B4-2 consumes the keys;
+  - `ExitPaths` covers the in-mode exits;
+  - the PIE step 6 check.
+- **R-3 Mapping context lifetime.** `IMC_Building` is added at possession (controller-changed delegate) and removed on unpossess and `EndPlay`. `IMC_BuildingMode` exists only while the mode is active. A leaked context would consume LMB or `I`/`Tab`/`F` forever. PIE steps 4–6 cover it; `ExitPaths` checks the component's own bookkeeping.
+- **R-4 Map change.** Changing `Floor_0` dirties one World Partition external actor package.
+  - Save only that actor; never Save All.
+  - Audit that no other package changed.
+  - Run G6 (drops trace the ground) and the gathering regression.
+  - If a regression appears, revert the profile.
+- **R-5 Preview cost.** `CanBuild` runs traces and an overlap. The throttle (B4-5) bounds it; one ghost only.
+- **R-6 Static navigation.** If the level's nav mesh is static, runtime floors do not update it. Movement is WASD, so there is no impact now. Record it for NPC pathing (Phase 6).
+- **R-7 Test reach.** Native tests cannot drive real key presses or a real local player. Input routing is proven in PIE. The component exposes native entry points (`ToggleBuildingMode`, `ConfirmPlacement`, the cursor seam), so its logic is fully tested without input.
 
 ### B5 — Wooden Wall and Wooden Door
+- **Carried from B4 (decision B4-3 and the B4 self-review):**
+  - rotation (`R`) and the `1`/`2`/`3` build-bar selection in `UBuildingPlacementComponent` and `IMC_BuildingMode`;
+  - the ghost must copy nested mesh attachment and child-Blueprint overrides of SCS components if wall or door pieces use them.
 - **Source:**
   - Edge placement end to end. The math and validation already exist from B1; B5 adds the authority path for edge pieces.
   - `Building/BuildingDoorActor.h/.cpp` (section 2.4): open/close state, `ToggleDoor`, leaf interpolation, leaf collision and navigation, refused while provisional.

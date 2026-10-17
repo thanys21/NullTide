@@ -1,7 +1,10 @@
 #include "BuildingTestTypes.h"
 
 #include "InventoryComponentTestTypes.h"
+#include "Blueprint/UserWidget.h"
 #include "Building/BuildingPieceComponent.h"
+#include "Building/BuildingPlacementComponent.h"
+#include "Building/BuildingPreviewActor.h"
 #include "Building/BuildingSubsystem.h"
 #include "Building/ConstructionComponent.h"
 #include "Components/ChildActorComponent.h"
@@ -19,10 +22,16 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/PlayerController.h"
+#include "InputAction.h"
+#include "InputCoreTypes.h"
+#include "InputMappingContext.h"
 #include "Inventory/InventoryComponent.h"
 #include "Items/ItemDefinition.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/AutomationTest.h"
 #include "ToolLoadout/ToolLoadoutComponent.h"
+#include "UI/BuildingHudWidget.h"
 #include "UObject/StrongObjectPtr.h"
 
 #if WITH_EDITOR
@@ -146,6 +155,24 @@ void UConstructionTestListener::HandleInventoryChanged(int32 NewRevision)
 	{
 		Hook();
 	}
+}
+
+void UConstructionTestListener::HandleBuildingModeChanged(bool bBuildingModeActive)
+{
+	ModeChanges.Add(bBuildingModeActive);
+}
+
+bool UBuildingPlacementTestComponent::GetCursorWorldLocation(FVector& OutLocation) const
+{
+	OutLocation = CursorLocation;
+	return bHasCursor;
+}
+
+UBuildingHudWidget* UBuildingPlacementTestComponent::CreateHudWidget(APlayerController& PlayerController)
+{
+	++HudCreateCount;
+	// No viewport or local player in a transient world: create the widget without adding it to a screen.
+	return HudWidgetClass ? CreateWidget<UBuildingHudWidget>(GetWorld(), HudWidgetClass) : nullptr;
 }
 
 void UConstructionTestListener::HandleBuildResult(TSubclassOf<UBuildingDefinition> DefinitionClass, const FBuildingConstructionResult& Result)
@@ -1368,6 +1395,483 @@ bool FBuildingB3ProductionFloorEndToEndTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("All Wood spent"), Builder.Inventory->GetTotalQuantity(Assets.Wood), 0);
 	TestEqual(TEXT("Two floors"), Fixture.LivePieces(), 2);
 	Fixture.Clean(*this, TEXT("Production floor"));
+	return true;
+}
+
+// ---- B4: building mode, ghost preview and placement input ----
+
+namespace
+{
+const TCHAR* B4HudPath = TEXT("/Game/LevelPrototyping/BuildingSystem/UI/W_BuildingHud.W_BuildingHud_C");
+
+struct FB4Player
+{
+	FB2Builder Builder;
+	UBuildingPlacementTestComponent* Placement = nullptr;
+	APlayerController* Controller = nullptr;
+
+	bool IsValid() const { return Builder.IsValid() && Placement && Controller; }
+};
+
+APlayerController* B4Possess(FB2World& Fixture, APawn* Pawn)
+{
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	APlayerController* Controller = Fixture.World->SpawnActor<APlayerController>(APlayerController::StaticClass(), FTransform::Identity, Params);
+	if (Controller && Pawn)
+	{
+		Controller->Possess(Pawn);
+	}
+	return Controller;
+}
+
+/** A builder (inventory, construction) with a placement component; registered after BeginPlay, so its BeginPlay runs. */
+FB4Player B4SpawnPlayer(FB2World& Fixture, const FB2Buildings& Buildings, int32 Wood, bool bPossess = true)
+{
+	FB4Player Player;
+	Player.Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), Buildings, Wood);
+	if (!Player.Builder.Pawn)
+	{
+		return Player;
+	}
+	Player.Placement = NewObject<UBuildingPlacementTestComponent>(Player.Builder.Pawn);
+	Player.Builder.Pawn->AddInstanceComponent(Player.Placement);
+	Player.Placement->RegisterComponent();
+	Player.Placement->OnBuildingModeChanged.AddDynamic(Player.Builder.Listener, &UConstructionTestListener::HandleBuildingModeChanged);
+	if (bPossess)
+	{
+		Player.Controller = B4Possess(Fixture, Player.Builder.Pawn);
+	}
+	return Player;
+}
+
+int32 B4CountPreviews(UWorld* World)
+{
+	int32 Count = 0;
+	for (TActorIterator<ABuildingPreviewActor> It(World); It; ++It)
+	{
+		Count += ::IsValid(*It) && !It->IsActorBeingDestroyed() ? 1 : 0;
+	}
+	return Count;
+}
+
+void B4Tick(UBuildingPlacementComponent* Placement)
+{
+	Placement->TickComponent(0.f, LEVELTICK_All, nullptr);
+}
+
+template <typename T>
+T* B4ReadObject(const UObject* Object, const TCHAR* PropertyName)
+{
+	const FObjectPropertyBase* Property = FindFProperty<FObjectPropertyBase>(UBuildingPlacementComponent::StaticClass(), PropertyName);
+	return Property ? Cast<T>(Property->GetObjectPropertyValue_InContainer(Object)) : nullptr;
+}
+
+int32 B4ReadInt(const UObject* Object, const TCHAR* PropertyName)
+{
+	const FIntProperty* Property = FindFProperty<FIntProperty>(UBuildingPlacementComponent::StaticClass(), PropertyName);
+	return Property ? Property->GetPropertyValue_InContainer(Object) : INDEX_NONE;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB4ModeStateMachineTest,
+	"NullTide.Building.B4.ModeStateMachine",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB4ModeStateMachineTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB4Player Player = B4SpawnPlayer(Fixture, { B2FloorClass() }, 8);
+	if (!TestTrue(TEXT("Player set up"), Player.IsValid())) { return false; }
+	UBuildingPlacementTestComponent* Placement = Player.Placement;
+	const TArray<bool>& Changes = Player.Builder.Listener->ModeChanges;
+	Placement->SetCursor(B2CellA);
+
+	TestFalse(TEXT("Idle: not active, not ticking"), Placement->IsBuildingModeActive() || Placement->IsComponentTickEnabled());
+	TestTrue(TEXT("Enter"), Placement->EnterBuildingMode());
+	TestTrue(TEXT("Active: ticking, one preview, the first registered building selected"), Placement->IsBuildingModeActive()
+		&& Placement->IsComponentTickEnabled() && B4CountPreviews(Fixture.World) == 1 && Placement->GetPreviewActor()
+		&& Placement->GetSelectedBuilding() == B2FloorClass());
+	TestTrue(TEXT("Enter again is a no-op"), Placement->EnterBuildingMode() && B4CountPreviews(Fixture.World) == 1 && Changes.Num() == 1);
+	Placement->ExitBuildingMode();
+	TestTrue(TEXT("Exit: inactive, not ticking, no preview"), !Placement->IsBuildingModeActive() && !Placement->IsComponentTickEnabled()
+		&& B4CountPreviews(Fixture.World) == 0 && !Placement->GetPreviewActor());
+	Placement->ExitBuildingMode();
+	Placement->ToggleBuildingMode();
+	TestTrue(TEXT("Toggle enters"), Placement->IsBuildingModeActive());
+	Placement->ToggleBuildingMode();
+	TestTrue(TEXT("Toggle exits"), !Placement->IsBuildingModeActive());
+	TestTrue(TEXT("OnBuildingModeChanged fires once per real change"), Changes == TArray<bool>({ true, false, true, false }));
+
+	FB4Player NoBuildings = B4SpawnPlayer(Fixture, {}, 0);
+	TestTrue(TEXT("No registered building: refused"), NoBuildings.IsValid() && !NoBuildings.Placement->EnterBuildingMode()
+		&& NoBuildings.Builder.Listener->ModeChanges.IsEmpty());
+	FB4Player Unpossessed = B4SpawnPlayer(Fixture, { B2FloorClass() }, 8, false);
+	TestTrue(TEXT("No controller: refused"), Unpossessed.Placement && !Unpossessed.Placement->EnterBuildingMode());
+	FB4Player Remote = B4SpawnPlayer(Fixture, { B2FloorClass() }, 8);
+	Remote.Placement->bTreatControllerAsLocal = false;
+	TestTrue(TEXT("Non-local controller: refused"), Remote.IsValid() && !Remote.Placement->EnterBuildingMode()
+		&& !Remote.Controller->bShowMouseCursor);
+
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ACharacter* Bare = Fixture.World->SpawnActor<ACharacter>(ACharacter::StaticClass(), FVector(0.0, 300.0, 92.0), FRotator::ZeroRotator, Params);
+	UBuildingPlacementTestComponent* BarePlacement = NewObject<UBuildingPlacementTestComponent>(Bare);
+	Bare->AddInstanceComponent(BarePlacement);
+	BarePlacement->RegisterComponent();
+	Bare->DispatchBeginPlay();
+	B4Possess(Fixture, Bare);
+	TestFalse(TEXT("No construction component: refused"), BarePlacement->EnterBuildingMode());
+	TestEqual(TEXT("No preview left"), B4CountPreviews(Fixture.World), 0);
+	Fixture.Clean(*this, TEXT("Mode state machine"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB4CursorStateTest,
+	"NullTide.Building.B4.CursorState",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB4CursorStateTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB4Player Player = B4SpawnPlayer(Fixture, { B2FloorClass() }, 8);
+	if (!TestTrue(TEXT("Player set up"), Player.IsValid())) { return false; }
+	UBuildingPlacementTestComponent* Placement = Player.Placement;
+	APlayerController* Controller = Player.Controller;
+	Placement->SetCursor(B2CellA);
+
+	Controller->SetShowMouseCursor(false);
+	Placement->EnterBuildingMode();
+	TestTrue(TEXT("Enter shows the cursor"), Controller->bShowMouseCursor);
+	Placement->ExitBuildingMode();
+	TestFalse(TEXT("Exit restores a hidden cursor"), Controller->bShowMouseCursor);
+
+	Controller->SetShowMouseCursor(true);
+	Placement->EnterBuildingMode();
+	Placement->ExitBuildingMode();
+	TestTrue(TEXT("Exit restores a shown cursor"), Controller->bShowMouseCursor);
+
+	Controller->SetShowMouseCursor(false);
+	Placement->EnterBuildingMode();
+	Placement->ToggleBuildingMode();
+	TestFalse(TEXT("Toggle exit restores the cursor"), Controller->bShowMouseCursor);
+
+	Placement->EnterBuildingMode();
+	Controller->UnPossess();
+	TestTrue(TEXT("Controller change exits and restores the cursor"), !Placement->IsBuildingModeActive() && !Controller->bShowMouseCursor
+		&& B4CountPreviews(Fixture.World) == 0);
+
+	Controller->Possess(Player.Builder.Pawn);
+	TestTrue(TEXT("Re-possessed: building mode works again"), Placement->EnterBuildingMode() && Controller->bShowMouseCursor);
+	Placement->DestroyComponent();
+	TestTrue(TEXT("Component EndPlay (still possessed) exits and restores the cursor"), !Controller->bShowMouseCursor
+		&& B4CountPreviews(Fixture.World) == 0);
+	Controller->UnPossess();
+	TestFalse(TEXT("A later controller change after the component is gone is harmless"), Controller->bShowMouseCursor);
+	Fixture.Clean(*this, TEXT("Cursor state"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB4PreviewFollowsCursorTest,
+	"NullTide.Building.B4.PreviewFollowsCursor",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB4PreviewFollowsCursorTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB4Player Player = B4SpawnPlayer(Fixture, { B2FloorClass() }, 8);
+	if (!TestTrue(TEXT("Player set up"), Player.IsValid())) { return false; }
+	UBuildingPlacementTestComponent* Placement = Player.Placement;
+	const FB2Counts Before = FB2Counts::Capture(Player.Builder);
+	Placement->SetCursor(B2CellA + FVector(40.0, -60.0, 0.0));
+	if (!TestTrue(TEXT("Enter"), Placement->EnterBuildingMode())) { return false; }
+
+	ABuildingPreviewActor* Preview = Placement->GetPreviewActor();
+	if (!TestNotNull(TEXT("Preview"), Preview)) { return false; }
+	TestTrue(TEXT("Snapped to the cell, green"), Preview->GetActorLocation().Equals(FVector(300.0, 300.0, 0.0), 0.1)
+		&& Preview->IsPlacementValid() && Placement->GetPreviewResult().IsSuccess() && !Preview->IsHidden());
+	TestEqual(TEXT("One preview mesh copied from the piece"), Preview->GetPreviewMeshCount(), 1);
+	TInlineComponentArray<UPrimitiveComponent*> Primitives(Preview);
+	bool bAnyCollision = false;
+	for (const UPrimitiveComponent* Primitive : Primitives)
+	{
+		bAnyCollision |= Primitive && Primitive->IsCollisionEnabled();
+	}
+	TestTrue(TEXT("The preview never collides, affects navigation or acts as a piece"), !bAnyCollision && !B3AnyNavigationRelevant(*Preview)
+		&& !Preview->FindComponentByClass<UBuildingPieceComponent>());
+
+	Placement->SetCursor(FVector(900.0, 500.0, 0.0));
+	B4Tick(Placement);
+	TestTrue(TEXT("Far: red, OutOfRange"), !Preview->IsPlacementValid() && Placement->GetPreviewResult().Result == EBuildResult::OutOfRange);
+
+	B2Expect(*this, TEXT("A piece on cell B"), Player.Builder.Construction->TryBuild(B2FloorClass(), B2Floor(B2CellB)), EBuildResult::Success);
+	Placement->SetCursor(B2CellB);
+	B4Tick(Placement);
+	TestTrue(TEXT("Occupied: red"), !Preview->IsPlacementValid() && Placement->GetPreviewResult().Result == EBuildResult::Occupied);
+
+	Player.Builder.Inventory->TryApplyDefinitionTransaction({ B2Cost(B2Wood(), 4) }, {});
+	Placement->SetCursor(B2CellC);
+	B4Tick(Placement);
+	TestTrue(TEXT("No Wood: red, InsufficientResources"), !Preview->IsPlacementValid()
+		&& Placement->GetPreviewResult().Result == EBuildResult::InsufficientResources);
+
+	Placement->bHasCursor = false;
+	B4Tick(Placement);
+	TestTrue(TEXT("Nothing under the cursor: the preview hides"), Preview->IsHidden());
+
+	// Only the explicit build and Wood removal above changed anything; the preview itself never does.
+	B2ExpectDelta(*this, TEXT("Preview is read-only"), Before, Player.Builder, 2, 2, 1, -8);
+	TestEqual(TEXT("Only the explicit piece exists"), Fixture.LivePieces(), 1);
+	Placement->ExitBuildingMode();
+	Fixture.Clean(*this, TEXT("Preview follows cursor"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB4ConfirmBuildsOnceTest,
+	"NullTide.Building.B4.ConfirmBuildsOnce",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB4ConfirmBuildsOnceTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB4Player Player = B4SpawnPlayer(Fixture, { B2FloorClass() }, 8);
+	if (!TestTrue(TEXT("Player set up"), Player.IsValid())) { return false; }
+	UBuildingPlacementTestComponent* Placement = Player.Placement;
+	Placement->SetCursor(B2CellA);
+	Placement->EnterBuildingMode();
+
+	FB2Counts Before = FB2Counts::Capture(Player.Builder);
+	B2Expect(*this, TEXT("Confirm builds"), Placement->ConfirmPlacement(), EBuildResult::Success);
+	B2ExpectDelta(*this, TEXT("One build, exact cost"), Before, Player.Builder, 1, 1, 1, -4);
+	TestTrue(TEXT("One piece; the mode stays active"), Fixture.LivePieces() == 1 && Placement->IsBuildingModeActive());
+	B4Tick(Placement);
+	TestEqual(TEXT("The ghost refreshes to Occupied after the build"), Placement->GetPreviewResult().Result, EBuildResult::Occupied);
+
+	Before = FB2Counts::Capture(Player.Builder);
+	B2Expect(*this, TEXT("Confirm on the same cell"), Placement->ConfirmPlacement(), EBuildResult::Occupied);
+	B2ExpectDelta(*this, TEXT("Refused confirm"), Before, Player.Builder, 0, 0, 1, 0);
+	TestEqual(TEXT("Still one piece"), Fixture.LivePieces(), 1);
+
+	// Cursor over nothing: no target, so no build at the last (now hidden) placement.
+	Placement->SetCursor(B2CellB);
+	B4Tick(Placement);
+	Placement->bHasCursor = false;
+	B4Tick(Placement);
+	Before = FB2Counts::Capture(Player.Builder);
+	TestFalse(TEXT("Confirm with nothing under the cursor fails"), Placement->ConfirmPlacement().IsSuccess());
+	B2ExpectDelta(*this, TEXT("No build without a cursor target"), Before, Player.Builder, 0, 0, 0, 0);
+	TestEqual(TEXT("Still one piece after the no-target confirm"), Fixture.LivePieces(), 1);
+
+	Placement->ExitBuildingMode();
+	Before = FB2Counts::Capture(Player.Builder);
+	TestFalse(TEXT("Confirm outside building mode fails"), Placement->ConfirmPlacement().IsSuccess());
+	B2ExpectDelta(*this, TEXT("Confirm outside building mode does nothing"), Before, Player.Builder, 0, 0, 0, 0);
+	Fixture.Clean(*this, TEXT("Confirm builds once"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB4ExitPathsTest,
+	"NullTide.Building.B4.ExitPaths",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB4ExitPathsTest::RunTest(const FString& Parameters)
+{
+	UClass* HudClass = LoadClass<UBuildingHudWidget>(nullptr, B4HudPath);
+	if (!TestNotNull(TEXT("W_BuildingHud loads"), HudClass)) { return false; }
+	enum class EExit { Toggle, Exit, ControllerChange, PawnDestroyed, ComponentEndPlay };
+	struct FCase { EExit Kind; const TCHAR* Name; };
+	const FCase Cases[] = {
+		{ EExit::Toggle, TEXT("Toggle (B)") },
+		{ EExit::Exit, TEXT("Exit (RMB, I, Tab, F)") },
+		{ EExit::ControllerChange, TEXT("Controller change") },
+		// The pawn is unpossessed before its EndPlay, so this goes through the controller-change path.
+		{ EExit::PawnDestroyed, TEXT("Pawn destroyed") },
+		// The component's own EndPlay while the pawn stays possessed.
+		{ EExit::ComponentEndPlay, TEXT("Component EndPlay") },
+	};
+	for (const FCase& Case : Cases)
+	{
+		FB2World Fixture;
+		if (!Fixture.IsValid(*this)) { return false; }
+		FB4Player Player = B4SpawnPlayer(Fixture, { B2FloorClass() }, 8);
+		if (!TestTrue(TEXT("Player set up"), Player.IsValid())) { return false; }
+		UBuildingPlacementTestComponent* Placement = Player.Placement;
+		Placement->SetHudClass(HudClass);
+		Placement->SetCursor(B2CellA);
+		Player.Controller->SetShowMouseCursor(false);
+		Placement->EnterBuildingMode();
+		TestTrue(FString(Case.Name) + TEXT(": HUD shown in building mode"), Placement->GetHudWidget() != nullptr && Placement->HudCreateCount == 1);
+		B2Expect(*this, Case.Name, Placement->ConfirmPlacement(), EBuildResult::Success);
+		switch (Case.Kind)
+		{
+		case EExit::Toggle:
+			Placement->ToggleBuildingMode();
+			break;
+		case EExit::Exit:
+			Placement->ExitBuildingMode();
+			break;
+		case EExit::ControllerChange:
+			Player.Controller->UnPossess();
+			break;
+		case EExit::PawnDestroyed:
+			Player.Builder.Pawn->Destroy();
+			break;
+		case EExit::ComponentEndPlay:
+			Placement->DestroyComponent();
+			break;
+		}
+		TestTrue(FString(Case.Name) + TEXT(": inactive, no ghost, no HUD, cursor restored"), !Placement->IsBuildingModeActive()
+			&& B4CountPreviews(Fixture.World) == 0 && !Placement->GetPreviewActor() && !Placement->GetHudWidget()
+			&& !Player.Controller->bShowMouseCursor);
+		if (Case.Kind != EExit::PawnDestroyed && Case.Kind != EExit::ComponentEndPlay)
+		{
+			TestFalse(FString(Case.Name) + TEXT(": not ticking"), Placement->IsComponentTickEnabled());
+		}
+		const ABuildingPieceActor* Piece = Fixture.PieceAt(B2CellA);
+		TestTrue(FString(Case.Name) + TEXT(": the finished build is unaffected"), Fixture.LivePieces() == 1 && Piece
+			&& Piece->GetBuildingPieceComponent()->IsActivePiece());
+		Fixture.Clean(*this, Case.Name);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB4HudContentTest,
+	"NullTide.Building.B4.HudContent",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB4HudContentTest::RunTest(const FString& Parameters)
+{
+	const FB3Assets Assets = FB3Assets::Load();
+	UClass* HudClass = LoadClass<UBuildingHudWidget>(nullptr, B4HudPath);
+	if (!Assets.IsValid(*this) || !TestNotNull(TEXT("W_BuildingHud loads"), HudClass)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB4Player Player = B4SpawnPlayer(Fixture, { Assets.Floor }, 0);
+	if (!TestTrue(TEXT("Player set up"), Player.IsValid())) { return false; }
+	Player.Builder.Inventory->TryAddDefinitionQuantity(Assets.Wood, 8);
+	UBuildingPlacementTestComponent* Placement = Player.Placement;
+	Placement->SetHudClass(HudClass);
+	Placement->SetCursor(B2CellA);
+	Placement->EnterBuildingMode();
+	const UBuildingHudWidget* Hud = Placement->GetHudWidget();
+	if (!TestNotNull(TEXT("The real W_BuildingHud is created"), Hud)) { return false; }
+
+	TestEqual(TEXT("Building name"), Hud->GetBuildingNameText().ToString(), FString(TEXT("Wooden Floor")));
+	TestTrue(FString::Printf(TEXT("Cost shows have/need (%s)"), *Hud->GetCostText().ToString()), Hud->GetCostText().ToString().Contains(TEXT("8/4")));
+	TestTrue(TEXT("Ready status in the valid color"), Hud->GetStatusText().ToString() == TEXT("Ready to build") && Hud->IsStatusValid());
+
+	Placement->SetCursor(FVector(900.0, 500.0, 0.0));
+	Placement->UpdatePreviewAt(FVector(900.0, 500.0, 0.0), true);
+	TestTrue(TEXT("Reason for a red ghost"), Hud->GetStatusText().ToString() == TEXT("Too far") && !Hud->IsStatusValid());
+
+	Placement->SetCursor(B2CellA);
+	B2Expect(*this, TEXT("Build through the HUD flow"), Placement->ConfirmPlacement(), EBuildResult::Success);
+	TestTrue(FString::Printf(TEXT("Result message and updated cost (%s, %s)"), *Hud->GetStatusText().ToString(), *Hud->GetCostText().ToString()),
+		Hud->GetStatusText().ToString() == TEXT("Built Wooden Floor") && Hud->IsStatusValid() && Hud->GetCostText().ToString().Contains(TEXT("4/4")));
+
+	struct FReason { EBuildResult Code; const TCHAR* Text; };
+	const FReason Reasons[] = {
+		{ EBuildResult::Success, TEXT("Ready to build") }, { EBuildResult::OutOfRange, TEXT("Too far") },
+		{ EBuildResult::NoGround, TEXT("No ground") }, { EBuildResult::TooSteep, TEXT("Too steep") },
+		{ EBuildResult::Uneven, TEXT("Uneven ground") }, { EBuildResult::Occupied, TEXT("Occupied") },
+		{ EBuildResult::Blocked, TEXT("Blocked") }, { EBuildResult::BlocksBuilder, TEXT("Too close to you") },
+		{ EBuildResult::InsufficientResources, TEXT("Not enough resources") }, { EBuildResult::BuildInterrupted, TEXT("Could not build") },
+	};
+	for (const FReason& Reason : Reasons)
+	{
+		TestEqual(FString::Printf(TEXT("Reason for %s"), *B2Name(Reason.Code)),
+			UBuildingPlacementComponent::DescribeResult(Reason.Code).ToString(), FString(Reason.Text));
+	}
+	Placement->ExitBuildingMode();
+	TestNull(TEXT("HUD removed on exit"), Placement->GetHudWidget());
+	Fixture.Clean(*this, TEXT("HUD content"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB4ProductionAssetsTest,
+	"NullTide.Building.B4.ProductionAssets",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB4ProductionAssetsTest::RunTest(const FString& Parameters)
+{
+	const TCHAR* InputRoot = TEXT("/Game/LevelPrototyping/BuildingSystem/Input/");
+	auto LoadInput = [InputRoot](const TCHAR* Name) { return LoadObject<UObject>(nullptr, *FString::Printf(TEXT("%s%s.%s"), InputRoot, Name, Name)); };
+	const UInputMappingContext* BuildingContext = Cast<UInputMappingContext>(LoadInput(TEXT("IMC_Building")));
+	const UInputMappingContext* ModeContext = Cast<UInputMappingContext>(LoadInput(TEXT("IMC_BuildingMode")));
+	const UInputAction* Toggle = Cast<UInputAction>(LoadInput(TEXT("IA_BuildToggle")));
+	const UInputAction* Confirm = Cast<UInputAction>(LoadInput(TEXT("IA_BuildConfirm")));
+	const UInputAction* Cancel = Cast<UInputAction>(LoadInput(TEXT("IA_BuildCancel")));
+	const UMaterialInterface* PreviewMaterial = LoadObject<UMaterialInterface>(nullptr,
+		TEXT("/Game/LevelPrototyping/BuildingSystem/Materials/M_BuildPreview.M_BuildPreview"));
+	UClass* HudClass = LoadClass<UBuildingHudWidget>(nullptr, B4HudPath);
+	if (!TestTrue(TEXT("Building input, material and HUD assets load"), BuildingContext && ModeContext && Toggle && Confirm && Cancel
+		&& PreviewMaterial && HudClass)) { return false; }
+
+	for (const UInputAction* Action : { Toggle, Confirm, Cancel })
+	{
+		TestTrue(FString::Printf(TEXT("%s: digital, consumes its keys, no triggers"), *Action->GetName()),
+			Action->ValueType == EInputActionValueType::Boolean && Action->bConsumeInput && Action->Triggers.IsEmpty());
+	}
+	bool bPlainMappings = true;
+	for (const UInputMappingContext* Context : { BuildingContext, ModeContext })
+	{
+		for (const FEnhancedActionKeyMapping& Mapping : Context->GetMappings())
+		{
+			bPlainMappings &= Mapping.Triggers.IsEmpty() && Mapping.Modifiers.IsEmpty();
+		}
+	}
+	TestTrue(TEXT("No per-mapping triggers or modifiers (the bound Started/Completed events stay as designed)"), bPlainMappings);
+	const TArray<FEnhancedActionKeyMapping>& Always = BuildingContext->GetMappings();
+	TestTrue(TEXT("IMC_Building: exactly B -> IA_BuildToggle"), Always.Num() == 1 && Always[0].Key == EKeys::B && Always[0].Action == Toggle);
+	TMap<FKey, const UInputAction*> Mode;
+	for (const FEnhancedActionKeyMapping& Mapping : ModeContext->GetMappings())
+	{
+		Mode.Add(Mapping.Key, Mapping.Action);
+	}
+	TestTrue(TEXT("IMC_BuildingMode: LMB confirms; RMB, I, Tab and F exit; nothing else"), ModeContext->GetMappings().Num() == 5
+		&& Mode.FindRef(EKeys::LeftMouseButton) == Confirm && Mode.FindRef(EKeys::RightMouseButton) == Cancel
+		&& Mode.FindRef(EKeys::I) == Cancel && Mode.FindRef(EKeys::Tab) == Cancel && Mode.FindRef(EKeys::F) == Cancel);
+
+	FLinearColor Color;
+	float Opacity = 0.f;
+	TestTrue(TEXT("M_BuildPreview: translucent with Color and Opacity parameters"), PreviewMaterial->GetBlendMode() == BLEND_Translucent
+		&& PreviewMaterial->GetVectorParameterValue(FHashedMaterialParameterInfo(ABuildingPreviewActor::ColorParameterName), Color)
+		&& PreviewMaterial->GetScalarParameterValue(FHashedMaterialParameterInfo(TEXT("Opacity")), Opacity));
+
+	UBlueprint* PlayerBlueprint = LoadObject<UBlueprint>(nullptr, B3PlayerPath);
+	if (!TestNotNull(TEXT("Production player Blueprint loads"), PlayerBlueprint)) { return false; }
+	TArray<const UBuildingPlacementComponent*> Templates;
+	if (const USimpleConstructionScript* ConstructionScript = PlayerBlueprint->SimpleConstructionScript)
+	{
+		for (const USCS_Node* Node : ConstructionScript->GetAllNodes())
+		{
+			if (const UBuildingPlacementComponent* Template = Node ? Cast<UBuildingPlacementComponent>(Node->ComponentTemplate) : nullptr)
+			{
+				Templates.Add(Template);
+			}
+		}
+	}
+	if (!TestEqual(TEXT("Production player has exactly one BuildingPlacementComponent"), Templates.Num(), 1)) { return false; }
+	const UBuildingPlacementComponent* Template = Templates[0];
+	TestTrue(TEXT("Configured with the building input"), B4ReadObject<UInputMappingContext>(Template, TEXT("BuildingContext")) == BuildingContext
+		&& B4ReadObject<UInputMappingContext>(Template, TEXT("BuildingModeContext")) == ModeContext
+		&& B4ReadObject<UInputAction>(Template, TEXT("ToggleAction")) == Toggle && B4ReadObject<UInputAction>(Template, TEXT("ConfirmAction")) == Confirm
+		&& B4ReadObject<UInputAction>(Template, TEXT("CancelAction")) == Cancel);
+	TestTrue(TEXT("Mode context outranks the toggle context, which outranks IMC_Default"), B4ReadInt(Template, TEXT("BuildingContextPriority")) == 1
+		&& B4ReadInt(Template, TEXT("BuildingModeContextPriority")) == 2);
+	TestTrue(TEXT("Configured with M_BuildPreview and W_BuildingHud"), B4ReadObject<UMaterialInterface>(Template, TEXT("PreviewMaterial")) == PreviewMaterial
+		&& B4ReadObject<UClass>(Template, TEXT("HudWidgetClass")) == HudClass);
 	return true;
 }
 

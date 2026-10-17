@@ -9,8 +9,9 @@ Plan and design decisions: `BUILDING_PLAN.md`.
 | B0 Architecture audit and design | APPROVED (user) |
 | B1 Data model, grid coordinates, occupancy and placement validation | COMPLETE / APPROVED (8/8; full automation 198/198; cook PASS; no manual PIE required) |
 | B2 Construction authority | COMPLETE / APPROVED (20/20; full automation 219/219; cook PASS; no manual PIE required; commit `bccd0bc`, pushed). Design approved 2026-10-14 (D1–D8, D3 option (a)). |
-| B3 First buildable: Wooden Floor | IMPLEMENTED AND VALIDATED — awaiting user acceptance (4/4; full automation 223/223; cook PASS 624/7/631; no manual PIE required). Plan approved 2026-10-15. |
-| B4–B6 | NOT STARTED |
+| B3 First buildable: Wooden Floor | COMPLETE / APPROVED (4/4; full automation 223/223; cook PASS 624/7/631; no manual PIE required; commit `ff04c0e`, pushed). |
+| B4 Building mode, ghost preview, input | IMPLEMENTED AND VALIDATED — awaiting user acceptance (7/7; full automation 230/230; cook PASS; manual rendered PIE 8/8 PASS). Plan approved 2026-10-15. |
+| B5–B6 | NOT STARTED |
 
 ## B1 - Data Model, Grid Coordinates, Occupancy and Placement Validation
 
@@ -429,8 +430,114 @@ P2 findings and their resolution (fixed before the clean build, then the full va
   - change the ground's collision (a map and World Partition change);
   - widen the B1 support rule (for example by mobility, a tag, or an explicit support marker).
 
+## B4 - Building Mode, Ghost Preview and Placement Input
+
+### Baseline and Scope
+
+- **Baseline:** `ff04c0e` (B3 committed and pushed). Full automation 223/223, cook 624/7/631.
+- **Scope (user-approved 2026-10-15; B4-1 to B4-5 as recommended; `BUILDING_PLAN.md` section 7 B4):** building mode, the ghost preview, the HUD and placement input for the Wooden Floor.
+  - B4-1 changes `Floor_0`'s collision to `BlockAll`.
+  - B4-2: `I`/`Tab`/`F` only exit the mode.
+  - B4-3: rotation and selection are deferred to B5.
+- **Not in scope:** walls, doors, rotation, selection, demolition, art. No change to construction, inventory, crafting, storage or screen code.
+
+### Source
+
+| File | Content |
+| --- | --- |
+| `Building/BuildingPlacementComponent.h/.cpp` (new) | Player-side UX on the pawn. <br>• **API:** `EnterBuildingMode`, `ExitBuildingMode`, `ToggleBuildingMode`, `ConfirmPlacement`, `UpdatePreviewAt`, `GetPreviewResult`, `GetSelectedBuilding`, `OnBuildingModeChanged`, and the static `DescribeResult`/`DescribeCost`. <br>• **Input:** binds on the local `PlayerController`'s Enhanced Input component (Toggle and Confirm on Started, Cancel on Completed). `IMC_Building` is added while possessed; `IMC_BuildingMode` only in the mode. <br>• **Enter** shows the cursor; every exit restores the remembered state. <br>• **Preview:** one ghost, `CanBuild` when the snapped placement changes or every 0.1 s. <br>• **Confirm:** one `TryBuild` per press, re-snapped at press time. With no cursor target it does nothing. <br>• **HUD:** a result message for 1.5 s, then the live status. <br>• **Exits:** controller change and `EndPlay`. <br>• **Seams:** `GetCursorWorldLocation`, `IsLocalBuilderController`, `CreateHudWidget`. |
+| `Building/BuildingPreviewActor.h/.cpp` (new) | Copies the piece class's static meshes (CDO components plus SCS templates) with one dynamic instance of the preview material (`Color` parameter). No collision, not navigation-relevant, no piece component, never registered. |
+| `UI/BuildingHudWidget.h/.cpp` (new) | Native HUD base. Bound `BuildingNameText`, `CostText`, `StatusText` and optional `HintText`; hit-test invisible. |
+| `NullTide.Build.cs` | Private dependency on `EnhancedInput`. |
+| Tests | `BuildingTestTypes.h`: `UBuildingPlacementTestComponent` (scripted cursor, local-controller and HUD seams) and a mode-change listener. `ConstructionTests.cpp`: the B4 section. |
+
+### Assets (Unreal MCP unless noted)
+
+- **New input** (`/Game/LevelPrototyping/BuildingSystem/Input/`):
+  - `IA_BuildToggle`, `IA_BuildConfirm`, `IA_BuildCancel`: Boolean, consume input, no triggers.
+  - `IMC_Building`: B → Toggle.
+  - `IMC_BuildingMode`: LMB → Confirm; RMB, I, Tab, F → Cancel; no per-mapping triggers or modifiers.
+- **New** `Materials/M_BuildPreview`: translucent, unlit, two-sided. `Color` (vector) → Emissive, `Opacity` (scalar 0.4) → Opacity.
+- **New** `UI/W_BuildingHud`: child of `UBuildingHudWidget`. A root canvas with a top-center vertical box of the four texts. Compiled with warnings as errors.
+- **`BP_TopDownCharacter`:** one `BuildingPlacementComponent` configured with:
+  - both contexts (priorities 1 and 2) and the three actions;
+  - `M_BuildPreview` and `W_BuildingHud`.
+- **`Lvl_TopDown` `Floor_0`** (B4-1): collision profile `BlockAllDynamic` → `BlockAll`, object type `WorldStatic`. Mobility stays `Movable`, which confirms that a mobility-based support rule would not have covered it.
+  - Changed one external actor package, `__ExternalActors__/TopDown/Lvl_TopDown/2/33/SKUR0WWL7JT7C3OXZMWAQS`.
+  - MCP cannot save World Partition actor packages, so the user saved it with Ctrl+S.
+- **Test aid (user request, outside the original B4 scope; approved option (a)):**
+  - `BP_PickUpItem`'s `Quantity` variable is now Instance Editable, so placed pickups can carry a quantity; pickup logic is unchanged.
+  - Two pickups placed near `PlayerStart`, `Item_Wood` × 10 and `Item_Stone` × 10. They add 2 external actor packages (`0/PM/KCABN4UGSM62K8KT67D0L8`, `C/Z5/AEE4KD5VEGN8RL7RX3J62V`). The user may remove them later.
+- Before every save, the dirty state of the map, controller, inventory, recipes, widgets and the other building assets was checked; only the intended packages were saved.
+
+### Tests `NullTide.Building.B4.*` (7)
+
+| Test | Covers |
+| --- | --- |
+| `ModeStateMachine` | Idempotent enter and exit, toggle, one change event per real change, tick only in the mode, one preview. Refused without buildings, without a controller, with a non-local controller, or without a construction component. |
+| `CursorState` | The cursor is shown on enter. Each exit restores a hidden or a shown cursor: toggle, controller change, re-possession, and the component's own `EndPlay` (`DestroyComponent`). |
+| `PreviewFollowsCursor` | Snapped transform, green; red for `OutOfRange`, `Occupied` and `InsufficientResources`. The ghost has no collision or navigation influence and no piece component. Hidden with no cursor target. The preview never changes the registry or inventory. |
+| `ConfirmBuildsOnce` | One confirm → one result, −4 Wood, one piece, the mode stays active, then `Occupied`. No build with no cursor target. Confirm outside the mode does nothing. |
+| `ExitPaths` | Toggle, exit, controller change, pawn destroyed, component `EndPlay`. Each removes the ghost and HUD and restores the cursor. The finished build stays Active. |
+| `HudContent` | The real `W_BuildingHud` shows "Wooden Floor" and "Wood 8/4", then "Ready to build", "Too far", "Built Wooden Floor" and "4/4". The reason strings are mapped exactly. |
+| `ProductionAssets` | Action flags, exact key maps of both contexts without per-mapping triggers, the material's blend mode and parameters, and the character's single configured component. |
+
+### Validation
+
+- **Build:** clean builds with the editor closed. 0 errors, 0 warnings. The base DLL was built, not a hot-reload module.
+- **Command line, before the `BP_PickUpItem` change:** `NullTide` **230/230**:
+  - Building 40 (B1 9, B2 20, B3 4, B4 7);
+  - Crafting 69;
+  - Gameplay 50;
+  - Inventory 53;
+  - ResourceGathering 18.
+
+  No warnings, errors or ensures.
+- **In-editor (MCP), after the `BP_PickUpItem` change and the test pickups:** `NullTide` **230/230**, no warnings.
+- **First in-editor B4 run:** 1/7. The test controller has no local player, so `IsLocalController()` is false (engine `PlayerController.cpp:304-340`). This is a test-fixture issue, fixed with the `IsLocalBuilderController` seam; production still requires a local controller.
+- **Windows cook** (editor closed, before the test aid): `Done!`, 0 errors, 2 environment warnings. Packages 631 cooked, 7 skipped by platform, 638 total (+7). All seven new assets are in the cooked asset registry. Final cook after the test aid (editor closed): `Done!`, 0 errors, 631/7/638 unchanged; `BP_PickUpItem` cooked.
+- **Content and World Partition audit:**
+  - added: 7 B4 assets and 2 test-pickup actor packages;
+  - modified: `BP_TopDownCharacter`, `BP_PickUpItem` and the `Floor_0` actor package;
+  - `__ExternalActors__` 93 (91 + 2 pickups), `__ExternalObjects__` 3;
+  - no map (`.umap`) change; nothing deleted.
+- **Manual rendered PIE (user, 2026-10-17):** "pass hết 8 case", that is all 8 checklist cases PASS:
+  1. enter, ghost and HUD;
+  2. red with reasons;
+  3. build, Wood −4, walk on the floor;
+  4. RMB and B exit;
+  5. I/Tab/F only exit the mode;
+  6. movement in the mode, and the cursor after a screen;
+  7. storage, crafting and gathering unchanged;
+  8. a floor on a prototype block.
+
+  The sub-items 2b, 3b and 6b were not reported separately.
+
+### Self-Review (including a fresh-context review pass)
+
+The fresh-context review found no P0.
+
+| Finding | Resolution |
+| --- | --- |
+| P1: `B` could enter the mode while a screen is open | **REJECTED WITH EVIDENCE.** All three screens open with UI-only input: storage and workbench in C++; the inventory in `BP_TopDownController` through `SetInputModeUIOnly` (read through MCP). `FInputModeUIOnly` calls `SetIgnoreInput(true)` (`PlayerController.cpp:6384`), and `UGameViewportClient::InputKey` returns early on `IgnoreInput()` (`GameViewportClient.cpp:767`). |
+| Confirm built at a stale, hidden placement with no cursor target | **CONFIRMED**, fixed and tested. |
+| The "EndPlay" exit tests never ran the component's `EndPlay` (the pawn unpossesses first) | **CONFIRMED.** Added `DestroyComponent` cases; renamed the case to "Pawn destroyed". |
+| The reason-string test could not fail (default branch) | **CONFIRMED.** Exact mappings asserted. |
+| Two different local checks; the non-local refusal was untested | **CONFIRMED.** One seam; non-local refusal tested. |
+| Per-mapping triggers and modifiers not checked | **CONFIRMED.** Asserted. |
+| The mode-change event was broadcast before the first preview | **CONFIRMED.** Moved last; Enter returns the actual state. |
+| The ghost ignores nested attachment and inherited SCS overrides | **Deferred to B5** (walls and doors); not reachable with `BP_BuildFloor`. |
+| Cursor possibly locked after a screen's GameOnly close | **Checked in PIE** (case 6): PASS. |
+
+### Known Limitations Carried Forward
+
+- Rotation and the build-bar selection are deferred to B5. B4 always places the first registered building at rotation 0.
+- The ghost copies meshes with their relative transforms under its root. Nested attachment and child-Blueprint overrides of a parent's SCS components are not copied; B5 must handle this for walls and doors.
+- If the level's navigation mesh is static, runtime floors do not update it. Movement is WASD, so there is no impact now; record it for NPC pathing (Phase 6).
+- The two test pickups and the `BP_PickUpItem` Instance Editable change are test aids requested by the user.
+
 ## Next Checkpoint
 
-B3 is implemented and validated; it waits for the user's acceptance and commit approval.
+B4 is implemented and validated (manual PIE 8/8 PASS); it waits for the user's acceptance and commit approval.
 
-Next after B3: the B4 plan (building mode, ghost preview, placement input; first manual PIE). The plan must resolve the ground support-surface finding above (`Floor_0` is `WorldDynamic`). Phase 5 stays IN PROGRESS.
+Next after B4: the B5 plan (Wooden Wall and Wooden Door: edge placement, rotation, the build-bar selection deferred from B4, the door actor, and nested ghost meshes). Phase 5 stays IN PROGRESS.

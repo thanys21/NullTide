@@ -58,6 +58,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Building", meta = (ClampMin = "0.0", Units = "cm"))
 	float BuildRangeOverride = 0.f;
 
+	/** GridEdge only: every surface sample on at least one side of the edge must be an Active floor (walls and doors). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Building")
+	bool bRequiresFloor = false;
+
 	/** Reports the first invalid field as a diagnostic. */
 	UFUNCTION(BlueprintPure, Category = "Building")
 	bool ValidateBuilding(FString& OutDiagnostic) const;

@@ -92,7 +92,9 @@ enum class EBuildResult : uint8
 	/** Activation was refused or undone by a callback before payment; the piece was rolled back. */
 	BuildInterrupted,
 	/** The cost transaction failed at payment; the piece was rolled back and the inventory is unchanged. */
-	ResourcesRejectedRolledBack
+	ResourcesRejectedRolledBack,
+	/** An edge piece that requires a floor has no Active floor along either side of its edge. */
+	NeedsFloor
 };
 
 /** One occupancy slot: a floor cell, a canonical edge or a furniture cell, on one height layer. */

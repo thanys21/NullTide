@@ -104,6 +104,19 @@ void UBuildingPlacementComponent::BindToController(AController* Controller)
 			InputBindingHandles.Add(Input->BindAction(CancelAction, ETriggerEvent::Completed, this,
 				&UBuildingPlacementComponent::HandleCancelInput).GetHandle());
 		}
+		if (RotateAction)
+		{
+			InputBindingHandles.Add(Input->BindAction(RotateAction, ETriggerEvent::Started, this,
+				&UBuildingPlacementComponent::HandleRotateInput).GetHandle());
+		}
+		for (const TObjectPtr<UInputAction>& SelectAction : SelectBuildingActions)
+		{
+			if (SelectAction)
+			{
+				InputBindingHandles.Add(Input->BindAction(SelectAction, ETriggerEvent::Started, this,
+					&UBuildingPlacementComponent::HandleSelectInput).GetHandle());
+			}
+		}
 	}
 	if (UEnhancedInputLocalPlayerSubsystem* Subsystem = GetInputSubsystem(PlayerController))
 	{
@@ -150,6 +163,76 @@ void UBuildingPlacementComponent::HandleCancelInput()
 	ExitBuildingMode();
 }
 
+void UBuildingPlacementComponent::HandleRotateInput()
+{
+	if (bBuildingModeActive)
+	{
+		RotatePlacement();
+	}
+}
+
+void UBuildingPlacementComponent::HandleSelectInput(const FInputActionInstance& Instance)
+{
+	const int32 Index = SelectBuildingActions.IndexOfByKey(Instance.GetSourceAction());
+	if (bBuildingModeActive && Index != INDEX_NONE)
+	{
+		SelectBuildingIndex(Index);
+	}
+}
+
+bool UBuildingPlacementComponent::SelectBuildingIndex(const int32 Index)
+{
+	const UConstructionComponent* Construction = GetConstruction();
+	const TArray<TSubclassOf<UBuildingDefinition>> Buildings = Construction ? Construction->GetAvailableBuildings()
+		: TArray<TSubclassOf<UBuildingDefinition>>();
+	if (!Buildings.IsValidIndex(Index))
+	{
+		return false;
+	}
+	const bool bChanged = SelectedBuilding != Buildings[Index];
+	SelectedIndex = Index;
+	SelectedBuilding = Buildings[Index];
+	if (bBuildingModeActive && bChanged)
+	{
+		RefreshPreviewForSelection();
+	}
+	return true;
+}
+
+void UBuildingPlacementComponent::RotatePlacement()
+{
+	PlacementRotation = (PlacementRotation + 1) % 4;
+	if (bBuildingModeActive)
+	{
+		FVector CursorLocation;
+		if (GetCursorWorldLocation(CursorLocation))
+		{
+			UpdatePreviewAt(CursorLocation, true);
+		}
+	}
+}
+
+void UBuildingPlacementComponent::RefreshPreviewForSelection()
+{
+	if (PreviewActor && SelectedBuilding)
+	{
+		const UBuildingDefinition* Selected = SelectedBuilding->GetDefaultObject<UBuildingDefinition>();
+		PreviewActor->InitializeFromPieceClass(Selected->PieceActorClass, PreviewMaterial);
+		PreviewActor->SetFacingArrow(Selected->PlacementMode == EBuildingPlacementMode::GridEdge);
+	}
+	bHasPreviewPlacement = false;
+	LastValidationTime = -1.0e9;
+	FVector CursorLocation;
+	if (GetCursorWorldLocation(CursorLocation))
+	{
+		UpdatePreviewAt(CursorLocation, true);
+	}
+	else
+	{
+		RefreshHud();
+	}
+}
+
 bool UBuildingPlacementComponent::EnterBuildingMode()
 {
 	if (bBuildingModeActive)
@@ -166,7 +249,9 @@ bool UBuildingPlacementComponent::EnterBuildingMode()
 	}
 
 	bBuildingModeActive = true;
-	SelectedBuilding = Buildings[0];
+	// The selection persists across enter and exit; fall back to the first building if the list shrank.
+	SelectedIndex = Buildings.IsValidIndex(SelectedIndex) ? SelectedIndex : 0;
+	SelectedBuilding = Buildings[SelectedIndex];
 	ModeController = PlayerController;
 	bCursorWasShown = PlayerController->bShowMouseCursor;
 	PlayerController->SetShowMouseCursor(true);
@@ -185,7 +270,9 @@ bool UBuildingPlacementComponent::EnterBuildingMode()
 	PreviewActor = World->SpawnActor<ABuildingPreviewActor>(ABuildingPreviewActor::StaticClass(), FTransform::Identity, Params);
 	if (PreviewActor)
 	{
-		PreviewActor->InitializeFromPieceClass(SelectedBuilding->GetDefaultObject<UBuildingDefinition>()->PieceActorClass, PreviewMaterial);
+		const UBuildingDefinition* Selected = SelectedBuilding->GetDefaultObject<UBuildingDefinition>();
+		PreviewActor->InitializeFromPieceClass(Selected->PieceActorClass, PreviewMaterial);
+		PreviewActor->SetFacingArrow(Selected->PlacementMode == EBuildingPlacementMode::GridEdge);
 		PreviewActor->SetActorHiddenInGame(true);
 	}
 	HudWidget = CreateHudWidget(*PlayerController);
@@ -343,7 +430,7 @@ void UBuildingPlacementComponent::UpdatePreviewAt(const FVector& WorldLocation, 
 	{
 		return;
 	}
-	const FBuildingPlacement Placement = UBuildingSubsystem::MakePlacementFromWorld(*Definition, WorldLocation, 0);
+	const FBuildingPlacement Placement = UBuildingSubsystem::MakePlacementFromWorld(*Definition, WorldLocation, PlacementRotation);
 	const bool bMoved = !bHasPreviewPlacement || !SameSnappedPlacement(Placement, PreviewPlacement);
 	const double Now = World->GetTimeSeconds();
 	PreviewPlacement = Placement;
@@ -441,6 +528,8 @@ FText UBuildingPlacementComponent::DescribeResult(const EBuildResult Result)
 		return LOCTEXT("Blocked", "Blocked");
 	case EBuildResult::BlocksBuilder:
 		return LOCTEXT("BlocksBuilder", "Too close to you");
+	case EBuildResult::NeedsFloor:
+		return LOCTEXT("NeedsFloor", "Needs a floor");
 	case EBuildResult::InsufficientResources:
 		return LOCTEXT("Insufficient", "Not enough resources");
 	case EBuildResult::InvalidInventory:

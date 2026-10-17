@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Building/BuildingDefinition.h"
+#include "Building/BuildingDoorActor.h"
 #include "Building/BuildingPieceActor.h"
 #include "Building/BuildingPlacementComponent.h"
 #include "Building/ConstructionComponent.h"
@@ -223,4 +224,36 @@ public:
 	TArray<FBuildingConstructionResult> BuildResults;
 	/** Whether the result's Piece was valid when this listener received it. */
 	TArray<bool> PieceValidOnReceipt;
+};
+
+// ---- B5 door fixtures ----
+
+/** Concrete native door (the production layout) with a settable swing duration. */
+UCLASS(Transient, NotBlueprintable)
+class ABuildingTestDoorActor : public ABuildingDoorActor
+{
+	GENERATED_BODY()
+
+public:
+	void SetSwingDuration(float InSwingDuration) { SwingDuration = InSwingDuration; }
+};
+
+/** Test door (Door, GridEdge) built from the native test door actor; costs Wood x 4. */
+UCLASS(Transient, NotBlueprintable)
+class UBuildingTestDoorPieceDefinition : public UBuildingDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UBuildingTestDoorPieceDefinition();
+};
+
+/** Test door whose hinge is turned and scaled, so the ghost's attach-chain composition order matters. */
+UCLASS(Transient, NotBlueprintable)
+class ABuildingTestTurnedHingeDoorActor : public ABuildingTestDoorActor
+{
+	GENERATED_BODY()
+
+public:
+	ABuildingTestTurnedHingeDoorActor();
 };

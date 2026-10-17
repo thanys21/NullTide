@@ -18,6 +18,17 @@ FBuildingPlacementResult MakeFailure(FBuildingPlacementResult Result, const EBui
 	return Result;
 }
 
+/** Whether a trace hit an Active Foundation piece. */
+bool IsActiveFloorHit(const FHitResult& Hit)
+{
+	const AActor* Actor = Hit.GetActor();
+	const UBuildingPieceComponent* Piece = Actor ? Actor->FindComponentByClass<UBuildingPieceComponent>() : nullptr;
+	const UBuildingDefinition* Definition = Piece && Piece->GetBuildingDefinition()
+		? Piece->GetBuildingDefinition()->GetDefaultObject<UBuildingDefinition>()
+		: nullptr;
+	return Piece && Piece->IsActivePiece() && Definition && Definition->Category == EBuildingCategory::Foundation;
+}
+
 /** A trace hit that may carry a piece: Active floors are valid support, every other solid actor is not. */
 bool IsSupportSurface(const FHitResult& Hit)
 {
@@ -30,12 +41,7 @@ bool IsSupportSurface(const FHitResult& Hit)
 	{
 		return true;
 	}
-	const AActor* Actor = Hit.GetActor();
-	const UBuildingPieceComponent* Piece = Actor ? Actor->FindComponentByClass<UBuildingPieceComponent>() : nullptr;
-	const UBuildingDefinition* Definition = Piece && Piece->GetBuildingDefinition()
-		? Piece->GetBuildingDefinition()->GetDefaultObject<UBuildingDefinition>()
-		: nullptr;
-	return Piece && Piece->IsActivePiece() && Definition && Definition->Category == EBuildingCategory::Foundation;
+	return IsActiveFloorHit(Hit);
 }
 }
 
@@ -184,10 +190,10 @@ TArray<FVector2D> UBuildingSubsystem::GetSurfaceSamplePoints(const UBuildingDefi
 	TArray<FVector2D> Samples;
 	if (Placement.PlacementMode == EBuildingPlacementMode::GridEdge)
 	{
-		// Both ends (inset) and the midpoint, on both sides of the edge line, so a wall standing on a floor's
-		// boundary sees that floor.
+		// Both ends (inset past a corner neighbour's half thickness) and the midpoint, on both sides of the edge
+		// line, so a wall standing on a floor's boundary sees that floor.
 		const double Side = WallThickness * 0.5 - CollisionClearance;
-		const double Along[3] = { SampleInset, CellSize * 0.5, CellSize - SampleInset };
+		const double Along[3] = { EdgeEndInset, CellSize * 0.5, CellSize - EdgeEndInset };
 		for (const double T : Along)
 		{
 			for (const double Offset : { -Side, Side })
@@ -200,10 +206,11 @@ TArray<FVector2D> UBuildingSubsystem::GetSurfaceSamplePoints(const UBuildingDefi
 		return Samples;
 	}
 	const FIntPoint Size = GetRotatedFootprint(Definition.Footprint, Placement.Rotation);
-	const double MinX = Placement.Anchor.X * CellSize + SampleInset;
-	const double MinY = Placement.Anchor.Y * CellSize + SampleInset;
-	const double MaxX = (Placement.Anchor.X + Size.X) * CellSize - SampleInset;
-	const double MaxY = (Placement.Anchor.Y + Size.Y) * CellSize - SampleInset;
+	// Corners inset past a neighbouring wall's half thickness, plus the center.
+	const double MinX = Placement.Anchor.X * CellSize + EdgeEndInset;
+	const double MinY = Placement.Anchor.Y * CellSize + EdgeEndInset;
+	const double MaxX = (Placement.Anchor.X + Size.X) * CellSize - EdgeEndInset;
+	const double MaxY = (Placement.Anchor.Y + Size.Y) * CellSize - EdgeEndInset;
 	Samples.Add(FVector2D(MinX, MinY));
 	Samples.Add(FVector2D(MaxX, MinY));
 	Samples.Add(FVector2D(MinX, MaxY));
@@ -220,7 +227,7 @@ FBox UBuildingSubsystem::GetCollisionBox(const UBuildingDefinition& Definition, 
 	if (Placement.PlacementMode == EBuildingPlacementMode::GridEdge)
 	{
 		// Shorter than the edge by half a wall thickness at each end, so walls meeting at a grid corner do not block.
-		const double HalfLength = CellSize * 0.5 - (WallThickness * 0.5 + CollisionClearance);
+		const double HalfLength = CellSize * 0.5 - EdgeEndInset;
 		const double HalfThickness = WallThickness * 0.5 - CollisionClearance;
 		const FVector Center = EdgeToWorldCenter(Placement.EdgeAxis, Placement.Anchor, 0.0);
 		const FVector HalfExtent = Placement.EdgeAxis == EBuildingEdgeAxis::Y
@@ -231,9 +238,10 @@ FBox UBuildingSubsystem::GetCollisionBox(const UBuildingDefinition& Definition, 
 	}
 	const FIntPoint Size = GetRotatedFootprint(Definition.Footprint, Placement.Rotation);
 	const double Height = Definition.Category == EBuildingCategory::Foundation ? FloorThickness : WallHeight;
+	// Shrunk past a neighbouring wall's half thickness, so walls and doors on the cell's edges do not block it.
 	return FBox(
-		FVector(Placement.Anchor.X * CellSize + CollisionClearance, Placement.Anchor.Y * CellSize + CollisionClearance, Bottom),
-		FVector((Placement.Anchor.X + Size.X) * CellSize - CollisionClearance, (Placement.Anchor.Y + Size.Y) * CellSize - CollisionClearance,
+		FVector(Placement.Anchor.X * CellSize + EdgeEndInset, Placement.Anchor.Y * CellSize + EdgeEndInset, Bottom),
+		FVector((Placement.Anchor.X + Size.X) * CellSize - EdgeEndInset, (Placement.Anchor.Y + Size.Y) * CellSize - EdgeEndInset,
 			Placement.SurfaceZ + Height));
 }
 
@@ -663,6 +671,9 @@ FBuildingPlacementResult UBuildingSubsystem::ValidatePlacement(TSubclassOf<UBuil
 	double MaxZ = TNumericLimits<double>::Lowest();
 	AActor* SupportBlocker = nullptr;
 	bool bSteep = false;
+	// Edge pieces: whether every sample on the negative / positive side of the edge line is an Active floor.
+	const double EdgeLine = Placement.EdgeAxis == EBuildingEdgeAxis::Y ? Placement.Anchor.X * CellSize : Placement.Anchor.Y * CellSize;
+	bool bFloorSide[2] = { true, true };
 	for (const FVector2D& Sample : GetSurfaceSamplePoints(*Definition, Placement))
 	{
 		FHitResult Hit;
@@ -677,6 +688,11 @@ FBuildingPlacementResult UBuildingSubsystem::ValidatePlacement(TSubclassOf<UBuil
 		if (!IsSupportSurface(Hit) && !SupportBlocker)
 		{
 			SupportBlocker = Hit.GetActor();
+		}
+		if (bEdge)
+		{
+			const double Across = Placement.EdgeAxis == EBuildingEdgeAxis::Y ? Sample.X : Sample.Y;
+			bFloorSide[Across < EdgeLine ? 0 : 1] &= IsActiveFloorHit(Hit);
 		}
 		bSteep |= Hit.ImpactNormal.Z < MinNormalZ;
 		MinZ = FMath::Min(MinZ, Hit.ImpactPoint.Z);
@@ -699,6 +715,10 @@ FBuildingPlacementResult UBuildingSubsystem::ValidatePlacement(TSubclassOf<UBuil
 	if (MaxZ - MinZ > MaxUnevenness)
 	{
 		return MakeFailure(Result, EBuildResult::Uneven, FString::Printf(TEXT("The surface varies by %.0f cm."), MaxZ - MinZ));
+	}
+	if (bEdge && Definition->bRequiresFloor && !bFloorSide[0] && !bFloorSide[1])
+	{
+		return MakeFailure(Result, EBuildResult::NeedsFloor, TEXT("Needs an Active floor along one side of the edge."));
 	}
 
 	// Occupancy.

@@ -16,6 +16,7 @@ class UInputAction;
 class UInputMappingContext;
 class UInventoryComponent;
 class UMaterialInterface;
+struct FInputActionInstance;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnBuildingModeChanged, bool, bBuildingModeActive);
 
@@ -60,9 +61,27 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Building|Placement")
 	bool IsBuildingModeActive() const { return bBuildingModeActive; }
 
-	/** The building placed by building mode (the first registered building until selection arrives in B5). */
+	/**
+	 * Selects the registered building at this index (authored order of GetAvailableBuildings). Missing indices are
+	 * ignored and return false. In building mode the ghost is rebuilt for the new piece. The selection persists.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Building|Placement")
+	bool SelectBuildingIndex(int32 Index);
+
+	/** Rotates the placement by one quarter turn (wrapping 3 -> 0). For edge pieces this flips the facing. */
+	UFUNCTION(BlueprintCallable, Category = "Building|Placement")
+	void RotatePlacement();
+
+	/** The building placed by building mode. */
 	UFUNCTION(BlueprintPure, Category = "Building|Placement")
 	TSubclassOf<UBuildingDefinition> GetSelectedBuilding() const { return SelectedBuilding; }
+
+	UFUNCTION(BlueprintPure, Category = "Building|Placement")
+	int32 GetSelectedBuildingIndex() const { return SelectedIndex; }
+
+	/** Quarter turns 0-3 applied to the next placement. */
+	UFUNCTION(BlueprintPure, Category = "Building|Placement")
+	int32 GetPlacementRotation() const { return PlacementRotation; }
 
 	/** Last CanBuild result for the ghost (read-only feedback; never trusted for building). */
 	UFUNCTION(BlueprintPure, Category = "Building|Placement")
@@ -116,6 +135,10 @@ private:
 	void HandleToggleInput();
 	void HandleConfirmInput();
 	void HandleCancelInput();
+	void HandleRotateInput();
+	void HandleSelectInput(const FInputActionInstance& Instance);
+	/** Rebuilds the ghost for the selected piece and revalidates at the cursor now. */
+	void RefreshPreviewForSelection();
 
 	UFUNCTION()
 	void HandleControllerChanged(APawn* Pawn, AController* OldController, AController* NewController);
@@ -149,6 +172,14 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Building|Input", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UInputAction> CancelAction;
 
+	/** Started: rotate the placement by a quarter turn. */
+	UPROPERTY(EditDefaultsOnly, Category = "Building|Input", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UInputAction> RotateAction;
+
+	/** Started: select the registered building at the action's index (1, 2, 3 -> index 0, 1, 2). */
+	UPROPERTY(EditDefaultsOnly, Category = "Building|Input", meta = (AllowPrivateAccess = "true"))
+	TArray<TObjectPtr<UInputAction>> SelectBuildingActions;
+
 	/** Translucent preview material with a Color vector parameter (M_BuildPreview). */
 	UPROPERTY(EditDefaultsOnly, Category = "Building|Placement", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMaterialInterface> PreviewMaterial;
@@ -174,6 +205,9 @@ private:
 
 	UPROPERTY(Transient)
 	TSubclassOf<UBuildingDefinition> SelectedBuilding;
+
+	int32 SelectedIndex = 0;
+	int32 PlacementRotation = 0;
 
 	FBuildingConstructionResult PreviewResult;
 	FBuildingPlacement PreviewPlacement;

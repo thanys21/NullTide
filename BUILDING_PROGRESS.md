@@ -10,8 +10,9 @@ Plan and design decisions: `BUILDING_PLAN.md`.
 | B1 Data model, grid coordinates, occupancy and placement validation | COMPLETE / APPROVED (8/8; full automation 198/198; cook PASS; no manual PIE required) |
 | B2 Construction authority | COMPLETE / APPROVED (20/20; full automation 219/219; cook PASS; no manual PIE required; commit `bccd0bc`, pushed). Design approved 2026-10-14 (D1–D8, D3 option (a)). |
 | B3 First buildable: Wooden Floor | COMPLETE / APPROVED (4/4; full automation 223/223; cook PASS 624/7/631; no manual PIE required; commit `ff04c0e`, pushed). |
-| B4 Building mode, ghost preview, input | IMPLEMENTED AND VALIDATED — awaiting user acceptance (7/7; full automation 230/230; cook PASS; manual rendered PIE 8/8 PASS). Plan approved 2026-10-15. |
-| B5–B6 | NOT STARTED |
+| B4 Building mode, ghost preview, input | COMPLETE / APPROVED (7/7; full automation 230/230; cook PASS; manual rendered PIE 8/8 PASS; commit `7ce9be3`; test aid `305e23a`). |
+| B5 Wooden wall and wooden door | IMPLEMENTED AND VALIDATED — awaiting commit approval (6/6; full automation 236/236; cook PASS 639/7/646; manual rendered PIE PASS after the rework). Plan approved 2026-10-17 (B5-1 to B5-5; rework R1–R3, D1–D3). |
+| B6 | NOT STARTED |
 
 ## B1 - Data Model, Grid Coordinates, Occupancy and Placement Validation
 
@@ -536,8 +537,123 @@ The fresh-context review found no P0.
 - If the level's navigation mesh is static, runtime floors do not update it. Movement is WASD, so there is no impact now; record it for NPC pathing (Phase 6).
 - The two test pickups and the `BP_PickUpItem` Instance Editable change are test aids requested by the user.
 
+## B5 - Wooden Wall and Wooden Door
+
+### Baseline and Scope
+
+- **Baseline:** `305e23a` (B4 `7ce9be3` plus the test aid). Full automation 230/230, cook 631/7/638.
+- **Scope (user-approved 2026-10-17; B5-1 to B5-5 as recommended; `BUILDING_PLAN.md` section 7 B5):** walls and doors on cell edges, selection with `1`/`2`/`3`, rotation with `R`, the door actor and its interaction, and the ghost's attach-chain composition.
+- **Not in scope:** demolition and refunds (B6), locking doors, door art, NPC pathing.
+
+### Source
+
+| File | Content |
+| --- | --- |
+| `Building/BuildingDoorActor.h/.cpp` (new) | `ABuildingDoorActor : ABuildingPieceActor` (abstract). <br>• **Layout:** the inherited `PieceMesh` is the left post; `FramePostRight`, `FrameLintel` (220–250 cm); a `DoorHinge` at the left post's inner edge with a 100 × 8 × 220 cm `DoorLeaf`; an overlap-only `InteractionBounds` that never affects navigation. <br>• **API:** `ToggleDoor`, `SetDoorOpen`, `CanInteract` → `EBuildingDoorResult` (`Success`, `InvalidInteractor` for a null or non-pawn interactor, `OutOfRange` beyond `UseRange` 300 cm, `NotActive` while not an Active piece, provisional or being destroyed). <br>• **Swing:** 90° over `SwingDuration` (0.3 s) on a looping world timer at 1/60 s; no tick. Toggling mid-swing reverses. <br>• **Leaf collision:** off as soon as opening starts; the authored collision is restored only when fully closed. <br>• `EndPlay` clears the timer after `Super`. |
+| `Building/BuildingPlacementComponent.h/.cpp` | `SelectBuildingIndex` (bound to `SelectBuildingActions`, Started; missing indices ignored; persists across exit and enter) and `RotatePlacement` (`RotateAction`, Started; 0 → 3 → 0). The rotation goes to `MakePlacementFromWorld`. A selection change rebuilds the ghost and revalidates at once. |
+| `Building/BuildingPreviewActor.cpp` | Each template's transform is composed up its attach chain: the CDO `AttachParent` chain for default components; for SCS templates, parent nodes in the same script, a parent class's node by variable name, or a native parent by name. |
+| `Building/BuildingSubsystem.h/.cpp` | **Deviation, see the Self-Review:** new `EdgeEndInset` (12 cm = half a wall thickness + clearance). Edge end samples move from 5 cm to 12 cm from the corners, so a perpendicular wall at a corner is not under a sample. The edge collision box uses the same constant (unchanged value, 88 cm half length). |
+| `UI/BuildingHudWidget` | Hint "1-3 select · R rotate · LMB build · RMB / B exit". |
+| Tests | `BuildingTestTypes.h`: `ABuildingTestDoorActor` (settable swing), `ABuildingTestTurnedHingeDoorActor`, `UBuildingTestDoorPieceDefinition`. `ConstructionTests.cpp`: the B5 section; the B3 `PlayerRegistration` and B4 `ProductionAssets` assertions now leave the exact lists to B5. |
+
+### Assets (Unreal MCP unless noted)
+
+- **New pieces** (`Pieces/`): `BP_BuildWall` (child of `ABuildingPieceActor`; `PieceMesh` = engine cube at (0, 0, 125), scale (2, 0.2, 2.5)); `BP_BuildDoor` (child of `ABuildingDoorActor`; no added components).
+  - `BP_BuildDoor` implements `BPI_Interactable`: **manual step by the user** (Class Settings → Implemented Interfaces). Then through MCP: `EventInteract(Interactor)` → `ToggleDoor(Interactor)`; `GetInteractionType` returns Press (`NewEnumerator0`); `GetHoldDuration` returns 0. The three disabled template events were removed; the CDO does not tick.
+- **New definitions** (`Definitions/`): `Building_WoodWall` ("Wooden Wall", Wall, GridEdge, Wood × 6, refund 0.5); `Building_WoodDoor` ("Wooden Door", Door, GridEdge, Wood × 8 + Scrap × 2, refund 0.5).
+- **New input:** `IA_BuildRotate`, `IA_BuildSelect1/2/3` (Boolean, consume, no triggers). `IMC_BuildingMode` adds R → Rotate and One/Two/Three → Select (9 mappings).
+- **`BP_TopDownCharacter`:** `AvailableBuildings = [Building_WoodFloor, Building_WoodWall, Building_WoodDoor]`; the placement component has `RotateAction` and the three select actions.
+- **Test aid (B5-5):** the Wood test pickup is now Wood × 100 (`0/PM/KCABN4UGSM62K8KT67D0L8`, modified); a new Scrap × 10 pickup at (250, 0) (`A/SD/QSK9GQ2UM1LBYM2ZNH9X8X`, added). Saved by the user with Ctrl+S.
+- All MCP-edited assets were saved by explicit path; Blueprints compiled with warnings as errors (`BP_BuildWall`, `BP_BuildDoor`, both definitions, `BP_TopDownCharacter`).
+
+### Tests `NullTide.Building.B5.*` (6)
+
+| Test | Covers |
+| --- | --- |
+| `ProductionDefinitions` | Both definitions valid with exact name, category, GridEdge, cost, refund and piece class; editor data validation. Wall and door piece contracts (unscaled root, no child actors, no `EvenIfNotCollidable`); wall 200 × 20 × 250; door frame and leaf bounds, leaf on the hinge, interaction volume overlap-only; no tick. |
+| `EdgeBuild` | Production pieces through the authority: walls on an X and a Y edge (exact cost, edge key, yaw 0/90, edge center); a wall on a floor's edge stands at 10 cm; a door on a walled edge and a wall on a door's edge are refused (`Blocked`, naming the existing piece; the key stays with it); a door at a wall's corner at rotation 1 (yaw 270, Wood −8, Scrap −2, one revision); all resources spent exactly; registry clean. |
+| `DoorToggle` | Provisional door refuses (`NotActive`); instant swing toggles leaf collision and hinge yaw; frame always blocks; null, out-of-range and non-pawn interactors refused; timed swing reverses mid-swing, collision returns only when fully closed, no tick; a destroyed door refuses and has no timer. |
+| `DoorInterface` | `BP_BuildDoor` implements `BPI_Interactable`; `GetInteractionType` is Press; `Interact` through `ProcessEvent` opens and closes in range, refused out of range; no inventory or registry change. |
+| `SelectionAndRotation` | Index 0 by default; select 2 rebuilds the same ghost with four meshes and the HUD name; missing indices ignored; every real door mesh (including the hinged leaf) matches a ghost mesh, also under a turned and scaled hinge; `R` wraps 1, 2, 3, 0 and the ghost flips on odd turns; confirm builds the door at yaw 180; the wall ghost on the door's edge is red; selection persists across exit and enter. |
+| `ProductionInput` | `IMC_BuildingMode` maps exactly LMB, RMB, I, Tab, F, R, 1, 2, 3 with no per-mapping triggers; the new actions' flags; the character registers Floor, Wall, Door in order and has the new actions. |
+
+### Validation
+
+- **Build:** clean builds with the editor closed; 0 errors, 0 warnings; base DLL.
+- **Command line:** `NullTide` **236/236** (230 + 6), exit code 0, after the review fixes. Building 46 (B1 9, B2 20, B3 4, B4 7, B5 6).
+- **In-editor (MCP) Building run** before the corner fix: 45/46, `EdgeBuild` failed with "BP_BuildWall_C_0 is in the way" for a door at a wall's corner. This found the edge-sample deviation below.
+- **Windows cook** (editor closed): `Done!`, 0 errors, 2 environment warnings; 639 cooked, 7 skipped, 646 total (+8). All eight new assets are in the cooked asset registry. Re-run after the review fixes (C++ only): `Done!`, 0 errors, 2 environment warnings, 639/7/646 unchanged.
+- **Content and World Partition audit:** added 8 assets and 1 actor package; modified `IMC_BuildingMode`, `BP_TopDownCharacter` and 1 actor package; `__ExternalActors__` 94 (93 + Scrap pickup), `__ExternalObjects__` 3; no `.umap` change; nothing deleted.
+- **Manual rendered PIE (user, 2026-10-17):** the first run found three issues, fixed in the rework below. The retest of the updated 8-step checklist: "test done, xây chuẩn" (all PASS).
+
+### Self-Review (including a fresh-context review pass)
+
+| Finding | Resolution |
+| --- | --- |
+| Walls and doors could not meet at a grid corner: edge end samples at 5 cm fell inside a perpendicular wall's 10 cm half thickness (`Blocked`) | **CONFIRMED** by `EdgeBuild`. Fixed with `EdgeEndInset` (12 cm). This is a B1 validation change the plan said B5 would not make. **APPROVED by the user (B5-D1, 2026-10-17).** |
+| Edge on an occupied edge reports `Blocked`, not `Occupied` as the plan's test text says | **CONFIRMED.** The B1 order checks the support surface before occupancy, and the existing piece is under the samples. Kept the approved order; tests assert `Blocked` naming the piece and that the key stays with it. **ACCEPTED by the user (B5-D2).** |
+| P1: a floor or furniture cannot be placed in a cell next to an existing wall or door (cell samples inset 5 cm and the cell collision box shrunk 2 cm overlap the wall's 10 cm half thickness) | **CONFIRMED by analysis** (`BuildingSubsystem.cpp` cell samples and cell box; not yet tested). **User chose fix now (B5-D3):** cell samples and the cell box are inset by `EdgeEndInset`; `EdgeBuild` builds a floor next to an existing wall. |
+| A door could be toggled during or after `EndPlay` | **CONFIRMED.** `CanInteract` refuses a door being destroyed; the timer is cleared after `Super::EndPlay`. Tested. |
+| Closing always forced `QueryAndPhysics` on the leaf | **CONFIRMED.** The authored collision is cached in `PostInitializeComponents` (from the body instance, since a provisional piece has actor collision off) and restored. |
+| `CanInteract` accepted any actor; B5-4 says a valid pawn | **CONFIRMED.** Now requires a pawn; tested. |
+| The ghost-hinge test could not detect a wrong composition order | **CONFIRMED.** Added the turned and scaled hinge case. |
+| `HandleSelectInput` (action → index) is not run by a test | **Known gap:** asset wiring is asserted; key behaviour is PIE step 1/4/7. |
+| `SelectedIndex` can drift if `AvailableBuildings` changes during the mode | **Known, harmless:** `TryBuild` re-checks registration; nothing changes the list at runtime. |
+| The ghost ignores child-Blueprint overrides of inherited SCS components and absolute-transform flags | **Carried limitation:** unreachable today (the pieces add no components, asserted). |
+
+### Rework after the first PIE (plan approved 2026-10-17; `BUILDING_PLAN.md` "B5 rework after the first PIE")
+
+The user's first PIE run found three problems:
+- walls and doors built without a floor;
+- the door prompt read "None";
+- the door's opening side was not visible while building.
+
+**Fixes:**
+- **B5-R1, floor requirement:**
+  - `UBuildingDefinition::bRequiresFloor` (default false); `Building_WoodWall` and `Building_WoodDoor` set it.
+  - `ValidatePlacement` (support stage, after `Uneven`) returns the new `EBuildResult::NeedsFloor` ("Needs a floor") unless every sample on one side of the edge hits an `Active` Foundation. A shared `IsActiveFloorHit` helper serves both this check and the support rule.
+- **B5-D3:** cell samples and the cell collision box are inset by `EdgeEndInset` (12 cm; previously 5 cm and 2 cm). The `SampleInset` constant was removed.
+- **B5-R2, prompt key:**
+  - New `UI/InputPromptLibrary` (`GetKeyMappedToAction`).
+  - `WB_interactionWidget`: the GetOwningPlayer → subsystem → `QueryKeysMappedToAction` → Get chain was replaced by `GetKeyMappedToAction(IMC_Default, IA_Interact)`. The rest of the graph is unchanged.
+  - Cause: Enhanced Input drops the consumed F → `IA_Interact` mapping while `IMC_BuildingMode` is active (`EnhancedInputSubsystemInterface.cpp:1041`).
+- **B5-R3, facing arrow:**
+  - `ABuildingPreviewActor` has a `FacingArrow` (cube shaft plus cone head, tinted, no collision, not a preview mesh). `SetFacingArrow` points it along local +Y for edge pieces and local +X for cells, so it turns with `R`.
+  - The door already opens towards local +Y, so a door opens where the arrow showed; asserted for rotation 0 and 1 and for the production door through `Interact`.
+
+**Validation:**
+- Clean build: 0 warnings.
+- Command line before the asset edits: 234/236. The two failures were the expected `bRequiresFloor` assertions (assets not yet edited); every B1–B4 test passed with the D3 change.
+- In-editor (MCP) after the asset edits: `NullTide` **236/236** (one environment RHI memory warning).
+- Assets: `Building_WoodWall`, `Building_WoodDoor` and `WB_interactionWidget` compiled with warnings as errors and saved by path.
+- **Rework fresh-context review:** no P0 or P1.
+
+  | Finding | Resolution |
+  | --- | --- |
+  | P2 D3 trade-off (thin border blockers) | **NEEDS USER DECISION → decided:** record now, fix with furniture (Known Limitations). |
+  | P3 outer wall at a terrain drop | Recorded (Known Limitations). |
+  | P3 test gaps | **CONFIRMED, fixed.** Added a wall with floors on both sides (Y(2,0)), a Y edge with a floor on its negative side only (Y(2,−2)), and a diagonal-only floor that gives `NeedsFloor` (X(0,−1)). |
+  | P3 the arrow kept a stale tint with a null material | **CONFIRMED, fixed.** The arrow materials are always reassigned (null resets). Tests check the two arrow meshes, the tint with `M_BuildPreview`, and the reset. |
+  | P3 the prompt ignores remaps and profiles | Documented on `GetKeyMappedToAction`. |
+  | P3 stale `CollisionClearance` comment | Fixed. |
+- **Final (editor closed, after these fixes):** clean build, 0 warnings. Command line `NullTide` **236/236**, exit 0, no automation warnings or errors. Windows cook `Done!`, 0 errors, 2 environment warnings, 639/7/646. `WB_interactionWidget`, both definitions and `BP_BuildDoor` are in the cooked asset registry.
+
+### Known Limitations Carried Forward
+
+- `bRequiresFloor` defaults to false; a new edge definition must set it (RW-2).
+- **D3 trade-off (rework review P2; user decision 2026-10-17: record now, fix with furniture).**
+  - With cell samples at 12 cm and the cell box 12 cm inside the cell, a thin pawn-blocking blocker on a cell border is missed: a fence up to 24 cm thick, or a pole of radius 16 cm or less at a corner.
+  - The builder-safety margin is also 7 cm inside the cell.
+  - Harmless for 10 cm floors on the current map.
+  - Planned fix when furniture lands (after B6): restore the 2 cm box and 5 cm samples for cells, and ignore only `Active` edge pieces registered on the cell's own four edges at the same layer. That is an identity exclusion against the B1 "geometric" rule, so it is approved for that checkpoint.
+- **Outer wall at a terrain drop (rework review P3):** a wall with a full floor on one side is still refused by `NoGround` or `Uneven` from the bare side, for example at a raised block's edge more than 25 cm above the outside ground. Possible fix: with `bRequiresFloor` and one full floor side, evaluate support on that side only.
+- The prompt key comes from `IMC_Default`'s default mappings, so player remaps and mapping profiles are not reflected.
+- An edge on an occupied edge reports `Blocked` ("… is in the way").
+- The ghost does not apply child-Blueprint overrides of inherited SCS templates.
+- Door collision is not swept: closing on a pawn in the doorway relies on character depenetration (risk R-3, PIE step 5).
+- Interaction targets the last overlapped interactable (risk R-4): a door next to storage or the workbench may target the wrong one.
+- Navigation with the dynamic nav mesh is PIE-only.
+
 ## Next Checkpoint
 
-B4 is implemented and validated (manual PIE 8/8 PASS); it waits for the user's acceptance and commit approval.
-
-Next after B4: the B5 plan (Wooden Wall and Wooden Door: edge placement, rotation, the build-bar selection deferred from B4, the door actor, and nested ghost meshes). Phase 5 stays IN PROGRESS.
+B5 is implemented and validated (automation 236/236, cook PASS, manual PIE PASS). It waits for the commit approval. Next after B5: B6 (demolition and refund). Phase 5 stays IN PROGRESS.

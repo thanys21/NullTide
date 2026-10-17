@@ -81,7 +81,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
-- `NullTide.Building.{B1,B2,B3,B4}`
+- `NullTide.Building.{B1,B2,B3,B4,B5}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -161,9 +161,11 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - Pieces unregister on `EndPlay` and component destruction; dead holders are purged.
   - `AuditRegistry` must stay empty in tests.
 - `ValidatePlacement` is read-only. It recomputes surface, layer and transform (never trusts the caller) and checks, in order: definition, shape, range (600 cm), support surface (`WorldStatic` or `Active` floor; slope ≤ 30°, unevenness ≤ 25 cm), occupancy, blocking collision (Pawn channel, ground excluded geometrically, not by identity), builder safety.
+  - Since B5, samples and collision boxes stay `EdgeEndInset` (12 cm) inside a cell's border or an edge's ends, so walls meet at corners and floors build next to walls. An edge on an occupied edge reports `Blocked` (the existing piece is under the samples, and support is checked before occupancy).
+  - A definition with `bRequiresFloor` (production walls and doors) needs every sample on at least one side of its edge to hit an `Active` floor, else `NeedsFloor` ("Needs a floor").
 - `UBuildingPieceComponent` holds per-piece metadata and state (`Provisional`/`Active`/`Removing`). `ABuildingPieceActor` is a thin host whose `SetProvisional` hides the piece and removes collision and navigation.
 - Building never changes inventory, crafting, storage or interaction authority. The construction transaction (B2) uses only `UInventoryComponent::TryApplyDefinitionTransaction`.
-- `UConstructionComponent` (B2) is a builder's construction authority (the `UCraftingComponent` pattern). Since B3, `BP_TopDownCharacter` has one, named `ConstructionComponent`, with `AvailableBuildings = [Building_WoodFloor]`.
+- `UConstructionComponent` (B2) is a builder's construction authority (the `UCraftingComponent` pattern). Since B3, `BP_TopDownCharacter` has one, named `ConstructionComponent`; since B5 its `AvailableBuildings = [Building_WoodFloor, Building_WoodWall, Building_WoodDoor]`.
   - It holds `AvailableBuildings` and exposes `GetAvailableBuildings`, `CanBuild` (exact read-only preflight) and `TryBuild`.
   - `OnBuildResult` fires exactly once per non-reentrant request; a nested request returns `BuildInProgress` without notifying.
   - **`TryBuild` activates first and pays last** (`BUILDING_PLAN.md` 5.2.3):
@@ -185,9 +187,16 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
     - `IMC_BuildingMode` (priority 2) is active only in the mode: LMB confirms (`Started`); RMB, `I`, `Tab` and `F` exit (`Completed`).
     - It consumes those keys, so no screen opens while the mode owns the cursor; a second press opens it.
   - **Every exit restores the remembered cursor state:** toggle, cancel, controller change, `EndPlay`.
-  - Rotation and selection come in B5.
+  - **Selection and rotation (B5):** `1`/`2`/`3` (`IA_BuildSelect1/2/3`) call `SelectBuildingIndex` in `AvailableBuildings` order (missing indices ignored; the selection persists); `R` (`IA_BuildRotate`) calls `RotatePlacement` (quarter turns, wrapping; odd turns flip an edge piece's facing). Both are in `IMC_BuildingMode`.
+  - The ghost composes each template's transform up its attach chain (the door leaf under its hinge). It does not apply child-Blueprint overrides of inherited SCS templates.
+  - The ghost carries a facing arrow (not a piece mesh, no collision): local +Y for edge pieces, which is the side a door opens to, and local +X for cells. It turns with `R`.
   - Test seams: `GetCursorWorldLocation`, `IsLocalBuilderController`, `CreateHudWidget`.
   - Building assets are in `Content/LevelPrototyping/BuildingSystem/{Input,Materials,UI}`.
+- `ABuildingDoorActor` (B5; abstract, Blueprint `Pieces/BP_BuildDoor`) is an edge piece with a blocking frame, a `DoorHinge` with the `DoorLeaf`, and an overlap-only `InteractionBounds`.
+  - `ToggleDoor`/`SetDoorOpen`/`CanInteract` return `EBuildingDoorResult`: any pawn within `UseRange` (300 cm) of an `Active` door that is not being destroyed.
+  - The leaf swings 90° in `SwingDuration` (0.3 s) on a world timer, with no tick, and reverses mid-swing. Leaf collision is off from the start of opening until fully closed.
+  - `BP_BuildDoor` implements `BPI_Interactable` (`Interact` → `ToggleDoor`, Press). It holds no inventory or construction authority.
+- The shared interaction prompt `WB_interactionWidget` reads its key with `UInputPromptLibrary::GetKeyMappedToAction(IMC_Default, IA_Interact)` (B5). The live query returned no key while `IMC_BuildingMode` consumed F, which showed "None".
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.
@@ -211,9 +220,11 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - `BP_PickUpItem` is the generic world pickup.
 - Building assets live in `Content/LevelPrototyping/BuildingSystem/`:
   - `Pieces/BP_BuildFloor`: a child of `ABuildingPieceActor`. It only sets the inherited `PieceMesh`; it adds no components and keeps an unscaled root.
-  - `Definitions/Building_WoodFloor`: Wood × 4.
+  - `Pieces/BP_BuildWall` (B5): a child of `ABuildingPieceActor`; `PieceMesh` is a 200 × 20 × 250 cm cube; no added components.
+  - `Pieces/BP_BuildDoor` (B5): a child of `ABuildingDoorActor`; no added components.
+  - `Definitions/Building_WoodFloor`: Wood × 4. `Building_WoodWall`: Wood × 6. `Building_WoodDoor`: Wood × 8 + Scrap × 2. All refund 0.5; the wall and door have `bRequiresFloor`.
 - The `Lvl_TopDown` ground `Floor_0` uses `BlockAll` (`WorldStatic`) since B4, so it supports building like every other map block. It is a World Partition external actor; MCP cannot save actor packages, so map actor edits are saved in the editor (Ctrl+S) and then audited with `git status`.
-- `BP_PickUpItem`'s `Quantity` is Instance Editable (B4 test aid). Two test pickups near `PlayerStart` (Wood × 10, Stone × 10) were placed at the user's request; the user may remove them.
+- `BP_PickUpItem`'s `Quantity` is Instance Editable (B4 test aid). Test pickups near `PlayerStart` (Wood × 100, Stone × 10, Scrap × 10) were placed at the user's request; the user may remove them.
 
 ## Milestone docs
 

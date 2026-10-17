@@ -27,6 +27,12 @@ public:
 	/** Builds the preview meshes from a piece class. Replaces any previous meshes. */
 	void InitializeFromPieceClass(TSubclassOf<AActor> PieceClass, UMaterialInterface* Material);
 
+	/** Points the facing arrow along the piece's facing: local +Y for edge pieces (a door's opening side), else +X. */
+	void SetFacingArrow(bool bEdgePiece);
+
+	/** The facing arrow (shaft and head), tinted like the ghost; not counted as a preview mesh. */
+	USceneComponent* GetFacingArrow() const { return FacingArrow; }
+
 	void SetPlacementValid(bool bValid, const FLinearColor& ValidColor, const FLinearColor& InvalidColor);
 
 	bool IsPlacementValid() const { return bPlacementValid; }
@@ -36,6 +42,15 @@ public:
 private:
 	UPROPERTY()
 	TObjectPtr<USceneComponent> PreviewRoot;
+
+	UPROPERTY()
+	TObjectPtr<USceneComponent> FacingArrow;
+
+	UPROPERTY()
+	TObjectPtr<UStaticMeshComponent> ArrowShaft;
+
+	UPROPERTY()
+	TObjectPtr<UStaticMeshComponent> ArrowHead;
 
 	UPROPERTY()
 	TArray<TObjectPtr<UStaticMeshComponent>> PreviewMeshes;

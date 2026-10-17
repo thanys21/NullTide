@@ -41,7 +41,7 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "Building|UI", meta = (BindWidget))
 	TObjectPtr<UTextBlock> StatusText;
 
-	/** Optional controls hint ("LMB build · RMB / B exit"). */
+	/** Optional controls hint ("1-3 select · R rotate · LMB build · RMB / B exit"). */
 	UPROPERTY(BlueprintReadOnly, Category = "Building|UI", meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> HintText;
 

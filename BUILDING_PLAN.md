@@ -6,7 +6,7 @@ Phase 5 of `NULLTIDE_MASTER_PLAN.md`. Building is delivered in small checkpoints
 - **B0 is APPROVED** (architecture, review refinements and the final decisions in section 10.3).
 - **B1 is COMPLETE / APPROVED:** data model, grid coordinates, occupancy and placement validation logic (see `BUILDING_PROGRESS.md`; full automation 198/198, cook PASS, no manual PIE required).
 - **B2 design gate is APPROVED (user, 2026-10-14):** decisions D1–D8 in 5.2.13, with D3 option (a). The design activates the piece before payment, so nothing fallible runs after the deduction. It was reviewed independently in two rounds (5.2.14, 5.2.15).
-- **B2 is COMPLETE / APPROVED** (20 B2 tests, full automation 219/219, cook PASS; commit `bccd0bc`). **B3 (Wooden Floor) is COMPLETE / APPROVED** (4 B3 tests, full automation 223/223, cook PASS; commit `ff04c0e`). **B4 (building mode, ghost, input) IMPLEMENTED AND VALIDATED, awaiting user acceptance** (7 B4 tests, full automation 230/230, cook PASS, manual PIE 8/8 PASS; section 7 B4, `BUILDING_PROGRESS.md`). B4–B6 are not started. Phase 5 is IN PROGRESS.
+- **B2 is COMPLETE / APPROVED** (20 B2 tests, full automation 219/219, cook PASS; commit `bccd0bc`). **B3 (Wooden Floor) is COMPLETE / APPROVED** (4 B3 tests, full automation 223/223, cook PASS; commit `ff04c0e`). **B4 (building mode, ghost, input) is COMPLETE / APPROVED** (7 B4 tests, full automation 230/230, cook PASS, manual PIE 8/8 PASS; commit `7ce9be3`). **B5 plan APPROVED (2026-10-17; B5-1 to B5-5 as recommended), in progress** (section 7 B5). B4–B6 are not started. Phase 5 is IN PROGRESS.
 
 Baseline: `bbfcc08` (Phase 4 Crafting complete, C8A–C8C pushed). Full automation 190/190, Windows cook PASS.
 
@@ -872,7 +872,7 @@ The design gate is approved (5.2, 2026-10-14). The exact scope is in 5.2.12 and 
 - **R-6 Map support surface (B4 risk).** If the `Lvl_TopDown` ground is not `WorldStatic`, every PIE placement would fail with `Blocked` or `NoGround`. The B3 MCP check reports it early. Fixing it is B4 scope (a decision then), not B3.
 - **R-7 Piece contract drift.** The B2 limitations (Blueprint primitives, child actors, scaled root) are enforced by `ProductionPieceContract` and the provisional check in `ProductionFloorEndToEnd`, so a later art pass that breaks them fails a test.
 
-### B4 — Building Mode, Ghost Preview and Placement Input — IMPLEMENTED AND VALIDATED, awaiting user acceptance (plan approved 2026-10-15)
+### B4 — Building Mode, Ghost Preview and Placement Input — COMPLETE / APPROVED (`7ce9be3`)
 
 **Goal:** the player builds the Wooden Floor in PIE.
 - `B` enters building mode.
@@ -1023,24 +1023,207 @@ Input contexts reaching the local player subsystem, key routing, and the `Floor_
 - **R-6 Static navigation.** If the level's nav mesh is static, runtime floors do not update it. Movement is WASD, so there is no impact now. Record it for NPC pathing (Phase 6).
 - **R-7 Test reach.** Native tests cannot drive real key presses or a real local player. Input routing is proven in PIE. The component exposes native entry points (`ToggleBuildingMode`, `ConfirmPlacement`, the cursor seam), so its logic is fully tested without input.
 
-### B5 — Wooden Wall and Wooden Door
-- **Carried from B4 (decision B4-3 and the B4 self-review):**
-  - rotation (`R`) and the `1`/`2`/`3` build-bar selection in `UBuildingPlacementComponent` and `IMC_BuildingMode`;
-  - the ghost must copy nested mesh attachment and child-Blueprint overrides of SCS components if wall or door pieces use them.
-- **Source:**
-  - Edge placement end to end. The math and validation already exist from B1; B5 adds the authority path for edge pieces.
-  - `Building/BuildingDoorActor.h/.cpp` (section 2.4): open/close state, `ToggleDoor`, leaf interpolation, leaf collision and navigation, refused while provisional.
-- **Assets (MCP):**
-  - `BP_BuildWall` (200×20×250);
-  - `BP_BuildDoor`: child of `ABuildingDoorActor`; frame and leaf meshes; `BPI_Interactable` added by the one-time manual editor step of decision 10.2-1, then the forwarding graph written through MCP;
-  - `Building_WoodWall`, `Building_WoodDoor`, registration on the character.
+### B5 — Wooden Wall and Wooden Door — PLAN APPROVED (user, 2026-10-17), IMPLEMENTED AND VALIDATED, awaiting commit approval
+
+**Goal:** the player builds walls and doors on cell edges with the same building mode, picks the building with `1`/`2`/`3` and rotates with `R`, and opens or closes a built door with `F`. A small room with a door is buildable in PIE.
+
+**Baseline:** `305e23a` (B4 `7ce9be3` and the test aid). Full automation 230/230, cook 631/7/638.
+
+#### Audit (2026-10-17)
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| Edge math, edge snapping (tie order S, W, N, E), canonical edge keys, edge surface samples (±8 cm across the edge), edge collision boxes (250 cm high, 20 cm thick, ends shortened) and the shared `Edge` occupancy category for walls and doors all exist and are tested. | B1 (`BuildingSubsystem.cpp`, `NullTide.Building.B1.*`) | B5 adds no grid or validation code. |
+| `UConstructionComponent` is placement-mode agnostic: it validates through `ValidatePlacement`, reserves the resolved keys and checks the exact resolved transform. | B2 (`ConstructionComponent.cpp`) | Edge pieces need no authority change, only tests. A door is an `ABuildingPieceActor`, so it is constructible. |
+| `UBuildingPlacementComponent` always places the first registered building at rotation 0. `MakePlacementFromWorld` already snaps GridEdge requests to the nearest edge and takes a rotation. | B4 | B5 adds selection and rotation. The preview already handles edge placements. |
+| The ghost copies each mesh with its relative transform under its root. Nested attachment (a leaf under a hinge) and child-Blueprint overrides of SCS templates are not composed. | B4 review, carried limitation | The door's leaf is nested under a hinge, so the ghost must compose the attach chain. |
+| `PlayerInteractionComponent` (Blueprint) tracks actors implementing `BPI_Interactable` that overlap the player's capsule. `F` press calls `GetInteractionType`; Press calls `Interact(Owner)` on the active interactable. | MCP graph read (B2 audit), `CLAUDE.md` | The door needs an overlap-only interaction volume and the `BPI_Interactable` implementation on `BP_BuildDoor`. |
+| MCP cannot add a Blueprint interface. Approved in B0: a one-time manual editor step by the user on `BP_BuildDoor` (decision 10.3 "Door interface"). | `BUILDING_PLAN.md` 2.4, 10.3 | One manual step in B5. The forwarding graph is then written through MCP. |
+| Interface contract tests exist for `BP_Workbench`: `ImplementsInterface`, `GetInteractionType` and `Interact` through `ProcessEvent`. | `CraftingStationTests.cpp:1158-1239` | The same pattern applies to `BP_BuildDoor`. |
+| Navigation uses `RuntimeGeneration=Dynamic`. | `Config/DefaultEngine.ini:50-53` | Active walls and a closed leaf update the nav mesh. A transient test world has no nav mesh, so pathing is PIE-only. |
+| Approved costs: Wall Wood × 6; Door Wood × 8 + Scrap × 2. | `BUILDING_PLAN.md` 10.1 | A 2 × 2 room with one door needs about 66 Wood and 2 Scrap. The test pickups hold 10 Wood (decision B5-5). |
+
+#### Scope (with the recommended decisions)
+
+**Source:**
+- **`Building/BuildingDoorActor.h/.cpp` (new):** `ABuildingDoorActor : ABuildingPieceActor`.
+  - **Components:**
+    - a frame (two posts and a lintel, all blocking);
+    - a `DoorHinge` scene component with the `DoorLeaf` mesh;
+    - an overlap-only `InteractionBounds` box (the workbench profile).
+  - **State:** `bIsOpen`, `IsDoorOpen()`, `IsDoorMoving()`.
+  - **`ToggleDoor(AActor* Interactor)` / `SetDoorOpen(bool, AActor* Interactor)`.** Both return an `EBuildingDoorResult`:
+    - `Success`;
+    - `InvalidInteractor`;
+    - `OutOfRange` (the interactor is beyond `UseRange`, default 300 cm);
+    - `NotActive` (the piece is not `Active`, including `Provisional`).
+  - **The leaf swings 90°** over `SwingDuration` (default 0.3 s) on a world timer, with no tick when idle. Toggling while it moves reverses it (B5-3).
+  - **Leaf collision** turns off when opening starts and back on only when the leaf is fully closed, so a pawn in the doorway is never pushed (B5-3).
+  - The frame always blocks.
+- **`Building/BuildingPlacementComponent`:**
+  - **Selection:** `SelectBuildingIndex(int32)`, bound to `IA_BuildSelect1/2/3` (B5-2). It picks from `GetAvailableBuildings` in authored order, ignores missing indices, rebuilds the ghost for the new piece class and forces revalidation. The selection persists across enter and exit.
+  - **Rotation:** `RotatePlacement()` on `IA_BuildRotate` (`R`) rotates by one quarter turn, wrapping 3 → 0. It is passed to `MakePlacementFromWorld`. For edge pieces it flips the facing (door swing side).
+  - **HUD hint:** "1-3 select · R rotate · LMB build · RMB / B exit".
+- **`Building/BuildingPreviewActor`:** composes each template's transform up its attach chain (CDO `AttachParent` chain; SCS parent nodes). The leaf ghost therefore sits where the real leaf is.
+- **No change** to the subsystem, construction authority, inventory, crafting, storage, `PlayerInteractionComponent` or the screens.
+
+**Assets (Unreal MCP; saved by explicit path; one manual step):**
+- **`Pieces/BP_BuildWall`:** child of `ABuildingPieceActor`. `PieceMesh` = engine cube, relative location (0, 0, 125), scale (2, 0.2, 2.5): 200 × 20 × 250 cm along the edge.
+- **`Pieces/BP_BuildDoor`:**
+  - child of `ABuildingDoorActor`, with engine cube placeholders for the frame and leaf;
+  - **manual step (user):** *Class Settings → Implemented Interfaces → Add `BPI_Interactable`*;
+  - **then through MCP:** `Interact(Interactor)` → `ToggleDoor(Interactor)`; `GetInteractionType` → Press (`NewEnumerator0`); `GetHoldDuration` → 0.
+- **`Definitions/Building_WoodWall`:** "Wooden Wall", Wall, GridEdge, Wood × 6, refund 0.5.
+- **`Definitions/Building_WoodDoor`:** "Wooden Door", Door, GridEdge, Wood × 8 + Scrap × 2, refund 0.5.
+- **Input:** `IA_BuildRotate` and `IA_BuildSelect1/2/3` (Boolean, consume, no triggers). Added to `IMC_BuildingMode`: `R` → Rotate, `1`/`2`/`3` → Select.
+- **`BP_TopDownCharacter`:** `ConstructionComponent.AvailableBuildings = [Building_WoodFloor, Building_WoodWall, Building_WoodDoor]`; the placement component gets the new actions.
+- **Test aid (B5-5):** the existing Wood pickup becomes Wood × 100, and one Scrap × 10 pickup is added near `PlayerStart`. This is one more external actor package; saved with Ctrl+S by the user.
+
+**Not in B5:**
+- demolition and refunds (B6);
+- locking doors;
+- door animation art;
+- NPC pathing;
+- buildable storage or workbench.
+
+#### Tests `NullTide.Building.B5.*` (planned, 6)
+
+| Test | Assertions |
+| --- | --- |
+| `ProductionDefinitions` | Both definitions are valid with the listed costs, category, mode and piece class. Wall and door piece contracts: <br>• unscaled root, no child actors, no `EvenIfNotCollidable` navigation; <br>• wall mesh 200 × 20 × 250; <br>• door frame and leaf present, with the interaction volume overlap-only. |
+| `EdgeBuild` | Through the authority with production pieces: <br>• a wall on an X edge and on a Y edge (exact cost, `Edge` key, yaw 0 / 90, Active); <br>• a wall on a floor's edge stands at 10 cm; <br>• a door on a walled edge and a wall on a door's edge are `Occupied`; <br>• a door builds on a free edge, with Wood −8 and Scrap −2; <br>• rotation 1 flips the facing by 180°; <br>• the registry stays clean. |
+| `DoorToggle` | With a zero swing duration, opening clears the leaf collision and closing restores it. Refusals: provisional, out of range, null interactor. With a timer swing, toggling mid-swing reverses, collision returns only when fully closed, and there is no tick when idle. |
+| `DoorInterface` | `BP_BuildDoor` implements `BPI_Interactable`. `GetInteractionType` is Press. `Interact` through `ProcessEvent` toggles the door from range and is refused out of range (the C8B pattern). |
+| `SelectionAndRotation` | `1`/`2`/`3` select in registered order and ignore missing indices. The ghost mesh set changes with the selection. `R` wraps 0 → 3 → 0. The ghost's door leaf sits at the composed hinge transform. The HUD name follows the selection. Confirm builds the selected building at the selected rotation. |
+| `ProductionInput` | `IMC_BuildingMode` maps exactly LMB, RMB, I, Tab, F, R, 1, 2, 3 to the right actions with no per-mapping triggers. `BP_TopDownCharacter` registers Floor, Wall and Door in that order and configures the new actions. |
+
+The existing B4 `ProductionAssets` test is updated for the larger `IMC_BuildingMode`.
+
+#### Manual rendered PIE (user) — required
+
+1. `2` selects Wall: the ghost snaps to the cell edge nearest the cursor, and the HUD shows "Wooden Wall · Wood x/6".
+2. Walls build on edges, on the ground and on a floor's edge. Adjacent walls meet at corners.
+3. `R` rotates; on a door it flips the swing side.
+4. `3` selects Door; a door builds in a wall gap, with Wood −8 and Scrap −2.
+5. `F` near the door opens and closes it smoothly. The player walks through the open door; a closed door blocks.
+6. A room of floors, walls and a door: the player can always leave through the door. A wall is never placed on the player (`Too close to you`).
+7. `1` returns to Floor; the B4 behaviour is unchanged (build, red reasons, exits, cursor).
+8. Storage, crafting (hand and workbench) and gathering are unchanged.
+
+#### Validation
+
+- **Build:** clean build with the editor closed.
+- **Compile with warnings as errors:** `BP_BuildWall`, `BP_BuildDoor`, `BP_TopDownCharacter`, `W_BuildingHud`.
+- **Data validation** on save.
 - **Tests:**
-  - edge build through the authority;
-  - wall and door occupancy, including a door on a walled edge → `Occupied`;
-  - `ToggleDoor` toggles leaf collision and state and is refused while provisional;
-  - `BP_BuildDoor` implements `BPI_Interactable` with Press, and `Interact` forwards to `ToggleDoor` (production contract test, as for `BP_Workbench`);
-  - walls block the nav mesh (path query in a test world if feasible, otherwise PIE).
-- **PIE (user):** build a small room; walls align on edges; the door opens and closes with `F`; the player walks through the open door; the closed door blocks; the player is never trapped by a placement on them; storage, workbench and gathering are unchanged.
+  - focused `NullTide.Building.B5`;
+  - regression `NullTide.Building`, Crafting C5/C8, RG3, G6;
+  - full suite, expected 230 + 6 = 236.
+- **Cook:** the new pieces, definitions and actions are cooked.
+- **Content and World Partition audit:**
+  - **added:** the new assets and one test pickup actor;
+  - **modified:** the character, `IMC_BuildingMode` and the Wood pickup actor;
+  - no `.umap` change.
+- **Manual PIE:** the checklist above.
+- **Self-review:** with a fresh-context review pass.
+
+#### Decisions — APPROVED by the user (2026-10-17): B5-1 to B5-5 as recommended
+
+- **B5-1 Checkpoint order (B0 decision 10.2-4, never formally approved).**
+  - **Recommended:** keep B5 before B6 (demolition). Runtime pieces are not saved, so a self-enclosure in PIE ends with the session; the door and `BlocksBuilder` cover normal play.
+  - Alternatives: swap B5 and B6; or add a debug "demolish all player-built" command.
+- **B5-2 Selection input.**
+  - **Recommended:** three Boolean actions `IA_BuildSelect1/2/3` on `1`/`2`/`3`. These are simple MCP assets with no modifiers.
+  - Alternative: one Axis1D action with per-key scalar modifiers. That means instanced modifiers authored through MCP, which is riskier.
+- **B5-3 Door geometry and motion.**
+  - **Recommended:**
+    - a 100 cm leaf centered in the 200 cm edge, with 50 cm frame posts and a lintel from 220 to 250 cm;
+    - the leaf hinges at one post and swings 90° away from the facing side in 0.3 s;
+    - leaf collision is off from the start of opening until the leaf is fully closed;
+    - toggling mid-swing reverses.
+  - Alternative: an instant open/close with no animation.
+- **B5-4 Door interaction rules.**
+  - **Recommended:** `Active` pieces only; any interactor within `UseRange` (300 cm, as for stations) with a valid pawn; no player-controller requirement, so future NPCs can use doors.
+  - Alternative: player controller required (the station rule in 2.4).
+- **B5-5 PIE resources.**
+  - **Recommended:** set the existing test Wood pickup to 100 and add a Scrap × 10 test pickup (a map change, test aid, saved by the user).
+  - Alternative: the player gathers the resources.
+
+#### Implementation deviations — NEEDS USER DECISION (2026-10-17)
+
+- **B5-D1 Edge end samples (subsystem change).** The audit row above says B5 adds no validation code. In practice, edge end samples at 5 cm fell inside a perpendicular wall's 10 cm half thickness, so walls and doors could not meet at a grid corner (`Blocked`, found by `B5.EdgeBuild`). Implemented: `UBuildingSubsystem::EdgeEndInset` = 12 cm (half a wall thickness + clearance) for the edge end samples; the edge collision box uses the same constant (value unchanged). **Recommended:** approve.
+- **B5-D2 `Blocked`, not `Occupied`, on an occupied edge.** The `EdgeBuild` row says `Occupied`. The approved B1 order checks the support surface before occupancy, and the existing wall or door is under the new piece's samples, so the result is `Blocked` naming that piece; the key stays with it. **Recommended:** accept; optionally a later HUD tweak.
+- **B5-D3 Floors next to existing edge pieces (B1 limitation found in review).** Cell samples (inset 5 cm) and the cell collision box (shrunk 2 cm) overlap an edge piece's 10 cm half thickness, so a floor or furniture cannot be placed in a cell already bounded by a wall or door (`Blocked`). Floors first, then walls, works. **Options:** (a) fix now in B5: inset cell samples and the cell box by `EdgeEndInset`, plus a test; (b) defer to B6 or a polish checkpoint.
+
+**User decisions (2026-10-17, after the first PIE):** D1 approved; D2 accepted; D3 option (a), fix now in B5.
+
+#### B5 rework after the first PIE — PLAN APPROVED (user, 2026-10-17), IMPLEMENTED AND VALIDATED (PIE PASS)
+
+PIE findings (user): walls and doors build without a floor; the door prompt reads "None"; the door's opening side is not visible while building.
+
+**User decisions:**
+- **B5-R1:** edge pieces need a floor on at least one side.
+- **B5-R2:** the prompt reads its key from `IMC_Default`.
+- **B5-R3:** an arrow on the ghost, attached to the piece and rotating with `R` (not following the character); a built door always opens towards the side the arrow showed.
+- **D3:** fix now.
+
+**Cause of "None" (verified):**
+- `WB_interactionWidget` builds its text once, on construct, from `QueryKeysMappedToAction(IA_Interact)`.
+- While building mode is on, `IMC_BuildingMode` (priority 2, consuming) maps F to Cancel. Enhanced Input then drops the lower-priority F → `IA_Interact` mapping from the applied set (`EnhancedInputSubsystemInterface.cpp:1041`), so the query returns no key and `GetKeyDisplayName` of the default key is "None".
+- A door built next to the player becomes overlapping at activation, while the mode is still on, so its prompt is built at exactly that moment.
+
+**Design:**
+- **R1, floor requirement (data-driven):**
+  - New `UBuildingDefinition::bRequiresFloor` (default false), set true on `Building_WoodWall` and `Building_WoodDoor`.
+  - `ValidatePlacement` (support stage, after `Uneven` and before occupancy): for an edge piece with `bRequiresFloor`, all three samples on at least one side of the edge must hit an `Active` Foundation piece (the existing `IsSupportSurface` piece branch). Otherwise the new `EBuildResult::NeedsFloor` (appended to the enum) and the HUD text "Needs a floor".
+  - A wall on a room's outer boundary is valid (floor on the inside). The test definitions keep the default, so the B1 tests are unchanged.
+- **D3, floors next to walls:** cell surface samples are inset by `EdgeEndInset` (12 cm) instead of 5 cm, and the cell collision box is shrunk horizontally by `EdgeEndInset` instead of 2 cm. An edge piece's 10 cm half thickness then never reaches a neighbouring cell's samples or box. Walls standing on a floor's edge still see the floor (their ±8 cm samples are unchanged).
+- **R2, prompt key:**
+  - New native `UInputPromptLibrary::GetKeyMappedToAction(const UInputMappingContext*, const UInputAction*)`, BlueprintPure: the first key in the context's default mappings for that action, or `EKeys::Invalid`.
+  - `WB_interactionWidget` uses it with `IMC_Default` and `IA_Interact` instead of the live query. During building mode the prompt therefore still reads "PRESS F" (accepted with R2; in the mode, F exits).
+  - `PlayerInteractionComponent` is unchanged.
+- **R3, facing arrow and door side:**
+  - `ABuildingPreviewActor` gets a flat arrow (an engine cube shaft plus an engine cone head, about 90 cm, 2 cm above the surface), tinted with the same green/red material, no collision, no navigation, not counted in `GetPreviewMeshCount`.
+  - It points along the piece's facing: local +Y for edge pieces (the side a door opens to), local +X for cell pieces. Being part of the ghost's transform, it moves and rotates with the placement.
+  - The door already opens towards its local +Y (the hinge yaw is +90°), and an odd `R` turns the piece 180°. So "opens where the arrow showed" holds without changing the door; tests assert it.
+- **No change** to the construction authority, inventory, `PlayerInteractionComponent`, or the door's interaction rules.
+
+**Assets (MCP):**
+- `Building_WoodWall` and `Building_WoodDoor`: `bRequiresFloor = true`.
+- `WB_interactionWidget`: the key node chain replaced, compiled with warnings as errors. Its other nodes are unchanged.
+
+**Tests (B5 count stays 6; assertions added):**
+- `EdgeBuild`:
+  - walls and doors on bare ground → `NeedsFloor` with nothing consumed;
+  - a wall with a floor on one side builds, both on a room's outer edge and between two floors;
+  - a floor builds in a cell already bounded by a wall and a door (D3).
+- `SelectionAndRotation`: the arrow points along the ghost's facing and flips with `R`; it is not counted as a piece mesh; it has no collision.
+- `DoorToggle` / `DoorInterface`: the opened leaf lies on the facing (+Y) side, for rotation 0 and rotation 1.
+- New library assertion in `ProductionInput`: `GetKeyMappedToAction(IMC_Default, IA_Interact)` is F.
+- `HudContent` reason list: unchanged in B4; `NeedsFloor` → "Needs a floor" is asserted in B5.
+- Full suite expected **236**.
+
+**Self-critique:**
+- **RW-1:** the cell inset change (D3) touches every floor validation. B1 tests near cell boundaries (support at corners, plateau edges) may shift by 7 cm. Any failing B1 test is examined, and changed only with evidence.
+- **RW-2:** `bRequiresFloor` defaults to false, so a new edge definition can forget it. `ValidateBuilding` does not enforce it, because walls on WorldStatic blocks may be wanted later. Recorded.
+- **RW-3:** the arrow shows the swing side but not the hinge side. The leaf is centred, so the hinge side is cosmetic.
+- **RW-4:** "None" can still appear for any other prompt that queries live mappings. Only `WB_interactionWidget` does today.
+- **RW-5:** editing `WB_interactionWidget` touches the shared interaction prompt (storage, workbench, nodes). Compiled and checked by the existing C8B and RG tests, and PIE.
+- **RW-6 (rework review P2; user decision 2026-10-17: record, fix with furniture).** With D3, a thin pawn-blocking blocker on a cell border (≤ 24 cm thick, or a pole of radius ≤ 16 cm at a corner) is missed by cell validation, and builder safety starts 7 cm inside the cell.
+  - Harmless for floors today.
+  - Planned fix with furniture (after B6): 2 cm box and 5 cm samples for cells, ignoring only `Active` edge pieces registered on the cell's own four edges at the same layer.
+
+#### Self-critique (open risks)
+
+#### Self-critique (open risks)
+
+- **R-1 MCP interface graph authoring.** After the manual interface step, the three interface functions must be written through MCP (`write_graph_dsl`). If MCP cannot author interface event or function graphs, STOP and ask. The fallback is the user wiring three nodes by hand.
+- **R-2 Edge preview snapping.** The edge choice flips between the four sides near a cell's diagonal. B1's tie order makes this deterministic, but it may feel jumpy in PIE. Accepted for the MVP; PIE step 1 checks it.
+- **R-3 Door collision and the trapped-pawn case.** Closing with a pawn in the doorway: the leaf collision returns only when fully closed and is not swept. A pawn that stays in the doorway would overlap the closed leaf; character movement depenetrates it. Alternative: refuse closing while a pawn overlaps the doorway (more code). Recorded for PIE step 5.
+- **R-4 Interaction target ambiguity.** `PlayerInteractionComponent` uses the last overlapped interactable. A door next to storage or the workbench may target the wrong actor. Keep the door's bounds tight (`BUILDING_PLAN.md` section 8).
+- **R-5 Door piece under construction.** The door's leaf and frame must respect `SetProvisional` (actor-level hidden and collision). The B3 piece contract plus the B2 provisional check, run on the production door, prove it. The interaction volume is overlap-only, so B1 validation ignores it (the `OverlapOnlyVolumes` regression).
+- **R-6 Ghost transform composition.** A wrong composition misplaces the leaf ghost. The test asserts the composed hinge transform against a spawned door's real leaf.
+- **R-7 Map change for test resources.** One modified and one added external actor package. Saved by the user with Ctrl+S, then audited with `git status`.
 
 ### B6 — Demolition and Refund
 - **Source:** `CanDemolish`/`TryDemolish`, demolish mode in the placement component, refund rules, storage and workbench protections, demolish results and text.

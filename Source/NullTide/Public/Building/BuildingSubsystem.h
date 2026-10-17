@@ -34,10 +34,13 @@ public:
 	static constexpr double WallHeight = 250.0;
 	static constexpr double WallThickness = 20.0;
 	static constexpr double DefaultBuildRange = 600.0;
-	/** Surface samples are taken this far inside the footprint corners or edge ends. */
-	static constexpr double SampleInset = 5.0;
-	/** Collision boxes are shrunk by this much so touching neighbours never block each other. */
+	/** Edge collision boxes are this much thinner than a wall, and edge samples this far inside its faces. */
 	static constexpr double CollisionClearance = 2.0;
+	/**
+	 * Surface samples and collision boxes stay this far inside a cell's border or an edge's ends: more than half a
+	 * wall thickness, so a wall or door on a neighbouring edge is neither under a sample nor inside the box (B5).
+	 */
+	static constexpr double EdgeEndInset = WallThickness * 0.5 + CollisionClearance;
 	/** The builder's capsule must stay this far from a new piece. */
 	static constexpr double BuilderClearance = 5.0;
 	/** Surface traces run from the height hint plus this distance to the hint minus this distance. */

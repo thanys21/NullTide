@@ -2,11 +2,13 @@
 
 #include "InventoryComponentTestTypes.h"
 #include "Blueprint/UserWidget.h"
+#include "Building/BuildingDoorActor.h"
 #include "Building/BuildingPieceComponent.h"
 #include "Building/BuildingPlacementComponent.h"
 #include "Building/BuildingPreviewActor.h"
 #include "Building/BuildingSubsystem.h"
 #include "Building/ConstructionComponent.h"
+#include "Components/BoxComponent.h"
 #include "Components/ChildActorComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
@@ -28,10 +30,13 @@
 #include "InputMappingContext.h"
 #include "Inventory/InventoryComponent.h"
 #include "Items/ItemDefinition.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/AutomationTest.h"
+#include "TimerManager.h"
 #include "ToolLoadout/ToolLoadoutComponent.h"
 #include "UI/BuildingHudWidget.h"
+#include "UI/InputPromptLibrary.h"
 #include "UObject/StrongObjectPtr.h"
 
 #if WITH_EDITOR
@@ -122,6 +127,19 @@ UBuildingTestDriftDefinition::UBuildingTestDriftDefinition()
 UBuildingTestBlockerSpawnDefinition::UBuildingTestBlockerSpawnDefinition()
 {
 	B2MakeFloor(*this, TEXT("Test Blocker-Spawning Floor"), ABuildingBlockerSpawnTestPiece::StaticClass());
+}
+
+ABuildingTestTurnedHingeDoorActor::ABuildingTestTurnedHingeDoorActor()
+{
+	DoorHinge->SetRelativeRotation(FRotator(0.0, 30.0, 0.0));
+	DoorHinge->SetRelativeScale3D(FVector(1.25));
+}
+
+UBuildingTestDoorPieceDefinition::UBuildingTestDoorPieceDefinition()
+{
+	B2MakeFloor(*this, TEXT("Test Swing Door"), ABuildingTestDoorActor::StaticClass());
+	Category = EBuildingCategory::Door;
+	PlacementMode = EBuildingPlacementMode::GridEdge;
 }
 
 ABuildingPieceActor* UConstructionTestComponent::SpawnProvisionalPiece(TSubclassOf<UBuildingDefinition> DefinitionClass,
@@ -1329,7 +1347,9 @@ bool FBuildingB3PlayerRegistrationTest::RunTest(const FString& Parameters)
 		}
 	}
 	if (!TestEqual(TEXT("Production player has exactly one ConstructionComponent"), Construction.Num(), 1)) { return false; }
-	TestTrue(TEXT("Registered buildings are [Building_WoodFloor]"), Construction[0]->GetAvailableBuildings() == FB2Buildings({ Assets.Floor }));
+	// B5 appends the wall and door (asserted exactly in B5.ProductionInput); the floor stays first.
+	const FB2Buildings Registered = Construction[0]->GetAvailableBuildings();
+	TestTrue(TEXT("Building_WoodFloor is registered first"), !Registered.IsEmpty() && Registered[0] == Assets.Floor);
 	TestTrue(TEXT("The crafting and tool-loadout components are unchanged (one each)"), Crafting == 1 && ToolLoadout == 1);
 	return true;
 }
@@ -1839,8 +1859,8 @@ bool FBuildingB4ProductionAssetsTest::RunTest(const FString& Parameters)
 	{
 		Mode.Add(Mapping.Key, Mapping.Action);
 	}
-	TestTrue(TEXT("IMC_BuildingMode: LMB confirms; RMB, I, Tab and F exit; nothing else"), ModeContext->GetMappings().Num() == 5
-		&& Mode.FindRef(EKeys::LeftMouseButton) == Confirm && Mode.FindRef(EKeys::RightMouseButton) == Cancel
+	// B5 adds R and 1-3 (the exact set is asserted in B5.ProductionInput).
+	TestTrue(TEXT("IMC_BuildingMode: LMB confirms; RMB, I, Tab and F exit"), Mode.FindRef(EKeys::LeftMouseButton) == Confirm && Mode.FindRef(EKeys::RightMouseButton) == Cancel
 		&& Mode.FindRef(EKeys::I) == Cancel && Mode.FindRef(EKeys::Tab) == Cancel && Mode.FindRef(EKeys::F) == Cancel);
 
 	FLinearColor Color;
@@ -1872,6 +1892,800 @@ bool FBuildingB4ProductionAssetsTest::RunTest(const FString& Parameters)
 		&& B4ReadInt(Template, TEXT("BuildingModeContextPriority")) == 2);
 	TestTrue(TEXT("Configured with M_BuildPreview and W_BuildingHud"), B4ReadObject<UMaterialInterface>(Template, TEXT("PreviewMaterial")) == PreviewMaterial
 		&& B4ReadObject<UClass>(Template, TEXT("HudWidgetClass")) == HudClass);
+	return true;
+}
+
+
+// ---- B5: wooden wall and wooden door ----
+
+namespace
+{
+const TCHAR* B5WallDefinitionPath = TEXT("/Game/LevelPrototyping/BuildingSystem/Definitions/Building_WoodWall.Building_WoodWall_C");
+const TCHAR* B5DoorDefinitionPath = TEXT("/Game/LevelPrototyping/BuildingSystem/Definitions/Building_WoodDoor.Building_WoodDoor_C");
+const TCHAR* B5WallPiecePath = TEXT("/Game/LevelPrototyping/BuildingSystem/Pieces/BP_BuildWall.BP_BuildWall_C");
+const TCHAR* B5DoorPiecePath = TEXT("/Game/LevelPrototyping/BuildingSystem/Pieces/BP_BuildDoor.BP_BuildDoor_C");
+const TCHAR* B5ScrapPath = TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_Scrap.Item_Scrap_C");
+const TCHAR* B5InteractablePath = TEXT("/Game/LevelPrototyping/interactionSystem/BPI_Interactable.BPI_Interactable_C");
+
+/** Edge points on the fixture ground, all within range of a builder at the origin. */
+const FVector B5EdgeX11(300.0, 205.0, 0.0);   // X edge (1, 1), center (300, 200)
+const FVector B5EdgeY1m2(205.0, -300.0, 0.0); // Y edge (1, -2), center (200, -300)
+const FVector B5EdgeX10(300.0, -5.0, 0.0);    // X edge (1, 0), center (300, 0)
+const FVector B5EdgeX21(500.0, 195.0, 0.0);   // X edge (2, 1), center (500, 200): the north edge of cell C
+const FVector B5EdgeX01(100.0, 205.0, 0.0);   // X edge (0, 1), center (100, 200)
+const FVector B5CellD(300.0, 100.0, 0.0);     // Cell (1, 0): south of X edge (1, 1), east of Y edge (1, 0)
+const FVector B5EdgeY20(405.0, 100.0, 0.0);   // Y edge (2, 0), center (400, 100): between cell D and cell C
+const FVector B5EdgeY2m2(405.0, -300.0, 0.0); // Y edge (2, -2), center (400, -300): east of cell B
+const FVector B5EdgeX0m1(100.0, -195.0, 0.0); // X edge (0, -1), center (100, -200): only diagonal to cell B
+const TCHAR* B5DefaultContextPath = TEXT("/Game/TopDown/Input/IMC_Default.IMC_Default");
+const TCHAR* B5InteractActionPath = TEXT("/Game/TopDown/Input/Actions/IA_Interact.IA_Interact");
+const FVector B5EdgeY10(205.0, 100.0, 0.0);   // Y edge (1, 0), center (200, 100): meets X edge (1, 1) at a corner
+
+struct FB5Assets
+{
+	FB3Assets Base;
+	TSubclassOf<UBuildingDefinition> Wall;
+	TSubclassOf<UBuildingDefinition> Door;
+	TSubclassOf<ABuildingPieceActor> WallPiece;
+	TSubclassOf<ABuildingDoorActor> DoorPiece;
+	TSubclassOf<UItemDefinition> Scrap;
+
+	static FB5Assets Load()
+	{
+		FB5Assets Assets;
+		Assets.Base = FB3Assets::Load();
+		Assets.Wall = LoadClass<UBuildingDefinition>(nullptr, B5WallDefinitionPath);
+		Assets.Door = LoadClass<UBuildingDefinition>(nullptr, B5DoorDefinitionPath);
+		Assets.WallPiece = LoadClass<ABuildingPieceActor>(nullptr, B5WallPiecePath);
+		Assets.DoorPiece = LoadClass<ABuildingDoorActor>(nullptr, B5DoorPiecePath);
+		Assets.Scrap = LoadClass<UItemDefinition>(nullptr, B5ScrapPath);
+		return Assets;
+	}
+
+	bool IsValid(FAutomationTestBase& Test) const
+	{
+		return Base.IsValid(Test) && Test.TestTrue(TEXT("Building_WoodWall, Building_WoodDoor, BP_BuildWall, BP_BuildDoor and Item_Scrap load"),
+			Wall && Door && WallPiece && DoorPiece && Scrap);
+	}
+};
+
+FBuildingPlacement B5Place(TSubclassOf<UBuildingDefinition> Definition, const FVector& Point, int32 Rotation = 0)
+{
+	return UBuildingSubsystem::MakePlacementFromWorld(*Definition->GetDefaultObject<UBuildingDefinition>(), Point, Rotation);
+}
+
+FBuildingOccupancyKey B5EdgeKey(EBuildingEdgeAxis Axis, int32 X, int32 Y)
+{
+	return FBuildingOccupancyKey(EBuildingOccupancyCategory::Edge, Axis, X, Y, 0);
+}
+
+bool B5YawIs(const AActor* Actor, double Yaw)
+{
+	return Actor && FMath::IsNearlyZero(FRotator::NormalizeAxis(Actor->GetActorRotation().Yaw - Yaw), 0.01);
+}
+
+int32 B5AddedComponents(UClass* Class)
+{
+	const UBlueprintGeneratedClass* Generated = Cast<UBlueprintGeneratedClass>(Class);
+	const USimpleConstructionScript* ConstructionScript = Generated ? Generated->SimpleConstructionScript.Get() : nullptr;
+	return ConstructionScript ? ConstructionScript->GetAllNodes().Num() : 0;
+}
+
+/** The B3 piece contract: unscaled root, no child actors, no navigable geometry marked EvenIfNotCollidable. */
+void B5ExpectPieceContract(FAutomationTestBase& Test, const FString& What, const AActor& Piece)
+{
+	Test.TestTrue(What + TEXT(": unscaled root"), Piece.GetRootComponent() && Piece.GetRootComponent()->GetRelativeScale3D().Equals(FVector::OneVector));
+	TInlineComponentArray<UChildActorComponent*> ChildActors(&Piece);
+	Test.TestEqual(What + TEXT(": no child actor components"), ChildActors.Num(), 0);
+	TInlineComponentArray<UPrimitiveComponent*> Primitives(&Piece);
+	bool bEvenIfNotCollidable = false;
+	for (const UPrimitiveComponent* Primitive : Primitives)
+	{
+		bEvenIfNotCollidable |= Primitive && Primitive->HasCustomNavigableGeometry() == EHasCustomNavigableGeometry::EvenIfNotCollidable;
+	}
+	Test.TestFalse(What + TEXT(": no custom navigable geometry marked EvenIfNotCollidable"), bEvenIfNotCollidable);
+}
+
+bool B5BlocksPawns(const UPrimitiveComponent* Primitive)
+{
+	return Primitive && Primitive->GetCollisionEnabled() != ECollisionEnabled::NoCollision
+		&& Primitive->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block;
+}
+
+bool B5OverlapOnly(const UPrimitiveComponent* Primitive)
+{
+	if (!Primitive || Primitive->GetCollisionEnabled() != ECollisionEnabled::QueryOnly || Primitive->CanEverAffectNavigation())
+	{
+		return false;
+	}
+	for (int32 Channel = 0; Channel < ECC_MAX; ++Channel)
+	{
+		if (Primitive->GetCollisionResponseToChannel(static_cast<ECollisionChannel>(Channel)) == ECR_Block)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+FBox B5MeshBounds(const AActor& Actor)
+{
+	FBox Box(ForceInit);
+	TInlineComponentArray<UStaticMeshComponent*> Meshes(&Actor);
+	for (const UStaticMeshComponent* Mesh : Meshes)
+	{
+		Box += Mesh->Bounds.GetBox();
+	}
+	return Box;
+}
+
+/** Advances the world timers like real frames (see CraftingTimedTests: one tick per frame, timers activate on the next). */
+void B5AdvanceTime(UWorld* World, float Seconds)
+{
+	FTimerManager& Timers = World->GetTimerManager();
+	++GFrameCounter;
+	Timers.Tick(0.f);
+	++GFrameCounter;
+	Timers.Tick(Seconds);
+}
+
+/** Calls a Blueprint interface function with one object parameter (the C8B ProcessEvent pattern). */
+void B5CallWithObject(FAutomationTestBase& Test, UObject* Target, const TCHAR* FunctionName, const TCHAR* ParameterName, UObject* Value)
+{
+	UFunction* Function = Target->FindFunction(FName(FunctionName));
+	if (!Test.TestNotNull(FString::Printf(TEXT("%s is implemented"), FunctionName), Function))
+	{
+		return;
+	}
+	const FObjectPropertyBase* Parameter = CastField<FObjectPropertyBase>(Function->FindPropertyByName(FName(ParameterName)));
+	if (!Test.TestNotNull(FString::Printf(TEXT("%s has a %s parameter"), FunctionName, ParameterName), Parameter))
+	{
+		return;
+	}
+	TArray<uint8> Buffer;
+	Buffer.SetNumZeroed(FMath::Max<int32>(Function->ParmsSize, 1));
+	Parameter->SetObjectPropertyValue_InContainer(Buffer.GetData(), Value);
+	Target->ProcessEvent(Function, Buffer.GetData());
+}
+
+/** Display name of the enum a Blueprint function returns through its out parameter. */
+FString B5CallEnumGetter(UObject* Target, UFunction* Function)
+{
+	TArray<uint8> Buffer;
+	Buffer.SetNumZeroed(FMath::Max<int32>(Function->ParmsSize, 1));
+	Target->ProcessEvent(Function, Buffer.GetData());
+	const FProperty* Return = Function->GetReturnProperty();
+	for (TFieldIterator<FProperty> It(Function); It && !Return; ++It)
+	{
+		Return = It->HasAnyPropertyFlags(CPF_OutParm) ? *It : nullptr;
+	}
+	if (const FByteProperty* Byte = CastField<FByteProperty>(Return); Byte && Byte->Enum)
+	{
+		return Byte->Enum->GetDisplayNameTextByValue(*Byte->ContainerPtrToValuePtr<uint8>(Buffer.GetData())).ToString();
+	}
+	if (const FEnumProperty* EnumProperty = CastField<FEnumProperty>(Return))
+	{
+		const int64 Value = EnumProperty->GetUnderlyingProperty()->GetSignedIntPropertyValue(EnumProperty->ContainerPtrToValuePtr<void>(Buffer.GetData()));
+		return EnumProperty->GetEnum()->GetDisplayNameTextByValue(Value).ToString();
+	}
+	return FString();
+}
+
+/** The facing arrow's meshes that have a static mesh. */
+TArray<const UStaticMeshComponent*> B5ArrowMeshes(const ABuildingPreviewActor& Preview)
+{
+	TArray<const UStaticMeshComponent*> Meshes;
+	if (const USceneComponent* Arrow = Preview.GetFacingArrow())
+	{
+		for (const USceneComponent* Child : Arrow->GetAttachChildren())
+		{
+			if (const UStaticMeshComponent* Mesh = Cast<UStaticMeshComponent>(Child); Mesh && Mesh->GetStaticMesh())
+			{
+				Meshes.Add(Mesh);
+			}
+		}
+	}
+	return Meshes;
+}
+
+/** Whether the door's leaf lies on its facing side (local +Y, the side the ghost's arrow showed). */
+bool B5LeafOnFacingSide(const ABuildingDoorActor& Door)
+{
+	const FVector Offset = Door.GetDoorLeaf()->Bounds.Origin - Door.GetActorLocation();
+	return FVector::DotProduct(Offset, Door.GetActorRightVector()) > 30.0;
+}
+
+ACharacter* B5SpawnCharacter(UWorld* World, const FVector& Location)
+{
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	return World->SpawnActor<ACharacter>(ACharacter::StaticClass(), Location, FRotator::ZeroRotator, Params);
+}
+
+TSubclassOf<UBuildingDefinition> B5TestDoorClass() { return UBuildingTestDoorPieceDefinition::StaticClass(); }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB5ProductionDefinitionsTest,
+	"NullTide.Building.B5.ProductionDefinitions",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB5ProductionDefinitionsTest::RunTest(const FString& Parameters)
+{
+	const FB5Assets Assets = FB5Assets::Load();
+	if (!Assets.IsValid(*this)) { return false; }
+	struct FExpected
+	{
+		TSubclassOf<UBuildingDefinition> Definition;
+		const TCHAR* Name;
+		EBuildingCategory Category;
+		UClass* Piece;
+		TArray<FInventoryDefinitionQuantity> Cost;
+	};
+	const FExpected Expected[] = {
+		{ Assets.Wall, TEXT("Wooden Wall"), EBuildingCategory::Wall, Assets.WallPiece.Get(), { B2Cost(Assets.Base.Wood, 6) } },
+		{ Assets.Door, TEXT("Wooden Door"), EBuildingCategory::Door, Assets.DoorPiece.Get(), { B2Cost(Assets.Base.Wood, 8), B2Cost(Assets.Scrap, 2) } },
+	};
+	for (const FExpected& Entry : Expected)
+	{
+		const UBuildingDefinition* Definition = Entry.Definition->GetDefaultObject<UBuildingDefinition>();
+		FString Diagnostic;
+		TestTrue(FString::Printf(TEXT("%s is valid (%s)"), Entry.Name, *Diagnostic), Definition->ValidateBuilding(Diagnostic));
+		TestEqual(FString::Printf(TEXT("%s: name"), Entry.Name), Definition->BuildingName.ToString(), FString(Entry.Name));
+		TestTrue(FString::Printf(TEXT("%s: category, GridEdge, 1 x 1, 90 degree steps"), Entry.Name), Definition->Category == Entry.Category
+			&& Definition->PlacementMode == EBuildingPlacementMode::GridEdge && Definition->Footprint == FIntPoint(1, 1) && Definition->RotationStep == 90);
+		bool bCost = Definition->Cost.Num() == Entry.Cost.Num();
+		for (int32 Index = 0; bCost && Index < Entry.Cost.Num(); ++Index)
+		{
+			bCost = Definition->Cost[Index].DefinitionClass == Entry.Cost[Index].DefinitionClass && Definition->Cost[Index].Quantity == Entry.Cost[Index].Quantity;
+		}
+		TestTrue(FString::Printf(TEXT("%s: exact cost"), Entry.Name), bCost);
+		TestTrue(FString::Printf(TEXT("%s: 50%% refund, default range"), Entry.Name), FMath::IsNearlyEqual(Definition->RefundFraction, 0.5f)
+			&& Definition->BuildRangeOverride == 0.f);
+		TestTrue(FString::Printf(TEXT("%s: piece class"), Entry.Name), Definition->PieceActorClass == Entry.Piece);
+		TestTrue(FString::Printf(TEXT("%s: requires a floor (B5-R1)"), Entry.Name), Definition->bRequiresFloor);
+#if WITH_EDITOR
+		FDataValidationContext Context;
+		TestTrue(FString::Printf(TEXT("%s: editor data validation passes"), Entry.Name), Definition->IsDataValid(Context) != EDataValidationResult::Invalid);
+#endif
+	}
+
+	TestTrue(TEXT("BP_BuildWall derives from ABuildingPieceActor, BP_BuildDoor from ABuildingDoorActor"),
+		Assets.WallPiece->IsChildOf(ABuildingPieceActor::StaticClass()) && Assets.DoorPiece->IsChildOf(ABuildingDoorActor::StaticClass()));
+	TestEqual(TEXT("BP_BuildWall adds no components"), B5AddedComponents(Assets.WallPiece.Get()), 0);
+	TestEqual(TEXT("BP_BuildDoor adds no components"), B5AddedComponents(Assets.DoorPiece.Get()), 0);
+
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ABuildingPieceActor* Wall = Fixture.World->SpawnActor<ABuildingPieceActor>(Assets.WallPiece, FVector(300.0, 200.0, 0.0), FRotator::ZeroRotator, Params);
+	ABuildingDoorActor* Door = Fixture.World->SpawnActor<ABuildingDoorActor>(Assets.DoorPiece, FVector(300.0, 0.0, 0.0), FRotator::ZeroRotator, Params);
+	if (!TestTrue(TEXT("Both pieces spawn"), Wall && Door)) { return false; }
+	B5ExpectPieceContract(*this, TEXT("BP_BuildWall"), *Wall);
+	B5ExpectPieceContract(*this, TEXT("BP_BuildDoor"), *Door);
+
+	TInlineComponentArray<UStaticMeshComponent*> WallMeshes(Wall);
+	if (TestEqual(TEXT("BP_BuildWall: one mesh (the inherited PieceMesh)"), WallMeshes.Num(), 1))
+	{
+		const FBox Bounds = WallMeshes[0]->Bounds.GetBox();
+		TestTrue(TEXT("BP_BuildWall: engine cube that blocks pawns"), WallMeshes[0]->GetStaticMesh()
+			&& WallMeshes[0]->GetStaticMesh()->GetPathName() == TEXT("/Engine/BasicShapes/Cube.Cube") && B5BlocksPawns(WallMeshes[0]));
+		TestTrue(FString::Printf(TEXT("BP_BuildWall: 200 x 20 x 250 cm along the edge, standing on the surface (got %s)"), *Bounds.ToString()),
+			Bounds.Min.Equals(FVector(200.0, 190.0, 0.0), 0.5) && Bounds.Max.Equals(FVector(400.0, 210.0, 250.0), 0.5));
+	}
+
+	TInlineComponentArray<UStaticMeshComponent*> DoorMeshes(Door);
+	TestEqual(TEXT("BP_BuildDoor: two posts, a lintel and a leaf"), DoorMeshes.Num(), 4);
+	bool bAllBlock = DoorMeshes.Num() == 4;
+	for (const UStaticMeshComponent* Mesh : DoorMeshes)
+	{
+		bAllBlock &= B5BlocksPawns(Mesh);
+	}
+	TestTrue(TEXT("BP_BuildDoor: the closed frame and leaf block pawns"), bAllBlock);
+	TestTrue(TEXT("BP_BuildDoor: the leaf hangs on the hinge"), Door->GetDoorLeaf() && Door->GetDoorHinge()
+		&& Door->GetDoorLeaf()->GetAttachParent() == Door->GetDoorHinge());
+	const FBox DoorBounds = B5MeshBounds(*Door);
+	TestTrue(FString::Printf(TEXT("BP_BuildDoor: 200 x 20 x 250 cm on the edge (got %s)"), *DoorBounds.ToString()),
+		DoorBounds.Min.Equals(FVector(200.0, -10.0, 0.0), 0.5) && DoorBounds.Max.Equals(FVector(400.0, 10.0, 250.0), 0.5));
+	const FBox Leaf = Door->GetDoorLeaf()->Bounds.GetBox();
+	TestTrue(FString::Printf(TEXT("BP_BuildDoor: a 100 x 220 cm leaf centred in the edge (got %s)"), *Leaf.ToString()),
+		Leaf.Min.Equals(FVector(250.0, -4.0, 0.0), 0.5) && Leaf.Max.Equals(FVector(350.0, 4.0, 220.0), 0.5));
+	TestTrue(TEXT("BP_BuildDoor: the interaction volume is overlap-only and never affects navigation"),
+		B5OverlapOnly(Door->GetInteractionBounds()));
+	TestTrue(TEXT("BP_BuildDoor: closed and idle, no actor tick"), !Door->IsDoorOpen() && !Door->IsDoorMoving()
+		&& !Door->PrimaryActorTick.bCanEverTick);
+	Fixture.Clean(*this, TEXT("Production definitions"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB5EdgeBuildTest,
+	"NullTide.Building.B5.EdgeBuild",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB5EdgeBuildTest::RunTest(const FString& Parameters)
+{
+	const FB5Assets Assets = FB5Assets::Load();
+	if (!Assets.IsValid(*this)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { Assets.Base.Floor, Assets.Wall, Assets.Door }, 0);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid() && Builder.Inventory)) { return false; }
+	TestTrue(TEXT("54 production Wood and 2 Scrap"), Builder.Inventory->TryAddDefinitionQuantity(Assets.Base.Wood, 54).IsSuccess()
+		&& Builder.Inventory->TryAddDefinitionQuantity(Assets.Scrap, 2).IsSuccess());
+	UInventoryComponent* Inventory = Builder.Inventory;
+	auto Wood = [&]() { return Inventory->GetTotalQuantity(Assets.Base.Wood); };
+	auto Scrap = [&]() { return Inventory->GetTotalQuantity(Assets.Scrap); };
+	auto PieceAtEdge = [&](EBuildingEdgeAxis Axis, int32 X, int32 Y)
+	{
+		const UBuildingPieceComponent* Piece = Fixture.Subsystem->GetOccupyingPiece(B5EdgeKey(Axis, X, Y));
+		return Piece ? Cast<ABuildingPieceActor>(Piece->GetOwner()) : nullptr;
+	};
+
+	// B5-R1: walls and doors need an Active floor along one side; bare ground refuses without consuming anything.
+	int32 WoodBefore = Wood();
+	B2Expect(*this, TEXT("Wall on bare ground"), Builder.Construction->TryBuild(Assets.Wall, B5Place(Assets.Wall, B5EdgeX11)), EBuildResult::NeedsFloor);
+	B2Expect(*this, TEXT("Door on bare ground"), Builder.Construction->TryBuild(Assets.Door, B5Place(Assets.Door, B5EdgeY10)), EBuildResult::NeedsFloor);
+	TestTrue(TEXT("Refused on bare ground: nothing consumed, nothing built"), Wood() == WoodBefore && Scrap() == 2 && Fixture.LivePieces() == 0);
+	B2Expect(*this, TEXT("Floor on cell A"), Builder.Construction->TryBuild(Assets.Base.Floor, B5Place(Assets.Base.Floor, B2CellA)), EBuildResult::Success);
+	B2Expect(*this, TEXT("Floor on cell B"), Builder.Construction->TryBuild(Assets.Base.Floor, B5Place(Assets.Base.Floor, B2CellB)), EBuildResult::Success);
+
+	// Walls on an X edge and on a Y edge, each with a floor on one side only (a room's outer boundary).
+	WoodBefore = Wood();
+	int32 RevisionBefore = Inventory->GetRevision();
+	FBuildingConstructionResult Result = Builder.Construction->TryBuild(Assets.Wall, B5Place(Assets.Wall, B5EdgeX11));
+	if (!B2Expect(*this, TEXT("Wall on X edge (1, 1), floor A on one side"), Result, EBuildResult::Success)) { return false; }
+	const ABuildingPieceActor* WallX = Cast<ABuildingPieceActor>(Result.Piece.Get());
+	TestTrue(TEXT("X wall: Wood -6 in one revision"), Wood() == WoodBefore - 6 && Inventory->GetRevision() == RevisionBefore + 1);
+	TestTrue(TEXT("X wall: a BP_BuildWall on its Edge key, yaw 0, at the edge center on the floor's top, Active"), WallX
+		&& WallX->IsA(Assets.WallPiece) && PieceAtEdge(EBuildingEdgeAxis::X, 1, 1) == WallX && B5YawIs(WallX, 0.0)
+		&& WallX->GetActorLocation().Equals(FVector(300.0, 200.0, UBuildingSubsystem::FloorThickness), 0.1)
+		&& WallX->GetBuildingPieceComponent()->IsActivePiece());
+
+	Result = Builder.Construction->TryBuild(Assets.Wall, B5Place(Assets.Wall, B5EdgeY1m2));
+	B2Expect(*this, TEXT("Wall on Y edge (1, -2), floor B on one side"), Result, EBuildResult::Success);
+	const ABuildingPieceActor* WallY = Cast<ABuildingPieceActor>(Result.Piece.Get());
+	TestTrue(TEXT("Y wall: on its Edge key, yaw 90, at the edge center"), WallY && PieceAtEdge(EBuildingEdgeAxis::Y, 1, -2) == WallY
+		&& B5YawIs(WallY, 90.0) && WallY->GetActorLocation().Equals(FVector(200.0, -300.0, UBuildingSubsystem::FloorThickness), 0.1));
+	const FBox WallYBounds = WallY ? B5MeshBounds(*WallY) : FBox(ForceInit);
+	TestTrue(FString::Printf(TEXT("Y wall: runs along Y (got %s)"), *WallYBounds.ToString()),
+		WallYBounds.Min.Equals(FVector(190.0, -400.0, 10.0), 0.5) && WallYBounds.Max.Equals(FVector(210.0, -200.0, 260.0), 0.5));
+
+	// A wall on a production floor's edge stands on the floor's top.
+	B2Expect(*this, TEXT("Floor on cell C"), Builder.Construction->TryBuild(Assets.Base.Floor, B5Place(Assets.Base.Floor, B2CellC)), EBuildResult::Success);
+	Result = Builder.Construction->TryBuild(Assets.Wall, B5Place(Assets.Wall, B5EdgeX21));
+	B2Expect(*this, TEXT("Wall on the floor's edge"), Result, EBuildResult::Success);
+	TestTrue(TEXT("The wall on the floor's edge stands at 10 cm on layer 0"), Result.Piece.IsValid()
+		&& FMath::IsNearlyEqual(Result.Piece->GetActorLocation().Z, UBuildingSubsystem::FloorThickness, 0.1)
+		&& PieceAtEdge(EBuildingEdgeAxis::X, 2, 1) == Result.Piece.Get());
+
+	// D3: a floor builds in a cell whose edge already holds a wall (the wall's half thickness reaches into the cell).
+	B2Expect(*this, TEXT("Floor on cell D, next to the X wall"), Builder.Construction->TryBuild(Assets.Base.Floor, B5Place(Assets.Base.Floor, B5CellD)),
+		EBuildResult::Success);
+
+	// Floor sides: both sides, the negative side of a Y edge alone, and a floor that only touches the edge's corner.
+	B2Expect(*this, TEXT("Wall on Y edge (2, 0), floors on both sides"), Builder.Construction->TryBuild(Assets.Wall, B5Place(Assets.Wall, B5EdgeY20)),
+		EBuildResult::Success);
+	B2Expect(*this, TEXT("Wall on Y edge (2, -2), floor B on its negative side only"),
+		Builder.Construction->TryBuild(Assets.Wall, B5Place(Assets.Wall, B5EdgeY2m2)), EBuildResult::Success);
+	B2Expect(*this, TEXT("Wall on X edge (0, -1), floor B only diagonal"), Builder.Construction->TryBuild(Assets.Wall, B5Place(Assets.Wall, B5EdgeX0m1)),
+		EBuildResult::NeedsFloor);
+
+	// An edge holds one piece. The existing piece stands on the new piece's surface samples, so the B1 order (support
+	// surface before occupancy) refuses with Blocked and names it; the edge key stays with the first piece.
+	WoodBefore = Wood();
+	int32 ScrapBefore = Scrap();
+	B2ExpectBranch(*this, TEXT("Door on a walled edge"), Builder.Construction->TryBuild(Assets.Door, B5Place(Assets.Door, B5EdgeX11)),
+		EBuildResult::Blocked, WallX ? *WallX->GetName() : TEXT("<no wall>"));
+	TestTrue(TEXT("The walled edge still belongs to the wall"), WallX && PieceAtEdge(EBuildingEdgeAxis::X, 1, 1) == WallX);
+	TestTrue(TEXT("Refused door: nothing consumed"), Wood() == WoodBefore && Scrap() == ScrapBefore);
+
+	// A door on a free edge, rotated once: the facing flips by 180 degrees.
+	RevisionBefore = Inventory->GetRevision();
+	Result = Builder.Construction->TryBuild(Assets.Door, B5Place(Assets.Door, B5EdgeY10, 1));
+	B2Expect(*this, TEXT("Door on Y edge (1, 0) at rotation 1, at the X wall's corner"), Result, EBuildResult::Success);
+	ABuildingDoorActor* Door = Cast<ABuildingDoorActor>(Result.Piece.Get());
+	TestTrue(TEXT("Door: Wood -8 and Scrap -2 in one revision"), Wood() == WoodBefore - 8 && Scrap() == ScrapBefore - 2
+		&& Inventory->GetRevision() == RevisionBefore + 1);
+	TestTrue(TEXT("Door: a BP_BuildDoor on its Edge key, yaw 270 (90 flipped), Active, closed, usable by the builder"), Door && Door->IsA(Assets.DoorPiece)
+		&& PieceAtEdge(EBuildingEdgeAxis::Y, 1, 0) == Door && B5YawIs(Door, 270.0) && Door->GetBuildingPieceComponent()->IsActivePiece()
+		&& !Door->IsDoorOpen() && Door->CanInteract(Builder.Pawn) == EBuildingDoorResult::Success);
+	TestTrue(TEXT("The finished door is visible and collidable"), Door && !Door->IsHidden() && Door->GetActorEnableCollision()
+		&& B5BlocksPawns(Door->GetDoorLeaf()));
+	B2ExpectBranch(*this, TEXT("Wall on a door's edge"), Builder.Construction->TryBuild(Assets.Wall, B5Place(Assets.Wall, B5EdgeY10)),
+		EBuildResult::Blocked, Door ? *Door->GetName() : TEXT("<no door>"));
+	TestTrue(TEXT("The door's edge still belongs to the door"), Door && PieceAtEdge(EBuildingEdgeAxis::Y, 1, 0) == Door);
+
+	TestTrue(FString::Printf(TEXT("All resources spent exactly (Wood %d, Scrap %d)"), Wood(), Scrap()), Wood() == 0 && Scrap() == 0);
+	TestEqual(TEXT("Four floors, five walls and a door"), Fixture.LivePieces(), 10);
+	Fixture.Clean(*this, TEXT("Edge build"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB5DoorToggleTest,
+	"NullTide.Building.B5.DoorToggle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB5DoorToggleTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { B5TestDoorClass() }, 8);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid())) { return false; }
+
+	// A provisional door refuses interaction.
+	EBuildingDoorResult Provisional = EBuildingDoorResult::Success;
+	bool bProvisionalOpened = true;
+	Builder.Construction->BeforeActivate = [&Provisional, &bProvisionalOpened, &Builder](ABuildingPieceActor& Piece)
+	{
+		if (ABuildingDoorActor* ProvisionalDoor = Cast<ABuildingDoorActor>(&Piece))
+		{
+			Provisional = ProvisionalDoor->ToggleDoor(Builder.Pawn);
+			bProvisionalOpened = ProvisionalDoor->IsDoorOpen();
+		}
+	};
+	const FBuildingConstructionResult Built = Builder.Construction->TryBuild(B5TestDoorClass(), B5Place(B5TestDoorClass(), B5EdgeY10));
+	Builder.Construction->BeforeActivate = nullptr;
+	if (!B2Expect(*this, TEXT("Build the test door"), Built, EBuildResult::Success)) { return false; }
+	TestTrue(TEXT("Provisional door: NotActive, stays closed"), Provisional == EBuildingDoorResult::NotActive && !bProvisionalOpened);
+	ABuildingTestDoorActor* Door = Cast<ABuildingTestDoorActor>(Built.Piece.Get());
+	if (!TestNotNull(TEXT("Test door"), Door)) { return false; }
+	UStaticMeshComponent* Leaf = Door->GetDoorLeaf();
+	TestTrue(TEXT("Closed after the build: the leaf blocks"), !Door->IsDoorOpen() && B5BlocksPawns(Leaf));
+	auto FrameBlocks = [Door, Leaf]()
+	{
+		TInlineComponentArray<UStaticMeshComponent*> Meshes(Door);
+		bool bBlocks = Meshes.Num() == 4;
+		for (const UStaticMeshComponent* Mesh : Meshes)
+		{
+			bBlocks &= Mesh == Leaf || B5BlocksPawns(Mesh);
+		}
+		return bBlocks;
+	};
+
+	// Instant swing.
+	Door->SetSwingDuration(0.f);
+	TestEqual(TEXT("Open"), Door->ToggleDoor(Builder.Pawn), EBuildingDoorResult::Success);
+	TestTrue(TEXT("Open: fully swung, the leaf has no collision, the frame still blocks, not moving"), Door->IsDoorOpen()
+		&& FMath::IsNearlyEqual(Door->GetDoorOpenAlpha(), 1.f) && Leaf->GetCollisionEnabled() == ECollisionEnabled::NoCollision
+		&& FrameBlocks() && !Door->IsDoorMoving());
+	TestTrue(TEXT("Open: the hinge is turned 90 degrees"), FMath::IsNearlyEqual(Door->GetDoorHinge()->GetRelativeRotation().Yaw, 90.0, 0.01));
+	TestTrue(TEXT("Open at rotation 0: the leaf is on the facing (+Y) side"), B5LeafOnFacingSide(*Door));
+
+	// Rotation 1 turns the door 180 degrees, so it opens to the other world side, still its facing side.
+	const FBuildingConstructionResult Flipped = Builder.Construction->TryBuild(B5TestDoorClass(), B5Place(B5TestDoorClass(), B5EdgeX01, 1));
+	ABuildingTestDoorActor* FlippedDoor = Cast<ABuildingTestDoorActor>(Flipped.Piece.Get());
+	if (B2Expect(*this, TEXT("Second door at rotation 1"), Flipped, EBuildResult::Success) && TestNotNull(TEXT("Second door"), FlippedDoor))
+	{
+		FlippedDoor->SetSwingDuration(0.f);
+		TestEqual(TEXT("Open the rotated door"), FlippedDoor->ToggleDoor(Builder.Pawn), EBuildingDoorResult::Success);
+		TestTrue(TEXT("Open at rotation 1: yaw 180, leaf on the facing side, which is world -Y here"), B5YawIs(FlippedDoor, 180.0)
+			&& B5LeafOnFacingSide(*FlippedDoor) && FlippedDoor->GetDoorLeaf()->Bounds.Origin.Y < 200.0 - 30.0);
+	}
+	TestEqual(TEXT("Close"), Door->ToggleDoor(Builder.Pawn), EBuildingDoorResult::Success);
+	TestTrue(TEXT("Closed: the leaf blocks again"), !Door->IsDoorOpen() && FMath::IsNearlyZero(Door->GetDoorOpenAlpha()) && B5BlocksPawns(Leaf)
+		&& FMath::IsNearlyZero(Door->GetDoorHinge()->GetRelativeRotation().Yaw, 0.01));
+	TestEqual(TEXT("SetDoorOpen(false) on a closed door is accepted and changes nothing"), Door->SetDoorOpen(false, Builder.Pawn),
+		EBuildingDoorResult::Success);
+
+	// Refusals change nothing.
+	ACharacter* Far = B5SpawnCharacter(Fixture.World, FVector(300.0, 400.0, 92.0));
+	TestEqual(TEXT("Null interactor"), Door->ToggleDoor(nullptr), EBuildingDoorResult::InvalidInteractor);
+	TestEqual(TEXT("Interactor beyond 300 cm"), Door->ToggleDoor(Far), EBuildingDoorResult::OutOfRange);
+	TestTrue(TEXT("Refused requests leave the door closed and blocking"), !Door->IsDoorOpen() && B5BlocksPawns(Leaf) && !Door->IsDoorMoving());
+
+	// Timed swing: reversal mid-swing; collision only when fully closed.
+	Door->SetSwingDuration(0.3f);
+	Door->ToggleDoor(Builder.Pawn);
+	TestTrue(TEXT("Opening: moving and the leaf stops blocking at once"), Door->IsDoorOpen() && Door->IsDoorMoving()
+		&& Leaf->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
+	B5AdvanceTime(Fixture.World, 0.1f);
+	const float Partway = Door->GetDoorOpenAlpha();
+	TestTrue(FString::Printf(TEXT("Partway open after 0.1 s (alpha %.3f)"), Partway), Partway > 0.2f && Partway < 0.5f && Door->IsDoorMoving());
+	Door->ToggleDoor(Builder.Pawn);
+	B5AdvanceTime(Fixture.World, 0.05f);
+	TestTrue(FString::Printf(TEXT("Reversed: closing from where it was (alpha %.3f), still not blocking"), Door->GetDoorOpenAlpha()),
+		!Door->IsDoorOpen() && Door->GetDoorOpenAlpha() < Partway && Door->GetDoorOpenAlpha() > 0.f && Door->IsDoorMoving()
+		&& Leaf->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
+	B5AdvanceTime(Fixture.World, 0.5f);
+	TestTrue(TEXT("Fully closed: stopped, blocking again"), FMath::IsNearlyZero(Door->GetDoorOpenAlpha()) && !Door->IsDoorMoving()
+		&& B5BlocksPawns(Leaf));
+	Door->ToggleDoor(Builder.Pawn);
+	B5AdvanceTime(Fixture.World, 0.5f);
+	TestTrue(TEXT("Fully open: stopped, not blocking, no actor tick"), FMath::IsNearlyEqual(Door->GetDoorOpenAlpha(), 1.f) && !Door->IsDoorMoving()
+		&& Leaf->GetCollisionEnabled() == ECollisionEnabled::NoCollision && !Door->IsActorTickEnabled());
+
+	// Only pawns use doors; a door being destroyed refuses (no swing restarts on a dying actor).
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AActor* NotAPawn = Fixture.World->SpawnActor<AActor>(AActor::StaticClass(), FTransform(Door->GetActorLocation()), Params);
+	TestEqual(TEXT("A non-pawn interactor is refused"), Door->ToggleDoor(NotAPawn), EBuildingDoorResult::InvalidInteractor);
+	TestTrue(TEXT("The refused request left the door open"), Door->IsDoorOpen());
+	Door->Destroy();
+	TestTrue(TEXT("A destroyed door refuses and has no swing timer"), Door->ToggleDoor(Builder.Pawn) == EBuildingDoorResult::NotActive
+		&& !Door->IsDoorMoving());
+	Fixture.Clean(*this, TEXT("Door toggle"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB5DoorInterfaceTest,
+	"NullTide.Building.B5.DoorInterface",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB5DoorInterfaceTest::RunTest(const FString& Parameters)
+{
+	const FB5Assets Assets = FB5Assets::Load();
+	UClass* InteractableClass = LoadClass<UInterface>(nullptr, B5InteractablePath);
+	if (!Assets.IsValid(*this) || !TestNotNull(TEXT("BPI_Interactable loads"), InteractableClass)) { return false; }
+	TestTrue(TEXT("BP_BuildDoor implements BPI_Interactable"), Assets.DoorPiece->ImplementsInterface(InteractableClass));
+
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { Assets.Base.Floor, Assets.Door }, 0);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid() && Builder.Inventory)) { return false; }
+	Builder.Inventory->TryAddDefinitionQuantity(Assets.Base.Wood, 12);
+	Builder.Inventory->TryAddDefinitionQuantity(Assets.Scrap, 2);
+	B2Expect(*this, TEXT("Floor beside the door's edge"), Builder.Construction->TryBuild(Assets.Base.Floor, B5Place(Assets.Base.Floor, B5CellD)),
+		EBuildResult::Success);
+	const FBuildingConstructionResult Built = Builder.Construction->TryBuild(Assets.Door, B5Place(Assets.Door, B5EdgeY10));
+	if (!B2Expect(*this, TEXT("Build the production door"), Built, EBuildResult::Success)) { return false; }
+	ABuildingDoorActor* Door = Cast<ABuildingDoorActor>(Built.Piece.Get());
+	if (!TestNotNull(TEXT("Production door"), Door)) { return false; }
+
+	UFunction* GetType = Door->FindFunction(FName(TEXT("GetInteractionType")));
+	if (TestNotNull(TEXT("GetInteractionType is implemented"), GetType))
+	{
+		TestEqual(TEXT("Interaction type is Press"), B5CallEnumGetter(Door, GetType), FString(TEXT("Press")));
+	}
+
+	B5CallWithObject(*this, Door, TEXT("Interact"), TEXT("Interactor"), Builder.Pawn);
+	TestTrue(TEXT("Interact in range opens the door"), Door->IsDoorOpen());
+	B5AdvanceTime(Fixture.World, 0.5f);
+	TestTrue(TEXT("Fully open: the leaf is on the facing side the ghost's arrow showed"), !Door->IsDoorMoving() && B5LeafOnFacingSide(*Door));
+	B5CallWithObject(*this, Door, TEXT("Interact"), TEXT("Interactor"), Builder.Pawn);
+	TestFalse(TEXT("Interact again closes it"), Door->IsDoorOpen());
+	ACharacter* Far = B5SpawnCharacter(Fixture.World, FVector(300.0, 400.0, 92.0));
+	B5CallWithObject(*this, Door, TEXT("Interact"), TEXT("Interactor"), Far);
+	TestFalse(TEXT("Interact out of range is refused"), Door->IsDoorOpen());
+	TestTrue(TEXT("Interaction never touches the inventory or the registry"), Builder.Inventory->GetTotalQuantity(Assets.Base.Wood) == 0
+		&& Fixture.LivePieces() == 2);
+	Fixture.Clean(*this, TEXT("Door interface"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB5SelectionAndRotationTest,
+	"NullTide.Building.B5.SelectionAndRotation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB5SelectionAndRotationTest::RunTest(const FString& Parameters)
+{
+	UClass* HudClass = LoadClass<UBuildingHudWidget>(nullptr, B4HudPath);
+	if (!TestNotNull(TEXT("W_BuildingHud loads"), HudClass)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	const TSubclassOf<UBuildingDefinition> Wall = UBuildingTestWallDefinition::StaticClass();
+	FB4Player Player = B4SpawnPlayer(Fixture, { B2FloorClass(), Wall, B5TestDoorClass() }, 30);
+	if (!TestTrue(TEXT("Player set up"), Player.IsValid())) { return false; }
+	UBuildingPlacementTestComponent* Placement = Player.Placement;
+	Placement->SetHudClass(HudClass);
+	Placement->SetCursor(B5EdgeX10);
+	auto HudName = [Placement]() { return Placement->GetHudWidget() ? Placement->GetHudWidget()->GetBuildingNameText().ToString() : FString(); };
+
+	if (!TestTrue(TEXT("Enter"), Placement->EnterBuildingMode())) { return false; }
+	ABuildingPreviewActor* Preview = Placement->GetPreviewActor();
+	if (!TestNotNull(TEXT("Preview"), Preview)) { return false; }
+	TestTrue(TEXT("Index 0 (Floor) by default: one ghost mesh"), Placement->GetSelectedBuildingIndex() == 0
+		&& Placement->GetSelectedBuilding() == B2FloorClass() && Preview->GetPreviewMeshCount() == 1 && HudName() == TEXT("Test Floor"));
+	// B5-R3: the facing arrow is part of the ghost (moves and turns with it), never collides, and is not a piece mesh.
+	auto ArrowAlong = [Preview](const FVector& Direction)
+	{
+		return Preview->GetFacingArrow() && Preview->GetFacingArrow()->GetForwardVector().Equals(Direction, 0.01);
+	};
+	TestTrue(TEXT("Floor ghost: the arrow points along the piece's +X"), ArrowAlong(Preview->GetActorForwardVector()));
+	TestEqual(TEXT("The arrow has its shaft and head meshes"), B5ArrowMeshes(*Preview).Num(), 2);
+	bool bArrowCollides = false;
+	TInlineComponentArray<UPrimitiveComponent*> GhostPrimitives(Preview);
+	for (const UPrimitiveComponent* Primitive : GhostPrimitives)
+	{
+		bArrowCollides |= Primitive && (Primitive->IsCollisionEnabled() || Primitive->IsNavigationRelevant());
+	}
+	TestFalse(TEXT("No ghost part, arrow included, collides or affects navigation"), bArrowCollides);
+
+	TestTrue(TEXT("Select index 2 (Door)"), Placement->SelectBuildingIndex(2));
+	TestTrue(TEXT("Door selected: the same ghost actor now has the door's four meshes, the HUD follows"), Placement->GetSelectedBuildingIndex() == 2
+		&& Placement->GetSelectedBuilding() == B5TestDoorClass() && Placement->GetPreviewActor() == Preview && Preview->GetPreviewMeshCount() == 4
+		&& HudName() == TEXT("Test Swing Door") && B4CountPreviews(Fixture.World) == 1);
+	TestTrue(TEXT("Door ghost snaps to X edge (1, 0) and is valid"), Preview->GetActorLocation().Equals(FVector(300.0, 0.0, 0.0), 0.1)
+		&& B5YawIs(Preview, 0.0) && Placement->GetPreviewResult().IsSuccess());
+	TestTrue(TEXT("Door ghost: the arrow points to the facing (+Y) side, where the door will open"), ArrowAlong(Preview->GetActorRightVector())
+		&& ArrowAlong(FVector(0.0, 1.0, 0.0)));
+
+	// The ghost composes the hinge: every real door mesh has a ghost mesh with the same world bounds.
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ABuildingTestDoorActor* Reference = Fixture.World->SpawnActor<ABuildingTestDoorActor>(ABuildingTestDoorActor::StaticClass(),
+		Preview->GetActorTransform(), Params);
+	if (TestNotNull(TEXT("Reference door"), Reference))
+	{
+		TInlineComponentArray<UStaticMeshComponent*> RealMeshes(Reference);
+		TInlineComponentArray<UStaticMeshComponent*> GhostMeshes(Preview);
+		int32 Matched = 0;
+		for (const UStaticMeshComponent* Real : RealMeshes)
+		{
+			const FBox RealBox = Real->Bounds.GetBox();
+			for (const UStaticMeshComponent* Ghost : GhostMeshes)
+			{
+				const FBox GhostBox = Ghost->Bounds.GetBox();
+				if (GhostBox.Min.Equals(RealBox.Min, 0.5) && GhostBox.Max.Equals(RealBox.Max, 0.5))
+				{
+					++Matched;
+					break;
+				}
+			}
+		}
+		const FBox GhostLeaf = Reference->GetDoorLeaf()->Bounds.GetBox();
+		TestTrue(FString::Printf(TEXT("Every door mesh, including the hinged leaf (%s), has a matching ghost mesh (%d/%d)"), *GhostLeaf.ToString(),
+			Matched, RealMeshes.Num()), RealMeshes.Num() == 4 && Matched == 4);
+		Reference->Destroy();
+	}
+
+	TestFalse(TEXT("Missing index 3 is ignored"), Placement->SelectBuildingIndex(3));
+	TestFalse(TEXT("Negative index is ignored"), Placement->SelectBuildingIndex(-1));
+	TestTrue(TEXT("The selection is unchanged"), Placement->GetSelectedBuildingIndex() == 2 && Preview->GetPreviewMeshCount() == 4);
+
+	// R: quarter turns wrap 0 -> 1 -> 2 -> 3 -> 0; on an edge, odd turns flip the facing.
+	TArray<int32> Rotations;
+	TArray<bool> Flipped;
+	TArray<bool> ArrowFlipped;
+	for (int32 Step = 0; Step < 4; ++Step)
+	{
+		Placement->RotatePlacement();
+		Rotations.Add(Placement->GetPlacementRotation());
+		Flipped.Add(B5YawIs(Preview, 180.0));
+		ArrowFlipped.Add(ArrowAlong(FVector(0.0, -1.0, 0.0)) && ArrowAlong(Preview->GetActorRightVector()));
+	}
+	TestTrue(TEXT("Rotation wraps 1, 2, 3, 0"), Rotations == TArray<int32>({ 1, 2, 3, 0 }));
+	TestTrue(TEXT("The ghost follows at once: flipped on odd turns only"), Flipped == TArray<bool>({ true, false, true, false }));
+	TestTrue(TEXT("The arrow turns with the ghost: it points to world -Y on odd turns"), ArrowFlipped == TArray<bool>({ true, false, true, false }));
+	TestEqual(TEXT("NeedsFloor reason text"), UBuildingPlacementComponent::DescribeResult(EBuildResult::NeedsFloor).ToString(),
+		FString(TEXT("Needs a floor")));
+
+	// Confirm builds the selected building at the selected rotation.
+	Placement->RotatePlacement();
+	const FBuildingConstructionResult Built = Placement->ConfirmPlacement();
+	B2Expect(*this, TEXT("Confirm the rotated door"), Built, EBuildResult::Success);
+	TestTrue(TEXT("A test door on X edge (1, 0) at yaw 180"), Cast<ABuildingTestDoorActor>(Built.Piece.Get())
+		&& Fixture.Subsystem->GetOccupyingPiece(B5EdgeKey(EBuildingEdgeAxis::X, 1, 0)) == Built.Piece->FindComponentByClass<UBuildingPieceComponent>()
+		&& B5YawIs(Built.Piece.Get(), 180.0));
+
+	TestTrue(TEXT("Select index 1 (Wall)"), Placement->SelectBuildingIndex(1) && Placement->GetSelectedBuilding() == Wall
+		&& Preview->GetPreviewMeshCount() == 1 && HudName() == TEXT("Test Wall"));
+	B4Tick(Placement);
+	B2ExpectBranch(*this, TEXT("The wall ghost on the door's edge is red"), Placement->GetPreviewResult(), EBuildResult::Blocked,
+		Built.Piece.IsValid() ? *Built.Piece->GetName() : TEXT("<no door>"));
+
+	// The selection persists across exit and enter; selecting outside the mode creates nothing.
+	Placement->ExitBuildingMode();
+	TestTrue(TEXT("Select outside the mode: accepted, no ghost"), Placement->SelectBuildingIndex(2) && B4CountPreviews(Fixture.World) == 0);
+	Placement->EnterBuildingMode();
+	TestTrue(TEXT("Re-entered with the door still selected"), Placement->GetSelectedBuildingIndex() == 2 && Placement->GetPreviewActor()
+		&& Placement->GetPreviewActor()->GetPreviewMeshCount() == 4 && HudName() == TEXT("Test Swing Door"));
+	Placement->ExitBuildingMode();
+	TestEqual(TEXT("One door built"), Fixture.LivePieces(), 1);
+
+	// Composition order: with a turned and scaled hinge, only child-then-parent composition matches the real leaf.
+	const FTransform Turned(FRotator(0.0, 90.0, 0.0), FVector(700.0, -500.0, 0.0));
+	ABuildingTestTurnedHingeDoorActor* TurnedDoor = Fixture.World->SpawnActor<ABuildingTestTurnedHingeDoorActor>(
+		ABuildingTestTurnedHingeDoorActor::StaticClass(), Turned, Params);
+	ABuildingPreviewActor* TurnedGhost = Fixture.World->SpawnActor<ABuildingPreviewActor>(ABuildingPreviewActor::StaticClass(), Turned, Params);
+	if (TestTrue(TEXT("Turned-hinge door and ghost spawn"), TurnedDoor && TurnedGhost))
+	{
+		// With a material the arrow takes the ghost's tint; re-initialising without one clears it.
+		UMaterialInterface* GhostMaterial = LoadObject<UMaterialInterface>(nullptr,
+			TEXT("/Game/LevelPrototyping/BuildingSystem/Materials/M_BuildPreview.M_BuildPreview"));
+		TurnedGhost->InitializeFromPieceClass(ABuildingTestTurnedHingeDoorActor::StaticClass(), GhostMaterial);
+		const TArray<const UStaticMeshComponent*> ArrowParts = B5ArrowMeshes(*TurnedGhost);
+		const UMaterialInstanceDynamic* Tint = TurnedGhost->GetPreviewMaterial();
+		TestTrue(TEXT("The arrow is tinted with the ghost's material"), GhostMaterial && Tint && ArrowParts.Num() == 2
+			&& ArrowParts[0]->GetMaterial(0) == Tint && ArrowParts[1]->GetMaterial(0) == Tint);
+		TurnedGhost->InitializeFromPieceClass(ABuildingTestTurnedHingeDoorActor::StaticClass(), nullptr);
+		TestTrue(TEXT("Without a material the arrow drops the old tint"), ArrowParts.Num() == 2 && Tint
+			&& ArrowParts[0]->GetMaterial(0) != Tint && ArrowParts[1]->GetMaterial(0) != Tint);
+		const FBox RealLeaf = TurnedDoor->GetDoorLeaf()->Bounds.GetBox();
+		bool bLeafMatched = false;
+		TInlineComponentArray<UStaticMeshComponent*> TurnedGhostMeshes(TurnedGhost);
+		for (const UStaticMeshComponent* Ghost : TurnedGhostMeshes)
+		{
+			const FBox GhostBox = Ghost->Bounds.GetBox();
+			bLeafMatched |= GhostBox.Min.Equals(RealLeaf.Min, 0.5) && GhostBox.Max.Equals(RealLeaf.Max, 0.5);
+		}
+		TestTrue(FString::Printf(TEXT("The ghost leaf matches the real leaf under a turned, scaled hinge (%s)"), *RealLeaf.ToString()),
+			TurnedGhost->GetPreviewMeshCount() == 4 && bLeafMatched);
+		TurnedDoor->Destroy();
+		TurnedGhost->Destroy();
+	}
+	Fixture.Clean(*this, TEXT("Selection and rotation"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB5ProductionInputTest,
+	"NullTide.Building.B5.ProductionInput",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB5ProductionInputTest::RunTest(const FString& Parameters)
+{
+	const FB5Assets Assets = FB5Assets::Load();
+	if (!Assets.IsValid(*this)) { return false; }
+	const TCHAR* InputRoot = TEXT("/Game/LevelPrototyping/BuildingSystem/Input/");
+	auto LoadAction = [InputRoot](const TCHAR* Name) { return LoadObject<UInputAction>(nullptr, *FString::Printf(TEXT("%s%s.%s"), InputRoot, Name, Name)); };
+	const UInputMappingContext* ModeContext = LoadObject<UInputMappingContext>(nullptr,
+		TEXT("/Game/LevelPrototyping/BuildingSystem/Input/IMC_BuildingMode.IMC_BuildingMode"));
+	const UInputAction* Confirm = LoadAction(TEXT("IA_BuildConfirm"));
+	const UInputAction* Cancel = LoadAction(TEXT("IA_BuildCancel"));
+	const UInputAction* Rotate = LoadAction(TEXT("IA_BuildRotate"));
+	const UInputAction* Select1 = LoadAction(TEXT("IA_BuildSelect1"));
+	const UInputAction* Select2 = LoadAction(TEXT("IA_BuildSelect2"));
+	const UInputAction* Select3 = LoadAction(TEXT("IA_BuildSelect3"));
+	if (!TestTrue(TEXT("IMC_BuildingMode and the building actions load"), ModeContext && Confirm && Cancel && Rotate && Select1 && Select2 && Select3))
+	{
+		return false;
+	}
+	for (const UInputAction* Action : { Rotate, Select1, Select2, Select3 })
+	{
+		TestTrue(FString::Printf(TEXT("%s: digital, consumes its keys, no triggers"), *Action->GetName()),
+			Action->ValueType == EInputActionValueType::Boolean && Action->bConsumeInput && Action->Triggers.IsEmpty());
+	}
+	TMap<FKey, const UInputAction*> Mode;
+	bool bPlain = true;
+	for (const FEnhancedActionKeyMapping& Mapping : ModeContext->GetMappings())
+	{
+		Mode.Add(Mapping.Key, Mapping.Action);
+		bPlain &= Mapping.Triggers.IsEmpty() && Mapping.Modifiers.IsEmpty();
+	}
+	TestTrue(TEXT("IMC_BuildingMode: no per-mapping triggers or modifiers"), bPlain);
+	TestTrue(TEXT("IMC_BuildingMode: exactly LMB, RMB, I, Tab, F, R, 1, 2, 3 to the right actions"), ModeContext->GetMappings().Num() == 9
+		&& Mode.Num() == 9 && Mode.FindRef(EKeys::LeftMouseButton) == Confirm && Mode.FindRef(EKeys::RightMouseButton) == Cancel
+		&& Mode.FindRef(EKeys::I) == Cancel && Mode.FindRef(EKeys::Tab) == Cancel && Mode.FindRef(EKeys::F) == Cancel
+		&& Mode.FindRef(EKeys::R) == Rotate && Mode.FindRef(EKeys::One) == Select1 && Mode.FindRef(EKeys::Two) == Select2
+		&& Mode.FindRef(EKeys::Three) == Select3);
+
+	UBlueprint* PlayerBlueprint = LoadObject<UBlueprint>(nullptr, B3PlayerPath);
+	if (!TestNotNull(TEXT("Production player Blueprint loads"), PlayerBlueprint)) { return false; }
+	const UConstructionComponent* Construction = nullptr;
+	const UBuildingPlacementComponent* Placement = nullptr;
+	if (const USimpleConstructionScript* ConstructionScript = PlayerBlueprint->SimpleConstructionScript)
+	{
+		for (const USCS_Node* Node : ConstructionScript->GetAllNodes())
+		{
+			Construction = Construction ? Construction : (Node ? Cast<UConstructionComponent>(Node->ComponentTemplate) : nullptr);
+			Placement = Placement ? Placement : (Node ? Cast<UBuildingPlacementComponent>(Node->ComponentTemplate) : nullptr);
+		}
+	}
+	if (!TestTrue(TEXT("Production player has construction and placement components"), Construction && Placement)) { return false; }
+	TestTrue(TEXT("Registered buildings are [Floor, Wall, Door] in that order"),
+		Construction->GetAvailableBuildings() == FB2Buildings({ Assets.Base.Floor, Assets.Wall, Assets.Door }));
+	TestTrue(TEXT("Placement rotates with IA_BuildRotate"), B4ReadObject<UInputAction>(Placement, TEXT("RotateAction")) == Rotate);
+	const FArrayProperty* SelectProperty = FindFProperty<FArrayProperty>(UBuildingPlacementComponent::StaticClass(), TEXT("SelectBuildingActions"));
+	const TArray<TObjectPtr<UInputAction>>* SelectActions = SelectProperty
+		? SelectProperty->ContainerPtrToValuePtr<TArray<TObjectPtr<UInputAction>>>(Placement) : nullptr;
+	TestTrue(TEXT("Placement selects with IA_BuildSelect1/2/3 in order"), SelectActions && SelectActions->Num() == 3
+		&& (*SelectActions)[0] == Select1 && (*SelectActions)[1] == Select2 && (*SelectActions)[2] == Select3);
+
+	// B5-R2: the interaction prompt reads its key from IMC_Default, not from the live (possibly consumed) mappings.
+	const UInputMappingContext* DefaultContext = LoadObject<UInputMappingContext>(nullptr, B5DefaultContextPath);
+	const UInputAction* Interact = LoadObject<UInputAction>(nullptr, B5InteractActionPath);
+	if (TestTrue(TEXT("IMC_Default and IA_Interact load"), DefaultContext && Interact))
+	{
+		const FKey PromptKey = UInputPromptLibrary::GetKeyMappedToAction(DefaultContext, Interact);
+		TestTrue(FString::Printf(TEXT("The prompt key for IA_Interact is F (got %s)"), *PromptKey.ToString()), PromptKey == EKeys::F);
+		TestFalse(TEXT("An action the context does not map has no prompt key"),
+			UInputPromptLibrary::GetKeyMappedToAction(DefaultContext, Rotate).IsValid());
+	}
 	return true;
 }
 

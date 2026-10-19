@@ -13,7 +13,9 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "CraftingTestTypes.h"
 #include "Crafting/CraftingComponent.h"
+#include "Crafting/CraftingStationComponent.h"
 #include "Crafting/CraftingRecipeDefinition.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
@@ -33,6 +35,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/AutomationTest.h"
+#include "Storage/StorageComponent.h"
 #include "TimerManager.h"
 #include "ToolLoadout/ToolLoadoutComponent.h"
 #include "UI/BuildingHudWidget.h"
@@ -127,6 +130,67 @@ UBuildingTestDriftDefinition::UBuildingTestDriftDefinition()
 UBuildingTestBlockerSpawnDefinition::UBuildingTestBlockerSpawnDefinition()
 {
 	B2MakeFloor(*this, TEXT("Test Blocker-Spawning Floor"), ABuildingBlockerSpawnTestPiece::StaticClass());
+}
+
+ABuildingTestWallPieceActor::ABuildingTestWallPieceActor()
+{
+	PieceMesh->SetRelativeLocation(FVector(0.0, 0.0, 125.0));
+	PieceMesh->SetRelativeScale3D(FVector(2.0, 0.2, 2.5));
+}
+
+ABuildingStorageTestPiece::ABuildingStorageTestPiece()
+{
+	Storage = CreateDefaultSubobject<UStorageComponent>(TEXT("Storage"));
+}
+
+ABuildingStationTestPiece::ABuildingStationTestPiece()
+{
+	Station = CreateDefaultSubobject<UCraftingStationComponent>(TEXT("Station"));
+}
+
+UBuildingTestTinyFloorDefinition::UBuildingTestTinyFloorDefinition()
+{
+	B2MakeFloor(*this, TEXT("Test Tiny Floor"), ABuildingTestPieceActor::StaticClass());
+	Cost.Reset();
+	Cost.Add(B2Cost(UInventoryStackableTestItemDefinition::StaticClass(), 1));
+	// A partial refund (the default is full since B6) that rounds Wood x 1 down to nothing.
+	RefundFraction = 0.5f;
+}
+
+namespace
+{
+void B6MakeSupportedWall(UBuildingDefinition& Definition, const TCHAR* Name, TSubclassOf<AActor> PieceClass, int32 Wood)
+{
+	B2MakeFloor(Definition, Name, PieceClass);
+	Definition.Category = EBuildingCategory::Wall;
+	Definition.PlacementMode = EBuildingPlacementMode::GridEdge;
+	Definition.bRequiresFloor = true;
+	Definition.Cost.Reset();
+	Definition.Cost.Add(B2Cost(UInventoryStackableTestItemDefinition::StaticClass(), Wood));
+}
+}
+
+UBuildingTestSupportedWallDefinition::UBuildingTestSupportedWallDefinition()
+{
+	B6MakeSupportedWall(*this, TEXT("Test Supported Wall"), ABuildingTestWallPieceActor::StaticClass(), 6);
+}
+
+UBuildingTestStorageWallDefinition::UBuildingTestStorageWallDefinition()
+{
+	B6MakeSupportedWall(*this, TEXT("Test Storage Wall"), ABuildingStorageTestPiece::StaticClass(), 2);
+}
+
+UBuildingTestStationDefinition::UBuildingTestStationDefinition()
+{
+	B2MakeFloor(*this, TEXT("Test Station"), ABuildingStationTestPiece::StaticClass());
+	Category = EBuildingCategory::Station;
+	Cost.Reset();
+	Cost.Add(B2Cost(UInventoryStackableTestItemDefinition::StaticClass(), 2));
+}
+
+void UConstructionTestListener::HandleDemolishResult(TSubclassOf<UBuildingDefinition> DefinitionClass, const FBuildingDemolishResult& Result)
+{
+	DemolishResults.Add(Result);
 }
 
 ABuildingTestTurnedHingeDoorActor::ABuildingTestTurnedHingeDoorActor()
@@ -379,6 +443,7 @@ struct FB2World
 			Builder.Inventory->OnInventoryChanged.AddDynamic(Builder.Listener, &UConstructionTestListener::HandleInventoryChanged);
 		}
 		Builder.Construction->OnBuildResult.AddDynamic(Builder.Listener, &UConstructionTestListener::HandleBuildResult);
+		Builder.Construction->OnDemolishResult.AddDynamic(Builder.Listener, &UConstructionTestListener::HandleDemolishResult);
 		return Builder;
 	}
 
@@ -1259,7 +1324,7 @@ bool FBuildingB3ProductionDefinitionTest::RunTest(const FString& Parameters)
 		&& Floor->PlacementMode == EBuildingPlacementMode::GridCell && Floor->Footprint == FIntPoint(1, 1) && Floor->RotationStep == 90);
 	TestTrue(TEXT("Cost is exactly Item_Wood x 4"), Floor->Cost.Num() == 1 && Floor->Cost[0].DefinitionClass == Assets.Wood
 		&& Floor->Cost[0].Quantity == 4);
-	TestTrue(TEXT("50% refund, default range"), FMath::IsNearlyEqual(Floor->RefundFraction, 0.5f) && Floor->BuildRangeOverride == 0.f);
+	TestTrue(TEXT("Full refund (B6), default range"), FMath::IsNearlyEqual(Floor->RefundFraction, 1.f) && Floor->BuildRangeOverride == 0.f);
 	TestTrue(TEXT("The piece is BP_BuildFloor"), Floor->PieceActorClass == Assets.Piece);
 	TestNull(TEXT("No icon until the B4 HUD (B3-3)"), Floor->BuildingIcon.Get());
 #if WITH_EDITOR
@@ -2140,7 +2205,7 @@ bool FBuildingB5ProductionDefinitionsTest::RunTest(const FString& Parameters)
 			bCost = Definition->Cost[Index].DefinitionClass == Entry.Cost[Index].DefinitionClass && Definition->Cost[Index].Quantity == Entry.Cost[Index].Quantity;
 		}
 		TestTrue(FString::Printf(TEXT("%s: exact cost"), Entry.Name), bCost);
-		TestTrue(FString::Printf(TEXT("%s: 50%% refund, default range"), Entry.Name), FMath::IsNearlyEqual(Definition->RefundFraction, 0.5f)
+		TestTrue(FString::Printf(TEXT("%s: full refund (B6), default range"), Entry.Name), FMath::IsNearlyEqual(Definition->RefundFraction, 1.f)
 			&& Definition->BuildRangeOverride == 0.f);
 		TestTrue(FString::Printf(TEXT("%s: piece class"), Entry.Name), Definition->PieceActorClass == Entry.Piece);
 		TestTrue(FString::Printf(TEXT("%s: requires a floor (B5-R1)"), Entry.Name), Definition->bRequiresFloor);
@@ -2631,11 +2696,13 @@ bool FBuildingB5ProductionInputTest::RunTest(const FString& Parameters)
 	const UInputAction* Select1 = LoadAction(TEXT("IA_BuildSelect1"));
 	const UInputAction* Select2 = LoadAction(TEXT("IA_BuildSelect2"));
 	const UInputAction* Select3 = LoadAction(TEXT("IA_BuildSelect3"));
-	if (!TestTrue(TEXT("IMC_BuildingMode and the building actions load"), ModeContext && Confirm && Cancel && Rotate && Select1 && Select2 && Select3))
+	const UInputAction* Demolish = LoadAction(TEXT("IA_BuildDemolish"));
+	if (!TestTrue(TEXT("IMC_BuildingMode and the building actions load"), ModeContext && Confirm && Cancel && Rotate && Select1 && Select2 && Select3
+		&& Demolish))
 	{
 		return false;
 	}
-	for (const UInputAction* Action : { Rotate, Select1, Select2, Select3 })
+	for (const UInputAction* Action : { Rotate, Select1, Select2, Select3, Demolish })
 	{
 		TestTrue(FString::Printf(TEXT("%s: digital, consumes its keys, no triggers"), *Action->GetName()),
 			Action->ValueType == EInputActionValueType::Boolean && Action->bConsumeInput && Action->Triggers.IsEmpty());
@@ -2648,11 +2715,12 @@ bool FBuildingB5ProductionInputTest::RunTest(const FString& Parameters)
 		bPlain &= Mapping.Triggers.IsEmpty() && Mapping.Modifiers.IsEmpty();
 	}
 	TestTrue(TEXT("IMC_BuildingMode: no per-mapping triggers or modifiers"), bPlain);
-	TestTrue(TEXT("IMC_BuildingMode: exactly LMB, RMB, I, Tab, F, R, 1, 2, 3 to the right actions"), ModeContext->GetMappings().Num() == 9
-		&& Mode.Num() == 9 && Mode.FindRef(EKeys::LeftMouseButton) == Confirm && Mode.FindRef(EKeys::RightMouseButton) == Cancel
+	// B6 adds C -> IA_BuildDemolish (decision B6-1).
+	TestTrue(TEXT("IMC_BuildingMode: exactly LMB, RMB, I, Tab, F, R, 1, 2, 3, C to the right actions"), ModeContext->GetMappings().Num() == 10
+		&& Mode.Num() == 10 && Mode.FindRef(EKeys::LeftMouseButton) == Confirm && Mode.FindRef(EKeys::RightMouseButton) == Cancel
 		&& Mode.FindRef(EKeys::I) == Cancel && Mode.FindRef(EKeys::Tab) == Cancel && Mode.FindRef(EKeys::F) == Cancel
 		&& Mode.FindRef(EKeys::R) == Rotate && Mode.FindRef(EKeys::One) == Select1 && Mode.FindRef(EKeys::Two) == Select2
-		&& Mode.FindRef(EKeys::Three) == Select3);
+		&& Mode.FindRef(EKeys::Three) == Select3 && Mode.FindRef(EKeys::C) == Demolish);
 
 	UBlueprint* PlayerBlueprint = LoadObject<UBlueprint>(nullptr, B3PlayerPath);
 	if (!TestNotNull(TEXT("Production player Blueprint loads"), PlayerBlueprint)) { return false; }
@@ -2670,6 +2738,7 @@ bool FBuildingB5ProductionInputTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Registered buildings are [Floor, Wall, Door] in that order"),
 		Construction->GetAvailableBuildings() == FB2Buildings({ Assets.Base.Floor, Assets.Wall, Assets.Door }));
 	TestTrue(TEXT("Placement rotates with IA_BuildRotate"), B4ReadObject<UInputAction>(Placement, TEXT("RotateAction")) == Rotate);
+	TestTrue(TEXT("Placement demolishes with IA_BuildDemolish"), B4ReadObject<UInputAction>(Placement, TEXT("DemolishAction")) == Demolish);
 	const FArrayProperty* SelectProperty = FindFProperty<FArrayProperty>(UBuildingPlacementComponent::StaticClass(), TEXT("SelectBuildingActions"));
 	const TArray<TObjectPtr<UInputAction>>* SelectActions = SelectProperty
 		? SelectProperty->ContainerPtrToValuePtr<TArray<TObjectPtr<UInputAction>>>(Placement) : nullptr;
@@ -2686,6 +2755,529 @@ bool FBuildingB5ProductionInputTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("An action the context does not map has no prompt key"),
 			UInputPromptLibrary::GetKeyMappedToAction(DefaultContext, Rotate).IsValid());
 	}
+	return true;
+}
+
+
+// ---- B6: demolition and refund ----
+
+namespace
+{
+TSubclassOf<UBuildingDefinition> B6Tiny() { return UBuildingTestTinyFloorDefinition::StaticClass(); }
+TSubclassOf<UBuildingDefinition> B6Wall() { return UBuildingTestSupportedWallDefinition::StaticClass(); }
+
+const FVector B6CellE(500.0, 300.0, 0.0);      // Cell (2, 1), east of cell A
+const FVector B6EdgeY11(205.0, 300.0, 0.0);    // Y edge (1, 1): west of cell A
+const FVector B6EdgeX12(300.0, 395.0, 0.0);    // X edge (1, 2): north of cell A
+const FVector B6EdgeY21(405.0, 300.0, 0.0);    // Y edge (2, 1): between cell A and cell E
+const FVector B6EdgeX1m1(300.0, -205.0, 0.0);  // X edge (1, -1): north of cell B
+
+bool B6Expect(FAutomationTestBase& Test, const FString& What, const FBuildingDemolishResult& Result, const EBuildResult Expected)
+{
+	const bool bMatch = Result.Result == Expected;
+	Test.TestTrue(FString::Printf(TEXT("%s: %s (got %s, %d pieces, %s)"), *What, *B2Name(Expected), *B2Name(Result.Result),
+		Result.Pieces.Num(), *Result.Diagnostic), bMatch);
+	return bMatch;
+}
+
+int32 B6RefundOf(const TArray<FInventoryDefinitionQuantity>& Refund, TSubclassOf<UItemDefinition> Item)
+{
+	int32 Quantity = 0;
+	for (const FInventoryDefinitionQuantity& Line : Refund)
+	{
+		Quantity += Line.DefinitionClass == Item ? Line.Quantity : 0;
+	}
+	return Quantity;
+}
+
+ABuildingPieceActor* B6Build(FAutomationTestBase& Test, const FB2Builder& Builder, TSubclassOf<UBuildingDefinition> Definition,
+	const FVector& Point, int32 Rotation = 0)
+{
+	const FBuildingConstructionResult Result = Builder.Construction->TryBuild(Definition, B5Place(Definition, Point, Rotation));
+	B2Expect(Test, FString::Printf(TEXT("Build %s at %s"), *GetNameSafe(Definition.Get()), *Point.ToCompactString()), Result, EBuildResult::Success);
+	return Cast<ABuildingPieceActor>(Result.Piece.Get());
+}
+
+bool B6Alive(const AActor* Actor)
+{
+	return IsValid(Actor) && !Actor->IsActorBeingDestroyed();
+}
+
+bool B6ActiveAlive(const ABuildingPieceActor* Piece)
+{
+	return B6Alive(Piece) && Piece->GetBuildingPieceComponent() && Piece->GetBuildingPieceComponent()->IsActivePiece();
+}
+
+bool B6Contains(const FBuildingDemolishResult& Result, const AActor* Actor)
+{
+	return Result.Pieces.ContainsByPredicate([Actor](const TWeakObjectPtr<AActor>& Piece) { return Piece.Get() == Actor; });
+}
+
+/** Fills every free inventory slot with single (non-stackable) items. */
+void B6FillInventory(UInventoryComponent* Inventory)
+{
+	for (int32 Guard = 0; Guard < 64 && !Inventory->IsFull(); ++Guard)
+	{
+		Inventory->TryAddDefinitionQuantity(UInventoryTestItemDefinition::StaticClass(), 1);
+	}
+}
+
+/** An authored (not player-built) Active floor piece on a cell. */
+ABuildingTestPieceActor* B6SpawnAuthoredFloor(FB2World& Fixture, const FVector& Cell)
+{
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	const FBuildingPlacement Placement = B2Floor(Cell);
+	ABuildingTestPieceActor* Piece = Fixture.World->SpawnActor<ABuildingTestPieceActor>(ABuildingTestPieceActor::StaticClass(),
+		Placement.WorldTransform, Params);
+	if (Piece)
+	{
+		Piece->GetBuildingPieceComponent()->InitializePiece(B2FloorClass(), Placement, { B2Key(Cell) }, EBuildingPieceState::Active, false);
+	}
+	return Piece;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB6DemolishRulesTest,
+	"NullTide.Building.B6.DemolishRules",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB6DemolishRulesTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { B2FloorClass() }, 8);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid())) { return false; }
+	ABuildingPieceActor* Floor = B6Build(*this, Builder, B2FloorClass(), B2CellA);
+	ABuildingTestPieceActor* Authored = B6SpawnAuthoredFloor(Fixture, B2CellB);
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AActor* NotAPiece = Fixture.World->SpawnActor<AActor>(AActor::StaticClass(), FTransform(FVector(500.0, 100.0, 0.0)), Params);
+	if (!TestTrue(TEXT("Pieces set up"), Floor && Authored && NotAPiece)) { return false; }
+
+	const FB2Counts Before = FB2Counts::Capture(Builder);
+	const int32 PiecesBefore = Fixture.LivePieces();
+	int32 Requests = 0;
+	auto Check = [&](const TCHAR* Name, AActor* Target, const EBuildResult Expected, const TCHAR* Fragment)
+	{
+		const FBuildingDemolishResult Preflight = Builder.Construction->CanDemolish(Target);
+		const FBuildingDemolishResult Attempt = Builder.Construction->TryDemolish(Target);
+		++Requests;
+		B6Expect(*this, FString(Name) + TEXT(" (CanDemolish)"), Preflight, Expected);
+		B6Expect(*this, FString(Name) + TEXT(" (TryDemolish)"), Attempt, Expected);
+		TestTrue(FString::Printf(TEXT("%s: diagnostic names the rule \"%s\" (got \"%s\")"), Name, Fragment, *Attempt.Diagnostic),
+			Attempt.Diagnostic.Contains(Fragment));
+	};
+	Check(TEXT("Null"), nullptr, EBuildResult::NotDemolishable, TEXT("not a building piece"));
+	Check(TEXT("An actor without a piece"), NotAPiece, EBuildResult::NotDemolishable, TEXT("not a building piece"));
+	Check(TEXT("An authored piece"), Authored, EBuildResult::NotDemolishable, TEXT("not built by a player"));
+	Floor->GetBuildingPieceComponent()->SetPieceState(EBuildingPieceState::Provisional);
+	Check(TEXT("A provisional piece"), Floor, EBuildResult::NotDemolishable, TEXT("not an Active piece"));
+	Floor->GetBuildingPieceComponent()->SetPieceState(EBuildingPieceState::Active);
+	Builder.Pawn->SetActorLocation(FVector(-300.0, 0.0, 92.0));
+	Check(TEXT("Out of range"), Floor, EBuildResult::OutOfRange, TEXT("farther than"));
+	Builder.Pawn->SetActorLocation(FVector(0.0, 0.0, 92.0));
+
+	B2ExpectDelta(*this, TEXT("Refusals never touch the inventory"), Before, Builder, 0, 0, 0, 0);
+	TestEqual(TEXT("One demolish result per refused request"), Builder.Listener->DemolishResults.Num(), Requests);
+	TestTrue(TEXT("Every piece is still there and Active"), Fixture.LivePieces() == PiecesBefore && B6ActiveAlive(Floor) && B6ActiveAlive(Authored));
+
+	const FBuildingDemolishResult Ready = Builder.Construction->CanDemolish(Floor);
+	B6Expect(*this, TEXT("A player-built floor in range"), Ready, EBuildResult::Success);
+	TestTrue(TEXT("CanDemolish lists the piece and its refund and changes nothing"), Ready.Pieces.Num() == 1 && Ready.Pieces[0].Get() == Floor
+		&& B6RefundOf(Ready.Refund, B2Wood()) == 4 && Ready.Definition == B2FloorClass() && B6ActiveAlive(Floor)
+		&& Builder.Listener->DemolishResults.Num() == Requests);
+	B2ExpectDelta(*this, TEXT("CanDemolish never touches the inventory"), Before, Builder, 0, 0, 0, 0);
+	Fixture.Clean(*this, TEXT("Demolish rules"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB6RefundRoundingTest,
+	"NullTide.Building.B6.RefundRounding",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB6RefundRoundingTest::RunTest(const FString& Parameters)
+{
+	const FB5Assets Assets = FB5Assets::Load();
+	if (!Assets.IsValid(*this)) { return false; }
+	const TArray<FInventoryDefinitionQuantity> FloorRefund = UConstructionComponent::ComputeRefund(*Assets.Base.Floor->GetDefaultObject<UBuildingDefinition>());
+	const TArray<FInventoryDefinitionQuantity> WallRefund = UConstructionComponent::ComputeRefund(*Assets.Wall->GetDefaultObject<UBuildingDefinition>());
+	const TArray<FInventoryDefinitionQuantity> DoorRefund = UConstructionComponent::ComputeRefund(*Assets.Door->GetDefaultObject<UBuildingDefinition>());
+	TestTrue(TEXT("Wooden Floor refunds its full cost, Wood 4"), FloorRefund.Num() == 1 && B6RefundOf(FloorRefund, Assets.Base.Wood) == 4);
+	TestTrue(TEXT("Wooden Wall refunds Wood 6"), WallRefund.Num() == 1 && B6RefundOf(WallRefund, Assets.Base.Wood) == 6);
+	TestTrue(TEXT("Wooden Door refunds Wood 8 and Scrap 2"), DoorRefund.Num() == 2 && B6RefundOf(DoorRefund, Assets.Base.Wood) == 8
+		&& B6RefundOf(DoorRefund, Assets.Scrap) == 2);
+	TestTrue(TEXT("A partial refund of Wood x 1 (50%) rounds to nothing"), UConstructionComponent::ComputeRefund(*GetDefault<UBuildingTestTinyFloorDefinition>()).IsEmpty());
+
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { B6Tiny(), Assets.Base.Floor, Assets.Wall }, 1);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid() && Builder.Inventory)) { return false; }
+	Builder.Inventory->TryAddDefinitionQuantity(Assets.Base.Wood, 10);
+
+	// A refund of nothing: destroyed without a transaction.
+	ABuildingPieceActor* Tiny = B6Build(*this, Builder, B6Tiny(), B2CellA);
+	FB2Counts Before = FB2Counts::Capture(Builder);
+	const FBuildingDemolishResult TinyResult = Builder.Construction->TryDemolish(Tiny);
+	B6Expect(*this, TEXT("Demolish the tiny floor"), TinyResult, EBuildResult::Success);
+	TestTrue(TEXT("No refund, the piece is gone and its cell is free"), TinyResult.Refund.IsEmpty() && !B6Alive(Tiny)
+		&& Fixture.Subsystem->IsKeyFree(B2Key(B2CellA)));
+	B2ExpectDelta(*this, TEXT("A refund of nothing runs no transaction"), Before, Builder, 0, 0, 0, 0);
+
+	// A production wall: Wood +6 in one revision; the floor it stood on stays.
+	ABuildingPieceActor* Floor = B6Build(*this, Builder, Assets.Base.Floor, B2CellB);
+	ABuildingPieceActor* Wall = B6Build(*this, Builder, Assets.Wall, B6EdgeX1m1);
+	const int32 WoodBefore = Builder.Inventory->GetTotalQuantity(Assets.Base.Wood);
+	const int32 RevisionBefore = Builder.Inventory->GetRevision();
+	const FBuildingDemolishResult WallResult = Builder.Construction->TryDemolish(Wall);
+	B6Expect(*this, TEXT("Demolish the production wall"), WallResult, EBuildResult::Success);
+	TestTrue(FString::Printf(TEXT("Wood +6 in one revision (wood %d -> %d)"), WoodBefore, Builder.Inventory->GetTotalQuantity(Assets.Base.Wood)),
+		Builder.Inventory->GetTotalQuantity(Assets.Base.Wood) == WoodBefore + 6 && Builder.Inventory->GetRevision() == RevisionBefore + 1);
+	TestTrue(TEXT("Only the wall went; its edge is free"), !B6Alive(Wall) && B6ActiveAlive(Floor) && WallResult.Pieces.Num() == 1
+		&& Fixture.Subsystem->IsKeyFree(B5EdgeKey(EBuildingEdgeAxis::X, 1, -1)));
+	TestEqual(TEXT("One demolish result per request"), Builder.Listener->DemolishResults.Num(), 2);
+	Fixture.Clean(*this, TEXT("Refund rounding"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB6RefundDoesNotFitTest,
+	"NullTide.Building.B6.RefundDoesNotFit",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB6RefundDoesNotFitTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	// Exactly the cost of a floor and a wall, so no Wood stack is left to take the refund.
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { B2FloorClass(), B6Wall() }, 10);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid() && Builder.Inventory)) { return false; }
+	ABuildingPieceActor* Floor = B6Build(*this, Builder, B2FloorClass(), B2CellA);
+	ABuildingPieceActor* Wall = B6Build(*this, Builder, B6Wall(), B5EdgeX11);
+	// One Wood stack of 44 (stacks hold 50) and no free slot: Wood 6 still fits, Wood 10 does not.
+	Builder.Inventory->TryAddDefinitionQuantity(B2Wood(), 44);
+	B6FillInventory(Builder.Inventory);
+	if (!TestTrue(TEXT("Wood 44 in one stack and every slot taken"), Builder.Inventory->GetTotalQuantity(B2Wood()) == 44
+		&& Builder.Inventory->IsFull()))
+	{
+		return false;
+	}
+
+	const FB2Counts Before = FB2Counts::Capture(Builder);
+	const FBuildingDemolishResult WallPreview = Builder.Construction->CanDemolish(Wall);
+	B6Expect(*this, TEXT("The wall alone: its Wood 6 fits the stack"), WallPreview, EBuildResult::Success);
+	B6Expect(*this, TEXT("Floor with its wall (CanDemolish)"), Builder.Construction->CanDemolish(Floor), EBuildResult::RefundDoesNotFit);
+	const FBuildingDemolishResult FloorResult = Builder.Construction->TryDemolish(Floor);
+	B6Expect(*this, TEXT("Floor with its wall: the summed Wood 10 does not fit"), FloorResult, EBuildResult::RefundDoesNotFit);
+	TestTrue(TEXT("The refused result names the summed refund, Wood 4 + 6 = 10"), B6RefundOf(FloorResult.Refund, B2Wood()) == 10
+		&& FloorResult.Pieces.Num() == 2);
+	B2ExpectDelta(*this, TEXT("Refused demolition changes nothing"), Before, Builder, 0, 0, 0, 0);
+	TestTrue(TEXT("Both pieces stay Active and registered"), B6ActiveAlive(Floor) && B6ActiveAlive(Wall)
+		&& Fixture.Subsystem->GetOccupyingPiece(B5EdgeKey(EBuildingEdgeAxis::X, 1, 1)) == Wall->GetBuildingPieceComponent()
+		&& Fixture.PieceAt(B2CellA) == Floor);
+	TestEqual(TEXT("One result for the refused request"), Builder.Listener->DemolishResults.Num(), 1);
+
+	// One free slot takes the overflow: one transaction refunds both pieces.
+	Builder.Inventory->TryApplyDefinitionTransaction({ B2Cost(UInventoryTestItemDefinition::StaticClass(), 1) }, {});
+	const FB2Counts Freed = FB2Counts::Capture(Builder);
+	B6Expect(*this, TEXT("Floor with its wall after freeing a slot"), Builder.Construction->TryDemolish(Floor), EBuildResult::Success);
+	B2ExpectDelta(*this, TEXT("One transaction refunds both pieces"), Freed, Builder, 1, 1, 0, 10);
+	TestTrue(TEXT("Floor and wall are gone"), !B6Alive(Floor) && !B6Alive(Wall));
+	Fixture.Clean(*this, TEXT("Refund does not fit"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB6ExactlyOnceAndRegistryTest,
+	"NullTide.Building.B6.ExactlyOnceAndRegistry",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB6ExactlyOnceAndRegistryTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { B2FloorClass() }, 12);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid())) { return false; }
+	TArray<FBuildingDemolishResult>& Results = Builder.Listener->DemolishResults;
+
+	ABuildingPieceActor* Floor = B6Build(*this, Builder, B2FloorClass(), B2CellA);
+	FB2Counts Before = FB2Counts::Capture(Builder);
+	B6Expect(*this, TEXT("Demolish"), Builder.Construction->TryDemolish(Floor), EBuildResult::Success);
+	B2ExpectDelta(*this, TEXT("One revision, one event, Wood +4"), Before, Builder, 1, 1, 0, 4);
+	TestTrue(TEXT("Exactly one result; the piece is gone; its cell is free; the registry is clean"), Results.Num() == 1 && Results[0].IsSuccess()
+		&& !B6Alive(Floor) && Fixture.Subsystem->IsKeyFree(B2Key(B2CellA)) && Fixture.Clean(*this, TEXT("After demolition")));
+	ABuildingPieceActor* Rebuilt = B6Build(*this, Builder, B2FloorClass(), B2CellA);
+
+	// Nested requests from the refund broadcast neither run nor notify.
+	FBuildingDemolishResult Nested;
+	FBuildingConstructionResult NestedBuild;
+	Builder.Listener->InventoryHook = [&Builder, &Nested, &NestedBuild, Rebuilt]()
+	{
+		Nested = Builder.Construction->TryDemolish(Rebuilt);
+		NestedBuild = Builder.Construction->TryBuild(B2FloorClass(), B2Floor(B2CellB));
+	};
+	Before = FB2Counts::Capture(Builder);
+	B6Expect(*this, TEXT("Demolish with nested requests"), Builder.Construction->TryDemolish(Rebuilt), EBuildResult::Success);
+	Builder.Listener->InventoryHook = nullptr;
+	B6Expect(*this, TEXT("Nested demolish"), Nested, EBuildResult::BuildInProgress);
+	B2Expect(*this, TEXT("Nested build"), NestedBuild, EBuildResult::BuildInProgress);
+	B2ExpectDelta(*this, TEXT("Still one transaction and no build result"), Before, Builder, 1, 1, 0, 4);
+	TestTrue(TEXT("One more result only; nothing was built on cell B"), Results.Num() == 2 && !B6Alive(Rebuilt)
+		&& Fixture.Subsystem->IsKeyFree(B2Key(B2CellB)));
+
+	// A listener that destroys the piece during the refund: still Success, refunded once.
+	ABuildingPieceActor* Doomed = B6Build(*this, Builder, B2FloorClass(), B2CellA);
+	Builder.Listener->InventoryHook = [Doomed]() { if (IsValid(Doomed)) { Doomed->Destroy(); } };
+	Before = FB2Counts::Capture(Builder);
+	B6Expect(*this, TEXT("Demolish while a listener destroys the piece"), Builder.Construction->TryDemolish(Doomed), EBuildResult::Success);
+	Builder.Listener->InventoryHook = nullptr;
+	B2ExpectDelta(*this, TEXT("Refunded exactly once"), Before, Builder, 1, 1, 0, 4);
+	TestTrue(TEXT("Three results; the piece is gone"), Results.Num() == 3 && !B6Alive(Doomed));
+	Fixture.Clean(*this, TEXT("Exactly once and registry"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB6CascadeTest,
+	"NullTide.Building.B6.Cascade",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB6CascadeTest::RunTest(const FString& Parameters)
+{
+	const FB5Assets Assets = FB5Assets::Load();
+	if (!Assets.IsValid(*this)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { Assets.Base.Floor, Assets.Wall, Assets.Door }, 0);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid() && Builder.Inventory)) { return false; }
+	UInventoryComponent* Inventory = Builder.Inventory;
+	Inventory->TryAddDefinitionQuantity(Assets.Base.Wood, 60);
+	Inventory->TryAddDefinitionQuantity(Assets.Scrap, 2);
+
+	// Floor A carries three edge pieces with no other floor beside them; the fourth wall also stands on floor E.
+	ABuildingPieceActor* FloorA = B6Build(*this, Builder, Assets.Base.Floor, B2CellA);
+	ABuildingPieceActor* FloorE = B6Build(*this, Builder, Assets.Base.Floor, B6CellE);
+	ABuildingPieceActor* South = B6Build(*this, Builder, Assets.Wall, B5EdgeX11);
+	ABuildingPieceActor* West = B6Build(*this, Builder, Assets.Wall, B6EdgeY11);
+	ABuildingPieceActor* NorthDoor = B6Build(*this, Builder, Assets.Door, B6EdgeX12);
+	ABuildingPieceActor* Shared = B6Build(*this, Builder, Assets.Wall, B6EdgeY21);
+	if (!TestTrue(TEXT("Room built"), FloorA && FloorE && South && West && NorthDoor && Shared)) { return false; }
+
+	const FBuildingDemolishResult Preview = Builder.Construction->CanDemolish(FloorA);
+	B6Expect(*this, TEXT("Floor A (CanDemolish)"), Preview, EBuildResult::Success);
+	TestTrue(TEXT("The cascade: floor A first, then the south and west walls and the door, not the shared wall"),
+		Preview.Pieces.Num() == 4 && Preview.Pieces[0].Get() == FloorA && B6Contains(Preview, South) && B6Contains(Preview, West)
+		&& B6Contains(Preview, NorthDoor) && !B6Contains(Preview, Shared));
+	TestTrue(FString::Printf(TEXT("Summed full refund Wood 4+6+6+8 = 24, Scrap 2 (got Wood %d, Scrap %d)"), B6RefundOf(Preview.Refund, Assets.Base.Wood),
+		B6RefundOf(Preview.Refund, Assets.Scrap)), B6RefundOf(Preview.Refund, Assets.Base.Wood) == 24 && B6RefundOf(Preview.Refund, Assets.Scrap) == 2
+		&& Preview.Refund.Num() == 2);
+
+	const int32 WoodBefore = Inventory->GetTotalQuantity(Assets.Base.Wood);
+	const int32 ScrapBefore = Inventory->GetTotalQuantity(Assets.Scrap);
+	const int32 RevisionBefore = Inventory->GetRevision();
+	B6Expect(*this, TEXT("Demolish floor A"), Builder.Construction->TryDemolish(FloorA), EBuildResult::Success);
+	TestTrue(TEXT("One revision: Wood +24, Scrap +2"), Inventory->GetTotalQuantity(Assets.Base.Wood) == WoodBefore + 24
+		&& Inventory->GetTotalQuantity(Assets.Scrap) == ScrapBefore + 2 && Inventory->GetRevision() == RevisionBefore + 1);
+	TestTrue(TEXT("Floor A, both walls and the door are gone; their keys are free"), !B6Alive(FloorA) && !B6Alive(South) && !B6Alive(West)
+		&& !B6Alive(NorthDoor) && Fixture.Subsystem->IsKeyFree(B2Key(B2CellA))
+		&& Fixture.Subsystem->IsKeyFree(B5EdgeKey(EBuildingEdgeAxis::X, 1, 1)) && Fixture.Subsystem->IsKeyFree(B5EdgeKey(EBuildingEdgeAxis::Y, 1, 1))
+		&& Fixture.Subsystem->IsKeyFree(B5EdgeKey(EBuildingEdgeAxis::X, 1, 2)));
+	TestTrue(TEXT("The shared wall and floor E stay Active"), B6ActiveAlive(Shared) && B6ActiveAlive(FloorE));
+	TestEqual(TEXT("One demolish result for the whole cascade"), Builder.Listener->DemolishResults.Num(), 1);
+
+	// A wall target alone takes nothing with it; floor E then has no dependents.
+	const FBuildingDemolishResult WallResult = Builder.Construction->TryDemolish(Shared);
+	B6Expect(*this, TEXT("Demolish the shared wall"), WallResult, EBuildResult::Success);
+	TestTrue(TEXT("Only the wall went"), WallResult.Pieces.Num() == 1 && !B6Alive(Shared) && B6ActiveAlive(FloorE));
+	const FBuildingDemolishResult FloorEResult = Builder.Construction->CanDemolish(FloorE);
+	TestTrue(TEXT("Floor E alone: no dependents"), FloorEResult.IsSuccess() && FloorEResult.Pieces.Num() == 1);
+
+	// A dependent that no player built refuses the whole cascade.
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	const FBuildingPlacement AuthoredPlacement = B5Place(B6Wall(), FVector(605.0, 300.0, 0.0));
+	ABuildingTestWallPieceActor* AuthoredWall = Fixture.World->SpawnActor<ABuildingTestWallPieceActor>(ABuildingTestWallPieceActor::StaticClass(),
+		AuthoredPlacement.WorldTransform, Params);
+	if (TestNotNull(TEXT("Authored wall"), AuthoredWall))
+	{
+		AuthoredWall->GetBuildingPieceComponent()->InitializePiece(B6Wall(), AuthoredPlacement,
+			UBuildingSubsystem::ComputeOccupancyKeys(*GetDefault<UBuildingTestSupportedWallDefinition>(), AuthoredPlacement), EBuildingPieceState::Active, false);
+		AuthoredWall->DispatchBeginPlay();
+		TestTrue(TEXT("The authored wall holds floor E's east edge"),
+			Fixture.Subsystem->GetOccupyingPiece(B5EdgeKey(EBuildingEdgeAxis::Y, 3, 1)) == AuthoredWall->GetBuildingPieceComponent());
+		const FBuildingDemolishResult Refused = Builder.Construction->TryDemolish(FloorE);
+		B6Expect(*this, TEXT("Floor E carrying an authored wall"), Refused, EBuildResult::NotDemolishable);
+		TestTrue(FString::Printf(TEXT("The reason names the dependent (%s); nothing removed"), *Refused.Diagnostic),
+			Refused.Diagnostic.Contains(TEXT("cannot go with it")) && B6ActiveAlive(FloorE) && B6ActiveAlive(AuthoredWall));
+		AuthoredWall->Destroy();
+	}
+
+	// Layers: a floor on 16 cm ground is on layer 0, but its top (26 cm) puts the wall on it on layer 1.
+	B2SpawnBlocker(Fixture.World, FVector(300.0, -200.0, 8.0), FVector(100.0, 200.0, 8.0));
+	ABuildingPieceActor* Raised = B6Build(*this, Builder, Assets.Base.Floor, B2CellB);
+	ABuildingPieceActor* RaisedWall = B6Build(*this, Builder, Assets.Wall, B6EdgeX1m1);
+	if (TestTrue(TEXT("Raised floor and its wall built"), Raised && RaisedWall))
+	{
+		TestTrue(FString::Printf(TEXT("Floor on layer 0, wall on layer 1 (got %d and %d)"), Raised->GetBuildingPieceComponent()->GetPlacement().Layer,
+			RaisedWall->GetBuildingPieceComponent()->GetPlacement().Layer), Raised->GetBuildingPieceComponent()->GetPlacement().Layer == 0
+			&& RaisedWall->GetBuildingPieceComponent()->GetPlacement().Layer == 1);
+		const FBuildingDemolishResult RaisedResult = Builder.Construction->TryDemolish(Raised);
+		B6Expect(*this, TEXT("Demolish the raised floor"), RaisedResult, EBuildResult::Success);
+		TestTrue(TEXT("The wall on the next layer went with it"), RaisedResult.Pieces.Num() == 2 && !B6Alive(Raised) && !B6Alive(RaisedWall));
+	}
+	Fixture.Clean(*this, TEXT("Cascade"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB6StorageAndStationTest,
+	"NullTide.Building.B6.StorageAndStation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB6StorageAndStationTest::RunTest(const FString& Parameters)
+{
+	// Storage is always refused, alone or in a cascade.
+	{
+		FB2World Fixture;
+		if (!Fixture.IsValid(*this)) { return false; }
+		FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { B2FloorClass(), UBuildingTestStorageWallDefinition::StaticClass() }, 6);
+		if (!TestTrue(TEXT("Builder set up"), Builder.IsValid())) { return false; }
+		ABuildingPieceActor* Floor = B6Build(*this, Builder, B2FloorClass(), B2CellA);
+		ABuildingPieceActor* Storage = B6Build(*this, Builder, UBuildingTestStorageWallDefinition::StaticClass(), B5EdgeX11);
+		if (!TestTrue(TEXT("Floor and storage wall built"), Floor && Storage && Storage->FindComponentByClass<UStorageComponent>())) { return false; }
+		TestEqual(TEXT("The storage is empty"), Storage->FindComponentByClass<UStorageComponent>()->GetItemCount(), 0);
+		const FB2Counts Before = FB2Counts::Capture(Builder);
+		B6Expect(*this, TEXT("An empty storage (CanDemolish)"), Builder.Construction->CanDemolish(Storage), EBuildResult::IsStorage);
+		B6Expect(*this, TEXT("An empty storage (TryDemolish)"), Builder.Construction->TryDemolish(Storage), EBuildResult::IsStorage);
+		B6Expect(*this, TEXT("The floor under it (the storage is in the cascade)"), Builder.Construction->TryDemolish(Floor), EBuildResult::IsStorage);
+		B2ExpectDelta(*this, TEXT("Storage refusals change nothing"), Before, Builder, 0, 0, 0, 0);
+		TestTrue(TEXT("Floor and storage stay Active"), B6ActiveAlive(Floor) && B6ActiveAlive(Storage));
+		Fixture.Clean(*this, TEXT("Storage"));
+	}
+
+	// A workbench-like station: demolition is allowed and cancels the craft at it (StationLost), consuming nothing.
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(100.0, -150.0, 92.0), { UBuildingTestStationDefinition::StaticClass() }, 2);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid() && Builder.Inventory)) { return false; }
+	UCraftingComponent* Crafting = NewObject<UCraftingComponent>(Builder.Pawn);
+	Builder.Pawn->AddInstanceComponent(Crafting);
+	Crafting->RegisterComponent();
+	FArrayProperty* Recipes = FindFProperty<FArrayProperty>(UCraftingComponent::StaticClass(), TEXT("AvailableRecipes"));
+	if (!TestNotNull(TEXT("AvailableRecipes property"), Recipes)) { return false; }
+	*Recipes->ContainerPtrToValuePtr<TArray<TSubclassOf<UCraftingRecipeDefinition>>>(Crafting) = { UCraftingStationTimedTestRecipe::StaticClass() };
+
+	ABuildingPieceActor* StationPiece = B6Build(*this, Builder, UBuildingTestStationDefinition::StaticClass(), FVector(100.0, 100.0, 0.0));
+	UCraftingStationComponent* Station = StationPiece ? StationPiece->FindComponentByClass<UCraftingStationComponent>() : nullptr;
+	FClassProperty* StationKind = FindFProperty<FClassProperty>(UCraftingStationComponent::StaticClass(), TEXT("StationDefinition"));
+	if (!TestTrue(TEXT("Station piece built"), Station && StationKind)) { return false; }
+	*StationKind->ContainerPtrToValuePtr<TSubclassOf<UCraftingStationDefinition>>(Station) = UCraftingTestStationDefinition::StaticClass();
+	// Begun play, so destroying it routes EndPlay and OnEndPlay as in a running game (the C8A setup).
+	StationPiece->DispatchBeginPlay();
+
+	Builder.Inventory->TryAddDefinitionQuantity(B2Wood(), 3);
+	Builder.Inventory->TryAddDefinitionQuantity(UInventoryTestItemDefinition::StaticClass(), 1);
+	const FCraftingTransactionResult Started = Crafting->TryStartCraftAtStation(UCraftingStationTimedTestRecipe::StaticClass(), Station);
+	if (!TestTrue(TEXT("A timed craft runs at the station"), Started.Result == ECraftingTransactionResult::Started && Crafting->IsCrafting()))
+	{
+		return false;
+	}
+	const int32 WoodBefore = Builder.Inventory->GetTotalQuantity(B2Wood());
+	B6Expect(*this, TEXT("Demolish the station"), Builder.Construction->TryDemolish(StationPiece), EBuildResult::Success);
+	TestTrue(TEXT("The craft is cancelled and its station cleared"), !Crafting->IsCrafting() && !Crafting->GetActiveCraftStation());
+	TestTrue(TEXT("Nothing was consumed or produced; the refund is Wood +2"), Builder.Inventory->GetTotalQuantity(B2Wood()) == WoodBefore + 2
+		&& Builder.Inventory->GetTotalQuantity(UInventoryTestItemDefinition::StaticClass()) == 1
+		&& Builder.Inventory->GetTotalQuantity(B2Other()) == 0);
+	TestFalse(TEXT("The station piece is gone"), B6Alive(StationPiece));
+	Fixture.Clean(*this, TEXT("Station"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB6DemolishModeTest,
+	"NullTide.Building.B6.DemolishMode",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB6DemolishModeTest::RunTest(const FString& Parameters)
+{
+	UClass* HudClass = LoadClass<UBuildingHudWidget>(nullptr, B4HudPath);
+	if (!TestNotNull(TEXT("W_BuildingHud loads"), HudClass)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB4Player Player = B4SpawnPlayer(Fixture, { B2FloorClass(), B6Wall() }, 30);
+	if (!TestTrue(TEXT("Player set up"), Player.IsValid())) { return false; }
+	Player.Builder.Listener->DemolishResults.Reset();
+	UBuildingPlacementTestComponent* Placement = Player.Placement;
+	Placement->SetHudClass(HudClass);
+	Placement->SetCursor(B2CellC);
+	ABuildingPieceActor* Floor = B6Build(*this, Player.Builder, B2FloorClass(), B2CellA);
+	ABuildingPieceActor* Wall = B6Build(*this, Player.Builder, B6Wall(), B5EdgeX11);
+	ABuildingTestPieceActor* Authored = B6SpawnAuthoredFloor(Fixture, B2CellB);
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AActor* Ground = Fixture.World->SpawnActor<AActor>(AActor::StaticClass(), FTransform(FVector(700.0, 0.0, 0.0)), Params);
+	if (!TestTrue(TEXT("Pieces set up"), Floor && Wall && Authored && Ground)) { return false; }
+	const TArray<FBuildingDemolishResult>& Results = Player.Builder.Listener->DemolishResults;
+	auto Hud = [Placement]() { return Placement->GetHudWidget(); };
+	auto Visible = [Placement]() { return Placement->GetVisibleDemolishHighlights(); };
+	auto Hover = [Placement](AActor* Actor) { Placement->CursorHitActor = Actor; B4Tick(Placement); };
+
+	Placement->ToggleDemolishMode();
+	TestFalse(TEXT("C does nothing outside building mode"), Placement->IsDemolishModeActive());
+	if (!TestTrue(TEXT("Enter building mode"), Placement->EnterBuildingMode())) { return false; }
+	TestTrue(TEXT("Build hint mentions C"), Hud() && Hud()->GetHintText().ToString().Contains(TEXT("C demolish")));
+	Placement->ToggleDemolishMode();
+	TestTrue(TEXT("C switches to demolish; the build ghost hides"), Placement->IsDemolishModeActive() && Placement->GetPreviewActor()
+		&& Placement->GetPreviewActor()->IsHidden() && Hud()->GetHintText().ToString().Contains(TEXT("LMB demolish")));
+
+	Hover(Floor);
+	TArray<ABuildingPreviewActor*> Highlights = Visible();
+	bool bOnPieces = Highlights.Num() == 2;
+	for (const ABuildingPreviewActor* Highlight : Highlights)
+	{
+		bOnPieces &= Highlight->GetActorLocation().Equals(Floor->GetActorLocation(), 0.1) || Highlight->GetActorLocation().Equals(Wall->GetActorLocation(), 0.1);
+		bOnPieces &= Highlight->GetActorScale3D().Equals(FVector(1.02), 0.001) && !Highlight->GetFacingArrow()->IsVisible()
+			&& Highlight->IsPlacementValid();
+	}
+	TestTrue(FString::Printf(TEXT("The floor and the wall it carries are highlighted (%d)"), Highlights.Num()), bOnPieces);
+	TestTrue(FString::Printf(TEXT("HUD: the floor + 1 more, refund 10, ready (%s / %s / %s)"), *Hud()->GetBuildingNameText().ToString(),
+		*Hud()->GetCostText().ToString(), *Hud()->GetStatusText().ToString()),
+		Hud()->GetBuildingNameText().ToString() == TEXT("Demolish: Test Floor + 1 more") && Hud()->GetCostText().ToString().StartsWith(TEXT("Refund:"))
+		&& Hud()->GetCostText().ToString().Contains(TEXT("10")) && Hud()->GetStatusText().ToString() == TEXT("Ready to demolish") && Hud()->IsStatusValid());
+
+	Hover(Wall);
+	TestTrue(TEXT("A wall alone: one highlight"), Visible().Num() == 1 && Hud()->GetBuildingNameText().ToString() == TEXT("Demolish: Test Supported Wall"));
+	Hover(Authored);
+	TestTrue(TEXT("An authored piece: one red highlight and the reason"), Visible().Num() == 1 && !Visible()[0]->IsPlacementValid()
+		&& Hud()->GetStatusText().ToString() == TEXT("Can't demolish this") && !Hud()->IsStatusValid());
+	Hover(Ground);
+	TestTrue(TEXT("Not a building: nothing highlighted"), Visible().IsEmpty() && Hud()->GetStatusText().ToString() == TEXT("Point at a building"));
+	Hover(nullptr);
+	TestTrue(TEXT("Nothing under the cursor: nothing highlighted"), Visible().IsEmpty());
+	TestFalse(TEXT("Confirm over nothing fails"), Placement->ConfirmDemolish().IsSuccess());
+	TestEqual(TEXT("No demolish request without a target"), Results.Num(), 0);
+
+	Hover(Wall);
+	B6Expect(*this, TEXT("LMB on the wall"), Placement->ConfirmDemolish(), EBuildResult::Success);
+	TestTrue(TEXT("One request; the wall is gone; the HUD confirms"), Results.Num() == 1 && !B6Alive(Wall)
+		&& Hud()->GetStatusText().ToString() == TEXT("Demolished Test Supported Wall"));
+	Hover(Floor);
+	TestEqual(TEXT("The floor now carries nothing"), Visible().Num(), 1);
+
+	Placement->ToggleDemolishMode();
+	TestTrue(TEXT("C returns to building: highlights hidden, the ghost back, selection kept"), !Placement->IsDemolishModeActive()
+		&& Visible().IsEmpty() && !Placement->GetPreviewActor()->IsHidden() && Placement->GetSelectedBuildingIndex() == 0);
+	TestFalse(TEXT("Confirm demolish outside demolish mode fails"), Placement->ConfirmDemolish().IsSuccess());
+	Placement->ToggleDemolishMode();
+	Placement->ExitBuildingMode();
+	TestEqual(TEXT("Exit removes the ghost and every highlight"), B4CountPreviews(Fixture.World), 0);
+	Placement->EnterBuildingMode();
+	TestFalse(TEXT("The next entry starts in building"), Placement->IsDemolishModeActive());
+	Placement->ExitBuildingMode();
+	TestEqual(TEXT("Exactly one demolish result"), Results.Num(), 1);
+	Fixture.Clean(*this, TEXT("Demolish mode"));
 	return true;
 }
 

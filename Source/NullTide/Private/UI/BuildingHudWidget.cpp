@@ -11,8 +11,21 @@ void UBuildingHudWidget::NativeConstruct()
 	SetVisibility(ESlateVisibility::HitTestInvisible);
 	if (HintText)
 	{
-		HintText->SetText(LOCTEXT("Hint", "1-3 select  ·  R rotate  ·  LMB build  ·  RMB / B exit"));
+		HintText->SetText(LOCTEXT("Hint", "1-3 select  ·  R rotate  ·  C demolish  ·  LMB build  ·  RMB / B exit"));
 	}
+}
+
+void UBuildingHudWidget::SetHintText(const FText& Hint)
+{
+	if (HintText)
+	{
+		HintText->SetText(Hint);
+	}
+}
+
+FText UBuildingHudWidget::GetHintText() const
+{
+	return HintText ? HintText->GetText() : FText::GetEmpty();
 }
 
 void UBuildingHudWidget::SetBuildingText(const FText& BuildingName, const FText& Cost)

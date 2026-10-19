@@ -83,6 +83,30 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Building|Placement")
 	int32 GetPlacementRotation() const { return PlacementRotation; }
 
+	/**
+	 * In building mode, switches between building and demolishing (C). Demolish highlights the piece under the
+	 * cursor and everything a demolition would take with it; LMB demolishes. Outside building mode it does nothing.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Building|Placement")
+	void ToggleDemolishMode();
+
+	UFUNCTION(BlueprintPure, Category = "Building|Placement")
+	bool IsDemolishModeActive() const { return bDemolishModeActive; }
+
+	/** Demolishes the piece under the cursor once (re-resolved now). Outside demolish mode it fails and does nothing. */
+	UFUNCTION(BlueprintCallable, Category = "Building|Placement")
+	FBuildingDemolishResult ConfirmDemolish();
+
+	/** Last CanDemolish result for the hovered piece (read-only feedback). */
+	UFUNCTION(BlueprintPure, Category = "Building|Placement")
+	FBuildingDemolishResult GetDemolishPreview() const { return DemolishPreview; }
+
+	/** The demolish highlight ghosts currently shown (one per affected piece). */
+	TArray<ABuildingPreviewActor*> GetVisibleDemolishHighlights() const;
+
+	/** "Wood 3, Scrap 1"-style refund lines. */
+	static FText DescribeRefund(const TArray<FInventoryDefinitionQuantity>& Refund);
+
 	/** Last CanBuild result for the ghost (read-only feedback; never trusted for building). */
 	UFUNCTION(BlueprintPure, Category = "Building|Placement")
 	FBuildingConstructionResult GetPreviewResult() const { return PreviewResult; }
@@ -114,6 +138,9 @@ protected:
 	/** World point under the cursor (Visibility trace). Seam for tests. */
 	virtual bool GetCursorWorldLocation(FVector& OutLocation) const;
 
+	/** Actor under the cursor (Visibility trace), for demolish mode. Seam for tests. */
+	virtual AActor* GetCursorHitActor() const;
+
 	/** Whether this controller may run building mode (its player is on this machine). Seam for tests (no local player). */
 	virtual bool IsLocalBuilderController(const APlayerController& PlayerController) const;
 
@@ -139,6 +166,17 @@ private:
 	void HandleSelectInput(const FInputActionInstance& Instance);
 	/** Rebuilds the ghost for the selected piece and revalidates at the cursor now. */
 	void RefreshPreviewForSelection();
+
+	void HandleDemolishInput();
+	/** Demolish mode: resolves the hovered piece, revalidates (throttled unless forced) and updates the highlights. */
+	void UpdateDemolishPreview(bool bForceValidation);
+	void UpdateDemolishHighlights();
+	void HideDemolishHighlights();
+	void DestroyDemolishHighlights();
+	void RefreshDemolishHud();
+
+	UFUNCTION()
+	void HandleDemolishResult(TSubclassOf<UBuildingDefinition> DefinitionClass, const FBuildingDemolishResult& Result);
 
 	UFUNCTION()
 	void HandleControllerChanged(APawn* Pawn, AController* OldController, AController* NewController);
@@ -180,6 +218,10 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Building|Input", meta = (AllowPrivateAccess = "true"))
 	TArray<TObjectPtr<UInputAction>> SelectBuildingActions;
 
+	/** Started (building mode only): switch between building and demolishing. */
+	UPROPERTY(EditDefaultsOnly, Category = "Building|Input", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UInputAction> DemolishAction;
+
 	/** Translucent preview material with a Color vector parameter (M_BuildPreview). */
 	UPROPERTY(EditDefaultsOnly, Category = "Building|Placement", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMaterialInterface> PreviewMaterial;
@@ -197,6 +239,14 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Building|Placement", meta = (AllowPrivateAccess = "true"))
 	FLinearColor InvalidPreviewColor = FLinearColor(0.95f, 0.15f, 0.1f);
 
+	/** Highlight of the pieces a demolition will remove. */
+	UPROPERTY(EditDefaultsOnly, Category = "Building|Placement", meta = (AllowPrivateAccess = "true"))
+	FLinearColor DemolishPreviewColor = FLinearColor(1.f, 0.55f, 0.05f);
+
+	/** Demolish highlights are this much larger than the piece, so they never z-fight with it. */
+	UPROPERTY(EditDefaultsOnly, Category = "Building|Placement", meta = (AllowPrivateAccess = "true", ClampMin = "1.0"))
+	float DemolishHighlightScale = 1.02f;
+
 	UPROPERTY(Transient)
 	TObjectPtr<ABuildingPreviewActor> PreviewActor;
 
@@ -208,6 +258,18 @@ private:
 
 	int32 SelectedIndex = 0;
 	int32 PlacementRotation = 0;
+
+	/** One ghost per affected piece; pooled while the mode is active. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<ABuildingPreviewActor>> DemolishHighlights;
+
+	/** The piece each highlight was built from (rebuilt only when it changes). */
+	TArray<TWeakObjectPtr<AActor>> HighlightedPieces;
+
+	bool bDemolishModeActive = false;
+	TWeakObjectPtr<AActor> DemolishTarget;
+	FBuildingDemolishResult DemolishPreview;
+	double LastDemolishValidationTime = -1.0e9;
 
 	FBuildingConstructionResult PreviewResult;
 	FBuildingPlacement PreviewPlacement;

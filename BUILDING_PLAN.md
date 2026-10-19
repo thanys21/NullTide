@@ -1023,7 +1023,7 @@ Input contexts reaching the local player subsystem, key routing, and the `Floor_
 - **R-6 Static navigation.** If the level's nav mesh is static, runtime floors do not update it. Movement is WASD, so there is no impact now. Record it for NPC pathing (Phase 6).
 - **R-7 Test reach.** Native tests cannot drive real key presses or a real local player. Input routing is proven in PIE. The component exposes native entry points (`ToggleBuildingMode`, `ConfirmPlacement`, the cursor seam), so its logic is fully tested without input.
 
-### B5 — Wooden Wall and Wooden Door — PLAN APPROVED (user, 2026-10-17), IMPLEMENTED AND VALIDATED, awaiting commit approval
+### B5 — Wooden Wall and Wooden Door — COMPLETE / APPROVED (`b20f70a`)
 
 **Goal:** the player builds walls and doors on cell edges with the same building mode, picks the building with `1`/`2`/`3` and rotates with `R`, and opens or closes a built door with `F`. A small room with a door is buildable in PIE.
 
@@ -1225,11 +1225,193 @@ PIE findings (user): walls and doors build without a floor; the door prompt read
 - **R-6 Ghost transform composition.** A wrong composition misplaces the leaf ghost. The test asserts the composed hinge transform against a spawned door's real leaf.
 - **R-7 Map change for test resources.** One modified and one added external actor package. Saved by the user with Ctrl+S, then audited with `git status`.
 
-### B6 — Demolition and Refund
-- **Source:** `CanDemolish`/`TryDemolish`, demolish mode in the placement component, refund rules, storage and workbench protections, demolish results and text.
-- **Assets:** an `IA_BuildDemolish` (`X`) mapping in `IMC_Building`; HUD text.
-- **Tests:** player-built only; refund rounding; the refund does not fit → refused, piece stays; storage with items refused; an active workbench → `StationLost` (approved); exactly-once events; the cell becomes free again; reentrancy.
-- **PIE (user):** demolish floor, wall and door; refund received; authored storage, workbench and nodes cannot be demolished; nothing is lost.
+### B6 — Demolition and Refund — PLAN APPROVED (user, 2026-10-18; revised design; refund 100%), IMPLEMENTED AND VALIDATED
+
+**Goal:** in building mode, `X` switches to demolish. The piece under the cursor is highlighted with its refund, and LMB removes it and returns half its cost. Only player-built pieces can be demolished, and nothing is ever lost.
+
+**Baseline:** `b20f70a` (B5). Full automation 236/236, cook 639/7/646.
+
+#### Audit (2026-10-17)
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| Approved rules: player-built `Active` pieces only; range 600 cm; refund `floor(Quantity × 0.5)` per line, zero lines skipped; refused when the refund does not fit (`RefundDoesNotFit`); refund first, then destroy; storage with items refused; demolishing a workbench is allowed (C8 `StationLost`). | Section 6, 10.1 | B6 implements section 6 as written. Only the open points below need decisions. |
+| `TryBuild` sets `bPlayerBuilt = true` through `InitializePiece`; authored or test pieces default to false. | `ConstructionComponent.cpp:334-335`, `BuildingPieceComponent.h:75` | `bPlayerBuilt` is the demolition permission. |
+| `SetPieceState` is public and does not touch the registry. Keys stay occupied until the piece's `EndPlay` or destruction unregisters them. | `BuildingPieceComponent.h:51-52`, 2.3 | `Removing` → refund → `Destroy`; the keys free themselves. |
+| One `bBuildInProgress` guard; nested requests return `BuildInProgress` without notifying. | `ConstructionComponent.cpp:194-221` | `TryDemolish` shares the guard (4.4). |
+| Refund = an addition-only `TryApplyDefinitionTransaction`; exact preflight `CanApplyDefinitionTransaction`. | 1.1, `InventoryComponent` | No inventory change. |
+| `UWorld::DestroyActor` fails only for the world settings or for a networked actor without authority. | engine `LevelActor.cpp:856-880` | After the refund, `Destroy` cannot fail on the server. `CanDemolish` requires authority, so a client can never be refunded without the piece going. |
+| A crafting component binds the active station actor's `OnEndPlay` and cancels with `StationLost`. | `CraftingComponent.cpp:384-407` | A future buildable workbench needs no demolition code. |
+| No buildable storage or workbench exists yet. The authored `BP_StorageContainer` and `BP_Workbench` have no piece component. | B3–B5 content | The storage rule can only be tested with a native fixture (B6-3). |
+| The cursor uses `GetHitResultUnderCursorByChannel(Visibility)`. Pieces block Visibility (`BlockAllDynamic`); the door's `InteractionBounds` only overlaps, so single traces ignore it. | `BuildingPlacementComponent.cpp:484`, `BuildingDoorActor.cpp` | Hovering selects the piece actor itself. |
+| B5: walls and doors require a floor along one side (`bRequiresFloor`). | B5 rework | Demolishing a floor can leave a wall that no longer meets its own rule (B6-2). |
+
+#### Scope (with the recommended decisions)
+
+**Source:**
+- **`UConstructionComponent`:**
+  - `CanDemolish(AActor* Piece)` (exact read-only preflight) and `TryDemolish(AActor* Piece)`.
+  - `OnDemolishResult(Definition, Result)`, fired exactly once per non-reentrant request.
+  - Static `ComputeRefund(const UBuildingDefinition&)`.
+  - **Order in `TryDemolish`:**
+    1. guard;
+    2. validate: authority, a piece component that is `Active` and `bPlayerBuilt`, a valid definition, range, the storage rule, the floor-support rule (B6-2), an active inventory, the refund preflight;
+    3. set `Removing`;
+    4. one addition-only refund transaction;
+    5. on failure, set `Active` again (nothing changed); on success, `Destroy`.
+
+    A refund that rounds to nothing destroys without a transaction.
+  - **`FBuildingDemolishResult`:** `Result`, `Definition`, the `Refund` lines, a weak `Piece`, `Diagnostic`.
+  - **New `EBuildResult` codes (appended):** `NotDemolishable` (not a player-built `Active` piece), `RefundDoesNotFit`, `StorageNotEmpty`, `SupportsPieces`. Reused codes: `OutOfRange`, `BuildInProgress`, `InvalidInventory`.
+- **`UBuildingSubsystem`:** `FindDependentEdgePieces(const UBuildingPieceComponent& Floor)`, a registry read (B6-2). For each cell key of the floor, it looks at the four edge keys on the same layer. An occupant whose definition has `bRequiresFloor` depends on the floor when the cell on the other side of that edge has no `Active` Foundation.
+- **`UBuildingPlacementComponent`, demolish sub-mode (B6-1, B6-4):**
+  - `ToggleDemolishMode` is bound to `IA_BuildDemolish` (Started) and works only in building mode.
+  - In demolish mode, the tick resolves the piece under the cursor. A new test seam, `GetCursorHitActor`, does the trace.
+  - It runs `CanDemolish` on the throttle used for the placement preview. The ghost is rebuilt from the target's class and placed on it, scaled 1.02 to avoid z-fighting, with the arrow hidden. It is orange when demolishable and red when refused, and hidden when there is no piece under the cursor.
+  - LMB calls `TryDemolish` once, on the target re-resolved at press time.
+  - **HUD:**
+    - name "Demolish: Wooden Wall";
+    - the cost line becomes "Refund: Wood 3";
+    - status "Ready to demolish" or the reason;
+    - hint "X build · LMB demolish · RMB / B exit".
+  - `X` again returns to build mode with the previous selection. Every exit resets to build mode.
+- **Reason texts:**
+  - `NotDemolishable` → "Can't demolish this";
+  - `RefundDoesNotFit` → "Inventory full";
+  - `StorageNotEmpty` → "Empty it first";
+  - `SupportsPieces` → "Remove the walls first".
+- **No change** to inventory, crafting, storage, `PlayerInteractionComponent` or the screens.
+
+**Assets (MCP):**
+- `IA_BuildDemolish` (Boolean, consume, no triggers). `IMC_BuildingMode` adds X → Demolish (10 mappings).
+- `BP_TopDownCharacter`: the placement component gets `DemolishAction`.
+- No map change.
+
+**Not in B6:**
+- buildable storage or workbench;
+- cascade demolition;
+- a repair or damage system;
+- save/load of pieces;
+- the D3 thin-blocker fix (with furniture).
+
+#### Tests `NullTide.Building.B6.*` (planned, 7)
+
+| Test | Assertions |
+| --- | --- |
+| `DemolishRules` | Refused with nothing changed: null; an actor without a piece; a piece with `bPlayerBuilt` false; a provisional piece (inside `BeforeActivate`); out of range. `CanDemolish` equals `TryDemolish` for every case and never mutates. |
+| `RefundRounding` | Production refunds: floor Wood 2, wall Wood 3, door Wood 4 + Scrap 1. A fixture definition with quantity 1 refunds nothing and is destroyed without a transaction (no revision, no event). |
+| `RefundDoesNotFit` | Full inventory → `RefundDoesNotFit`; the piece stays `Active` and registered; no revision, no event, one result. |
+| `ExactlyOnceAndRegistry` | Success: one revision, one inventory event, one result; the piece is gone; its keys are free; the same cell can be rebuilt. A nested `TryDemolish` and a nested `TryBuild` from `OnInventoryChanged` return `BuildInProgress` without notifying. A listener destroying the piece during the refund still gives `Success`. |
+| `FloorSupport` | A floor under a wall with no other floor → `SupportsPieces`. With a floor on the other side → allowed. A floor with only a door on another edge also counts. Demolishing the wall first, then the floor → both allowed. |
+| `StorageAndStation` | Fixture piece with a `UStorageComponent`: items → `StorageNotEmpty`; empty → allowed. Fixture piece with a `UCraftingStationComponent`: a timed station craft in progress → demolish succeeds and the craft is cancelled with `StationLost`, nothing consumed. |
+| `DemolishMode` | `X` toggles only in building mode. The ghost is on the hovered piece: orange if demolishable, red if refused, hidden over nothing. HUD texts. LMB demolishes once and refunds. `X` returns to the previous selection. Exit resets to build mode. |
+
+- `B5.ProductionInput` changes from exactly 9 mappings to 10; B6 asserts X → `IA_BuildDemolish` and the character's `DemolishAction`.
+- Full suite expected **243** (236 + 7).
+
+#### Manual rendered PIE (user)
+
+1. In building mode, `X`: HUD "Demolish". Hover a wall: orange highlight, "Refund: Wood 3".
+2. LMB on a wall: it disappears and Wood +3. The edge can be built again.
+3. Demolish a door, open and closed: Wood +4, Scrap +1.
+4. A floor under a wall with no other floor beside it: red, "Remove the walls first". After the wall is gone, the floor can be demolished: Wood +2.
+5. Authored storage, the workbench, resource nodes and pickups: no highlight, or red "Can't demolish this".
+6. With a full inventory: red "Inventory full", nothing changes.
+7. `X` returns to building with the same selection; RMB or B exits; the cursor and other screens are unchanged.
+8. Storage, crafting and gathering are unchanged.
+
+#### Decisions — awaiting the user
+
+- **B6-1 Where `X` lives.**
+  - **Recommended:** in `IMC_BuildingMode` (active only in building mode), like `R` and 1–3.
+  - Alternative: in `IMC_Building` (always active while possessed), so that `X` from normal play enters building mode directly in demolish.
+- **B6-2 A floor that a wall or door stands on.**
+  - **Recommended:** refuse (`SupportsPieces`, "Remove the walls first") while an edge piece with `bRequiresFloor` has no other floor beside it.
+  - Alternatives: (b) allow, leaving the wall standing without a floor (it is not removed); (c) cascade, demolishing the dependent walls with their refunds (more transactions and more failure paths).
+- **B6-3 Storage and workbench protections.** No buildable storage or workbench exists yet.
+  - **Recommended:** implement the storage-not-empty check now, generically (any piece actor with a `UStorageComponent`), and test it and the existing `StationLost` path with native fixtures.
+  - Alternative: defer both until a buildable storage or workbench exists.
+- **B6-4 Demolish highlight.**
+  - **Recommended:** the existing ghost rebuilt on the target (scaled 1.02), orange or red, plus HUD text.
+  - Alternative: HUD text only, without a highlight.
+
+#### User decisions (2026-10-18) and the revised design — APPROVED (user, 2026-10-18; R-11 read as approved: storage is always refused)
+
+**Decisions:**
+- **B6-1:** demolish is reached only from building mode (`B`). Inside it, **`C`** (not `X`) switches between build and demolish. `IA_BuildDemolish` maps `C` in `IMC_BuildingMode`; `C` is unused in `IMC_Default`.
+- **B6-2: (c) cascade.** Demolishing a floor also demolishes every wall and door that would be left without a floor. **Every piece that will be removed is highlighted.**
+- **B6-3:** a piece that is a storage (has a `UStorageComponent`) is **refused, empty or not** (`StorageNotEmpty` becomes `IsStorage`, "Storage can't be demolished"). In a cascade, one storage piece refuses the whole request. A workbench stays allowed (C8 `StationLost`; not changed by the user).
+- **B6-4:** a ghost on every affected piece (follows from B6-2).
+
+**Revised design (replaces `SupportsPieces` and the single-piece flow):**
+- **Affected set.** `CanDemolish(Target)` and `TryDemolish(Target)` compute `S = {Target} ∪ dependents`.
+  - When the target is a floor, its dependents come from `UBuildingSubsystem::FindDependentEdgePieces(Floor)`: edge pieces on the floor's cell edges (same layer) with `bRequiresFloor` whose other side has no `Active` floor once this floor is gone.
+  - Depth 1: nothing depends on a wall or door, and floors never depend on walls.
+  - A wall or door target gives `S = {Target}`.
+- **Validation of `S`:**
+  - authority;
+  - every piece `Active` and `bPlayerBuilt`;
+  - no piece in `S` is a storage;
+  - the target within range (600 cm); dependents are adjacent, so not range-checked;
+  - an active inventory;
+  - the summed refund fits.
+
+  Any failure refuses the whole request, and nothing changes.
+- **Refund:** the per-piece refunds (`floor(Quantity × 0.5)` per line) are summed per item. One addition-only transaction gives one revision and one event for the whole cascade. If the total does not fit: `RefundDoesNotFit`, nothing removed.
+- **Order:**
+  1. guard;
+  2. validate `S`;
+  3. every piece in `S` → `Removing`;
+  4. one refund transaction;
+  5. on failure, all back to `Active`; on success, `Destroy` every piece (dependents first, then the target).
+
+  A total refund of nothing destroys without a transaction. `OnDemolishResult` fires once.
+- **`FBuildingDemolishResult`:** `Result`, the target's `Definition`, weak `Pieces` (all of `S`, target first), summed `Refund`, `Diagnostic`.
+- **Codes (appended):** `NotDemolishable`, `RefundDoesNotFit`, `IsStorage`; reused `OutOfRange`, `BuildInProgress`, `InvalidInventory`.
+- **Demolish mode:**
+  - `C` toggles it.
+  - Hovering resolves the target and `CanDemolish`. One ghost per piece in `S` (a small pool of preview actors, scaled 1.02, arrow hidden): orange when allowed, red on the target alone when refused, hidden over nothing.
+  - HUD: "Demolish: Wooden Floor + 2 walls", "Refund: Wood 8", status or reason, hint "C build · LMB demolish · RMB / B exit".
+  - LMB runs one `TryDemolish` on the target re-resolved at press time.
+
+**Tests (still 7; expected full suite 243):**
+- `FloorSupport` becomes **`Cascade`**:
+  - a floor with two walls and a door on edges with no other floor → all four removed, one transaction, refund Wood 2+3+3+4 and Scrap 1;
+  - a wall with a floor on its other side stays;
+  - a summed refund that does not fit → nothing removed;
+  - a storage fixture among the dependents → `IsStorage`, nothing removed;
+  - a wall target alone removes only the wall.
+- `StorageAndStation`: a storage fixture piece is refused, empty and with items; a station fixture piece → `StationLost`, nothing consumed.
+- `DemolishMode`: `C` toggles only in building mode; the ghost count equals the affected set and follows the hover; red on refusal; HUD text.
+- `ProductionInput`: C → `IA_BuildDemolish`.
+
+**PIE changes:**
+- Step 1 uses `C`.
+- Step 4 becomes: "Hover a floor that carries walls: the floor and those walls are all highlighted. LMB removes them all, refunding their sum."
+
+**User decision after the first B6 PIE (2026-10-18): refund 100%.**
+- Demolition returns the full cost; this replaces the B0 decision of 50% with floor rounding.
+- `UBuildingDefinition::RefundFraction` now defaults to 1.0, and `Building_WoodFloor`, `Building_WoodWall` and `Building_WoodDoor` are set to 1.0. The field and its 0..1 validation stay, so a building can still be given a partial refund later.
+- Storage refusal could not be checked in PIE because no buildable storage exists yet; it is covered by the native fixture test.
+
+**Added risks:**
+- **R-8 Cascade size:** a floor has at most 4 edges, so at most 4 dependents.
+- **R-9 One transaction for several pieces:** the refund preflight and commit use the summed lines, so capacity is all-or-nothing.
+- **R-10 Destroying several actors:** each `EndPlay` unregisters its own keys. A listener that destroys one of them during the refund broadcast makes that `Destroy` a no-op.
+- **R-11 B6-3 interpretation:** "if it is a chest, reject" is read as **always refuse storage**, not only when it holds items. The user can correct this.
+
+#### Self-critique (open risks)
+
+- **R-1 Refund, then destroy:** the refund is the commit point.
+  - `Destroy` cannot fail with authority (engine `LevelActor.cpp:856-880`).
+  - A listener that destroys the piece during the refund broadcast makes our `Destroy` a no-op; the result is still `Success`.
+  - A listener calling `TryDemolish` or `TryBuild` gets `BuildInProgress`.
+- **R-2 `Removing` during the broadcast:** the piece is not `Active`, so it supports nothing for listeners, while its keys stay occupied until `EndPlay` (a rebuild attempted inside the broadcast gives `Occupied`). This is intended.
+- **R-3 The floor-support rule uses registry keys and layers, not traces.** A wall standing on a floor of another layer is not counted. Acceptable at the MVP's single-storey scale.
+- **R-4 A door demolished mid-swing:** its timer is cleared in `EndPlay` (B5).
+- **R-5 Highlight overlay:** a translucent ghost slightly larger than an opaque piece; PIE step 1 checks the look. A hidden arrow and no collision are asserted.
+- **R-6 Demolishing the floor under the player:** the player drops 10 cm. No refusal is planned.
+- **R-7 Network:** a client is refused before any refund (authority check). Multiplayer is otherwise out of scope.
 
 **Dependencies:** B1 → B2 → B3 → B4 → B5 → B6. B5 needs B4 for PIE; B6 needs B3–B5 content. Each checkpoint gets a build, focused tests, regressions (Crafting, Inventory, Gameplay, ResourceGathering), the full suite, the cook, a content and WP audit, docs, and a commit only after review.
 

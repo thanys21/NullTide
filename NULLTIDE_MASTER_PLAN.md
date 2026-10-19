@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building IN PROGRESS: B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 (construction authority: activate first, pay last) COMPLETE / APPROVED (full automation 219/219, cook PASS); B3 (Wooden Floor: first buildable, construction component on the player) COMPLETE / APPROVED (full automation 223/223, cook PASS); B4 (building mode, ghost preview, input) COMPLETE / APPROVED (full automation 230/230, cook PASS, manual PIE 8/8 PASS); B5 (walls and doors, selection and rotation) IMPLEMENTED AND VALIDATED, awaiting commit approval (full automation 236/236, cook PASS, manual PIE PASS after the rework). Crafting queue and the inventory/crafting UI-UX pass are deferred.
+> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building IN PROGRESS: B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 (construction authority: activate first, pay last) COMPLETE / APPROVED (full automation 219/219, cook PASS); B3 (Wooden Floor: first buildable, construction component on the player) COMPLETE / APPROVED (full automation 223/223, cook PASS); B4 (building mode, ghost preview, input) COMPLETE / APPROVED (full automation 230/230, cook PASS, manual PIE 8/8 PASS); B5 (walls and doors, selection and rotation) COMPLETE / APPROVED (full automation 236/236, cook PASS, manual PIE PASS; `b20f70a`); B6 (demolition: C key, cascade, full refund) IMPLEMENTED AND VALIDATED, awaiting commit approval (full automation 243/243, cook PASS, PIE retest: full refund confirmed). Crafting queue and the inventory/crafting UI-UX pass are deferred.
 
 ---
 
@@ -808,7 +808,7 @@ Crafting C8C Workstation Crafting UI  ✅
 Phase 4 Crafting                    ✅
 
 NEXT:
-Phase 5 Building: IN PROGRESS — B0 approved, B1-B4 complete; B5 implemented, awaiting acceptance (see BUILDING_PROGRESS.md)
+Phase 5 Building: IN PROGRESS — B0 approved, B1-B5 complete; B6 implemented, awaiting acceptance (see BUILDING_PROGRESS.md)
 ```
 
 ---
@@ -1445,7 +1445,7 @@ Do not implement without a dedicated milestone.
 
 # 15. Recommended Next Immediate Checkpoint
 
-## Building — B5 Wooden Wall and Wooden Door (implemented and validated, awaiting commit approval)
+## Building — B6 Demolition and Refund (implemented and validated, awaiting acceptance)
 
 Phase 4 Crafting is COMPLETE (C1–C8; see `CRAFTING_PROGRESS.md`). Phase 5 Building is IN PROGRESS:
 - B0 architecture is APPROVED (`BUILDING_PLAN.md`).
@@ -1456,22 +1456,21 @@ Phase 4 Crafting is COMPLETE (C1–C8; see `CRAFTING_PROGRESS.md`). Phase 5 Buil
   - The player builds floors with `B`, the cursor ghost and LMB.
   - `Floor_0` is now `WorldStatic`.
   - 7 B4 tests; full automation 230/230; cook PASS; manual rendered PIE 8/8 PASS.
+- **B5 (walls and doors, selection and rotation) is COMPLETE / APPROVED** (`b20f70a`).
+  - Walls and doors on cell edges (they need a floor on one side); `1`/`2`/`3` select, `R` rotates; the ghost shows a facing arrow; the door opens with `F` towards its facing side.
+  - 6 B5 tests; full automation 236/236; cook PASS; manual rendered PIE PASS after the rework.
 
-Claude instruction (B4 is committed; the B5 plan is in BUILDING_PLAN.md section 7):
+- **B6 (demolition and refund) is IMPLEMENTED AND VALIDATED, awaiting acceptance.**
+  - `C` in building mode switches to demolish. A floor takes the walls and doors it alone carries. Storage is always refused. The refund is 100%.
+  - 7 B6 tests; full automation 243/243; cook PASS; PIE retest: full refund confirmed.
+
+Claude instruction (B6 is implemented; see BUILDING_PROGRESS.md B6):
 
 ```text
-1. Read BUILDING_PLAN.md (sections 2.4, 4.4, 7 B5, 10.2/10.3 door decisions)
-   and BUILDING_PROGRESS.md (B4, including the carried limitations).
-2. Write the B5 plan with its self-critique and STOP for user approval.
-   It must cover edge placement end to end, rotation (R) and the build-bar
-   selection deferred from B4, ABuildingDoorActor, the door's BPI_Interactable
-   manual editor step (decision 10.2-1), and nested ghost meshes if the wall
-   or door pieces need them.
-3. No demolition in B5 (B6).
-4. Build + focused tests + regression + full suite + BP compile + cook +
-   content/WP audit + the user's manual rendered PIE.
-5. Update BUILDING_PROGRESS.md and this plan. STOP before commit with the
-   handoff report (AGENTS.md workflow).
+1. Wait for the user's commit approval for B6.
+2. After the commit, review BUILDING_PLAN.md for the remaining Phase 5
+   scope (deferred items, D3 thin-blocker fix with furniture) and propose
+   the next checkpoint plan. STOP for approval.
 ```
 
 This keeps Building incremental and keeps inventory, crafting, storage and interaction authority unchanged.
@@ -1579,7 +1578,24 @@ Full permanent suite                                                       223/2
 
 B3 clean build: 0 compiler warnings (test code only). Windows cook: `Done!`, 0 errors, 2 environment warnings (624/7/631, +2: `Building_WoodFloor` and `BP_BuildFloor`, both in the cooked asset registry). Content: 2 added assets and `BP_TopDownCharacter` modified; no map or World Partition change (`__ExternalActors__` 91, `__ExternalObjects__` 3). No manual PIE required.
 
-At the completion of Building B5 (implemented and validated, awaiting user acceptance):
+At the completion of Building B6 (implemented and validated, awaiting user acceptance):
+
+```text
+Focused Building B6                                                              7/7
+Building B1-B6                                                                 53/53
+Full permanent suite                                                       243/243
+```
+
+B6 clean build: 0 compiler warnings. Windows cook: `Done!`, 0 errors, 2 environment warnings (640/7/647, +1 `IA_BuildDemolish`, in the cooked asset registry).
+
+Content:
+- `IA_BuildDemolish` added;
+- `IMC_BuildingMode` (C → demolish), `BP_TopDownCharacter` (`DemolishAction`) and the three building definitions (`RefundFraction` 1.0, the user's full-refund decision) modified;
+- `__ExternalActors__` 94, `__ExternalObjects__` 3; no map change.
+
+Manual rendered PIE: the first run passed, and the user changed the refund to 100%. The retest confirmed the full refund.
+
+At the completion of Building B5 (approved, `b20f70a`):
 
 ```text
 Focused Building B5                                                              6/6
@@ -1780,12 +1796,12 @@ Current input:
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
-- Building B5 6/6, B4 7/7, B3 4/4, B2 20/20, B1 9/9 (8 + OverlapOnlyVolumes); Crafting C8C 7/7 (C8B 3/3, C8A 11/11)
+- Building B6 7/7, B5 6/6, B4 7/7, B3 4/4, B2 20/20, B1 9/9 (8 + OverlapOnlyVolumes); Crafting C8C 7/7 (C8B 3/3, C8A 11/11)
 - crafting C1-C8C 69/69
-- full 236/236 (230 + 6 Building B5)
+- full 243/243 (236 + 7 Building B6)
 
 Next:
-Phase 5 Building: B5 commit approval; then the B6 (demolition) plan. Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
+Phase 5 Building: B6 commit approval; then the Phase 5 wrap-up (the remaining Building scope in BUILDING_PLAN.md). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1829,7 +1845,7 @@ Phase 4  Crafting                           ✅
                 C8B Workbench actor          ✅
                 C8C Station crafting UI      ✅
 
-Phase 5  Building                           ⏭ IN PROGRESS (B0 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 implemented, awaiting acceptance)
+Phase 5  Building                           ⏭ IN PROGRESS (B0 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 implemented, awaiting acceptance)
 
 Phase 6  Colony
 

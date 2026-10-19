@@ -1,6 +1,7 @@
 #include "Building/BuildingPlacementComponent.h"
 
 #include "Building/BuildingDefinition.h"
+#include "Building/BuildingPieceComponent.h"
 #include "Building/BuildingPreviewActor.h"
 #include "Building/BuildingSubsystem.h"
 #include "Engine/LocalPlayer.h"
@@ -117,6 +118,11 @@ void UBuildingPlacementComponent::BindToController(AController* Controller)
 					&UBuildingPlacementComponent::HandleSelectInput).GetHandle());
 			}
 		}
+		if (DemolishAction)
+		{
+			InputBindingHandles.Add(Input->BindAction(DemolishAction, ETriggerEvent::Started, this,
+				&UBuildingPlacementComponent::HandleDemolishInput).GetHandle());
+		}
 	}
 	if (UEnhancedInputLocalPlayerSubsystem* Subsystem = GetInputSubsystem(PlayerController))
 	{
@@ -155,7 +161,19 @@ void UBuildingPlacementComponent::HandleToggleInput()
 
 void UBuildingPlacementComponent::HandleConfirmInput()
 {
-	ConfirmPlacement();
+	if (bDemolishModeActive)
+	{
+		ConfirmDemolish();
+	}
+	else
+	{
+		ConfirmPlacement();
+	}
+}
+
+void UBuildingPlacementComponent::HandleDemolishInput()
+{
+	ToggleDemolishMode();
 }
 
 void UBuildingPlacementComponent::HandleCancelInput()
@@ -165,7 +183,7 @@ void UBuildingPlacementComponent::HandleCancelInput()
 
 void UBuildingPlacementComponent::HandleRotateInput()
 {
-	if (bBuildingModeActive)
+	if (bBuildingModeActive && !bDemolishModeActive)
 	{
 		RotatePlacement();
 	}
@@ -174,8 +192,15 @@ void UBuildingPlacementComponent::HandleRotateInput()
 void UBuildingPlacementComponent::HandleSelectInput(const FInputActionInstance& Instance)
 {
 	const int32 Index = SelectBuildingActions.IndexOfByKey(Instance.GetSourceAction());
-	if (bBuildingModeActive && Index != INDEX_NONE)
+	const UConstructionComponent* Construction = GetConstruction();
+	// A key without a registered building does nothing, in either sub-mode.
+	if (bBuildingModeActive && Index != INDEX_NONE && Construction && Construction->GetAvailableBuildings().IsValidIndex(Index))
 	{
+		// Picking a building while demolishing returns to building with it.
+		if (bDemolishModeActive)
+		{
+			ToggleDemolishMode();
+		}
 		SelectBuildingIndex(Index);
 	}
 }
@@ -278,6 +303,10 @@ bool UBuildingPlacementComponent::EnterBuildingMode()
 	HudWidget = CreateHudWidget(*PlayerController);
 
 	Construction->OnBuildResult.AddUniqueDynamic(this, &UBuildingPlacementComponent::HandleBuildResult);
+	Construction->OnDemolishResult.AddUniqueDynamic(this, &UBuildingPlacementComponent::HandleDemolishResult);
+	bDemolishModeActive = false;
+	DemolishPreview = FBuildingDemolishResult();
+	DemolishTarget.Reset();
 	PreviewResult = FBuildingConstructionResult();
 	bHasPreviewPlacement = false;
 	LastValidationTime = -1.0e9;
@@ -305,7 +334,13 @@ void UBuildingPlacementComponent::ExitBuildingMode()
 	if (UConstructionComponent* Construction = GetConstruction())
 	{
 		Construction->OnBuildResult.RemoveDynamic(this, &UBuildingPlacementComponent::HandleBuildResult);
+		Construction->OnDemolishResult.RemoveDynamic(this, &UBuildingPlacementComponent::HandleDemolishResult);
 	}
+	// Every exit returns to building for the next entry.
+	bDemolishModeActive = false;
+	DemolishPreview = FBuildingDemolishResult();
+	DemolishTarget.Reset();
+	DestroyDemolishHighlights();
 	if (PreviewActor)
 	{
 		PreviewActor->Destroy();
@@ -388,6 +423,234 @@ void UBuildingPlacementComponent::HandleBuildResult(TSubclassOf<UBuildingDefinit
 	LastValidationTime = -1.0e9;
 }
 
+void UBuildingPlacementComponent::ToggleDemolishMode()
+{
+	if (!bBuildingModeActive)
+	{
+		return;
+	}
+	bDemolishModeActive = !bDemolishModeActive;
+	DemolishTarget.Reset();
+	DemolishPreview = FBuildingDemolishResult();
+	LastDemolishValidationTime = -1.0e9;
+	ResultMessageUntil = -1.0e9;
+	if (bDemolishModeActive)
+	{
+		bHasPreviewPlacement = false;
+		if (PreviewActor)
+		{
+			PreviewActor->SetActorHiddenInGame(true);
+		}
+		UpdateDemolishPreview(true);
+	}
+	else
+	{
+		HideDemolishHighlights();
+		// Back to building with the previous selection and rotation.
+		RefreshPreviewForSelection();
+	}
+}
+
+FBuildingDemolishResult UBuildingPlacementComponent::ConfirmDemolish()
+{
+	UConstructionComponent* Construction = GetConstruction();
+	if (!bBuildingModeActive || !bDemolishModeActive || !Construction)
+	{
+		FBuildingDemolishResult Inactive;
+		Inactive.Diagnostic = TEXT("Demolish mode is not active.");
+		return Inactive;
+	}
+	// The target is re-resolved at press time; the hover preview is never trusted.
+	UpdateDemolishPreview(true);
+	AActor* Target = DemolishTarget.Get();
+	if (!Target)
+	{
+		FBuildingDemolishResult NoTarget;
+		NoTarget.Diagnostic = TEXT("No building piece under the cursor.");
+		ShowResultMessage(LOCTEXT("NoDemolishTarget", "Point at a building"), false);
+		return NoTarget;
+	}
+	return Construction->TryDemolish(Target);
+}
+
+TArray<ABuildingPreviewActor*> UBuildingPlacementComponent::GetVisibleDemolishHighlights() const
+{
+	TArray<ABuildingPreviewActor*> Visible;
+	for (ABuildingPreviewActor* Highlight : DemolishHighlights)
+	{
+		if (IsValid(Highlight) && !Highlight->IsHidden())
+		{
+			Visible.Add(Highlight);
+		}
+	}
+	return Visible;
+}
+
+void UBuildingPlacementComponent::UpdateDemolishPreview(const bool bForceValidation)
+{
+	UConstructionComponent* Construction = GetConstruction();
+	const UWorld* World = GetWorld();
+	if (!bBuildingModeActive || !bDemolishModeActive || !Construction || !World)
+	{
+		return;
+	}
+	// Only building pieces are targets; anything else under the cursor is "nothing to demolish".
+	AActor* Hovered = GetCursorHitActor();
+	AActor* Target = Hovered && Hovered->FindComponentByClass<UBuildingPieceComponent>() ? Hovered : nullptr;
+	const bool bChanged = Target != DemolishTarget.Get();
+	const double Now = World->GetTimeSeconds();
+	DemolishTarget = Target;
+	if (!Target)
+	{
+		DemolishPreview = FBuildingDemolishResult();
+	}
+	else if (bForceValidation || bChanged || Now - LastDemolishValidationTime >= PreviewRefreshInterval)
+	{
+		DemolishPreview = Construction->CanDemolish(Target);
+		LastDemolishValidationTime = Now;
+	}
+	UpdateDemolishHighlights();
+	RefreshHud();
+}
+
+void UBuildingPlacementComponent::UpdateDemolishHighlights()
+{
+	UWorld* World = GetWorld();
+	TArray<AActor*> Pieces;
+	if (AActor* Target = DemolishTarget.Get())
+	{
+		if (DemolishPreview.IsSuccess())
+		{
+			for (const TWeakObjectPtr<AActor>& Piece : DemolishPreview.Pieces)
+			{
+				if (Piece.IsValid())
+				{
+					Pieces.Add(Piece.Get());
+				}
+			}
+		}
+		else
+		{
+			// A refused request highlights only the hovered piece, in the invalid color.
+			Pieces.Add(Target);
+		}
+	}
+	const FLinearColor Color = DemolishPreview.IsSuccess() ? DemolishPreviewColor : InvalidPreviewColor;
+	for (int32 Index = 0; Index < Pieces.Num(); ++Index)
+	{
+		if (!DemolishHighlights.IsValidIndex(Index))
+		{
+			FActorSpawnParameters Params;
+			Params.Owner = GetOwner();
+			Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+			Params.ObjectFlags |= RF_Transient;
+			DemolishHighlights.Add(World ? World->SpawnActor<ABuildingPreviewActor>(ABuildingPreviewActor::StaticClass(), FTransform::Identity, Params) : nullptr);
+			HighlightedPieces.Add(nullptr);
+		}
+		ABuildingPreviewActor* Highlight = DemolishHighlights[Index];
+		if (!Highlight)
+		{
+			continue;
+		}
+		if (HighlightedPieces[Index].Get() != Pieces[Index])
+		{
+			Highlight->InitializeFromPieceClass(Pieces[Index]->GetClass(), PreviewMaterial);
+			Highlight->SetFacingArrowVisible(false);
+			HighlightedPieces[Index] = Pieces[Index];
+		}
+		FTransform Transform = Pieces[Index]->GetActorTransform();
+		Transform.SetScale3D(Transform.GetScale3D() * DemolishHighlightScale);
+		Highlight->SetActorTransform(Transform);
+		Highlight->SetPlacementValid(DemolishPreview.IsSuccess(), Color, Color);
+		Highlight->SetActorHiddenInGame(false);
+	}
+	for (int32 Index = Pieces.Num(); Index < DemolishHighlights.Num(); ++Index)
+	{
+		if (DemolishHighlights[Index])
+		{
+			DemolishHighlights[Index]->SetActorHiddenInGame(true);
+		}
+	}
+}
+
+void UBuildingPlacementComponent::HideDemolishHighlights()
+{
+	for (ABuildingPreviewActor* Highlight : DemolishHighlights)
+	{
+		if (IsValid(Highlight))
+		{
+			Highlight->SetActorHiddenInGame(true);
+		}
+	}
+}
+
+void UBuildingPlacementComponent::DestroyDemolishHighlights()
+{
+	for (ABuildingPreviewActor* Highlight : DemolishHighlights)
+	{
+		if (IsValid(Highlight))
+		{
+			Highlight->Destroy();
+		}
+	}
+	DemolishHighlights.Reset();
+	HighlightedPieces.Reset();
+}
+
+void UBuildingPlacementComponent::RefreshDemolishHud()
+{
+	HudWidget->SetHintText(LOCTEXT("DemolishHint", "C build  ·  LMB demolish  ·  RMB / B exit"));
+	const UBuildingDefinition* Definition = DemolishTarget.IsValid() && DemolishPreview.Definition
+		? DemolishPreview.Definition->GetDefaultObject<UBuildingDefinition>() : nullptr;
+	if (!DemolishTarget.IsValid())
+	{
+		HudWidget->SetBuildingText(LOCTEXT("DemolishTitle", "Demolish"), FText::GetEmpty());
+	}
+	else
+	{
+		const FText Name = Definition ? Definition->BuildingName : FText::FromString(DemolishTarget->GetName());
+		const int32 Extra = DemolishPreview.IsSuccess() ? DemolishPreview.Pieces.Num() - 1 : 0;
+		const FText Title = Extra > 0
+			? FText::Format(LOCTEXT("DemolishMany", "Demolish: {0} + {1} more"), Name, FText::AsNumber(Extra))
+			: FText::Format(LOCTEXT("DemolishOne", "Demolish: {0}"), Name);
+		const FText Refund = DemolishPreview.Refund.IsEmpty() ? LOCTEXT("NoRefund", "No refund")
+			: FText::Format(LOCTEXT("Refund", "Refund: {0}"), DescribeRefund(DemolishPreview.Refund));
+		HudWidget->SetBuildingText(Title, Refund);
+	}
+	const UWorld* World = GetWorld();
+	if (World && World->GetTimeSeconds() < ResultMessageUntil)
+	{
+		HudWidget->SetStatusText(ResultMessage, bResultMessageValid);
+	}
+	else if (!DemolishTarget.IsValid())
+	{
+		HudWidget->SetStatusText(LOCTEXT("PointAtBuilding", "Point at a building"), false);
+	}
+	else if (DemolishPreview.IsSuccess())
+	{
+		HudWidget->SetStatusText(LOCTEXT("ReadyToDemolish", "Ready to demolish"), true);
+	}
+	else
+	{
+		HudWidget->SetStatusText(DescribeResult(DemolishPreview.Result), false);
+	}
+}
+
+void UBuildingPlacementComponent::HandleDemolishResult(TSubclassOf<UBuildingDefinition> DefinitionClass, const FBuildingDemolishResult& Result)
+{
+	const UBuildingDefinition* Definition = DefinitionClass ? DefinitionClass->GetDefaultObject<UBuildingDefinition>() : nullptr;
+	if (Result.IsSuccess())
+	{
+		ShowResultMessage(FText::Format(LOCTEXT("Demolished", "Demolished {0}"), Definition ? Definition->BuildingName : FText::GetEmpty()), true);
+	}
+	else
+	{
+		ShowResultMessage(DescribeResult(Result.Result), false);
+	}
+	LastDemolishValidationTime = -1.0e9;
+	LastValidationTime = -1.0e9;
+}
+
 void UBuildingPlacementComponent::ShowResultMessage(const FText& Message, const bool bValid)
 {
 	const UWorld* World = GetWorld();
@@ -402,6 +665,11 @@ void UBuildingPlacementComponent::TickComponent(float DeltaTime, ELevelTick Tick
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	if (!bBuildingModeActive)
 	{
+		return;
+	}
+	if (bDemolishModeActive)
+	{
+		UpdateDemolishPreview(false);
 		return;
 	}
 	FVector CursorLocation;
@@ -426,7 +694,7 @@ void UBuildingPlacementComponent::UpdatePreviewAt(const FVector& WorldLocation, 
 	UConstructionComponent* Construction = GetConstruction();
 	const UBuildingDefinition* Definition = SelectedBuilding ? SelectedBuilding->GetDefaultObject<UBuildingDefinition>() : nullptr;
 	const UWorld* World = GetWorld();
-	if (!bBuildingModeActive || !Construction || !Definition || !World)
+	if (!bBuildingModeActive || bDemolishModeActive || !Construction || !Definition || !World)
 	{
 		return;
 	}
@@ -455,6 +723,12 @@ void UBuildingPlacementComponent::RefreshHud()
 	{
 		return;
 	}
+	if (bDemolishModeActive)
+	{
+		RefreshDemolishHud();
+		return;
+	}
+	HudWidget->SetHintText(LOCTEXT("BuildHint", "1-3 select  ·  R rotate  ·  C demolish  ·  LMB build  ·  RMB / B exit"));
 	const UBuildingDefinition* Definition = SelectedBuilding ? SelectedBuilding->GetDefaultObject<UBuildingDefinition>() : nullptr;
 	const UConstructionComponent* Construction = GetConstruction();
 	if (Definition)
@@ -487,6 +761,17 @@ bool UBuildingPlacementComponent::GetCursorWorldLocation(FVector& OutLocation) c
 	}
 	OutLocation = Hit.ImpactPoint;
 	return true;
+}
+
+AActor* UBuildingPlacementComponent::GetCursorHitActor() const
+{
+	const APlayerController* PlayerController = ModeController.Get();
+	FHitResult Hit;
+	if (!PlayerController || !PlayerController->GetHitResultUnderCursorByChannel(UEngineTypes::ConvertToTraceType(ECC_Visibility), true, Hit))
+	{
+		return nullptr;
+	}
+	return Hit.GetActor();
 }
 
 bool UBuildingPlacementComponent::IsLocalBuilderController(const APlayerController& PlayerController) const
@@ -530,6 +815,12 @@ FText UBuildingPlacementComponent::DescribeResult(const EBuildResult Result)
 		return LOCTEXT("BlocksBuilder", "Too close to you");
 	case EBuildResult::NeedsFloor:
 		return LOCTEXT("NeedsFloor", "Needs a floor");
+	case EBuildResult::NotDemolishable:
+		return LOCTEXT("NotDemolishable", "Can't demolish this");
+	case EBuildResult::RefundDoesNotFit:
+		return LOCTEXT("RefundDoesNotFit", "Inventory full");
+	case EBuildResult::IsStorage:
+		return LOCTEXT("IsStorage", "Storage can't be demolished");
 	case EBuildResult::InsufficientResources:
 		return LOCTEXT("Insufficient", "Not enough resources");
 	case EBuildResult::InvalidInventory:
@@ -561,6 +852,18 @@ FText UBuildingPlacementComponent::DescribeCost(const UBuildingDefinition& Defin
 		Lines.Add(FText::Format(LOCTEXT("CostLine", "{0} {1}/{2}"), Name, FText::AsNumber(Have), FText::AsNumber(Line.Quantity)));
 	}
 	return FText::Join(LOCTEXT("CostSeparator", ", "), Lines);
+}
+
+FText UBuildingPlacementComponent::DescribeRefund(const TArray<FInventoryDefinitionQuantity>& Refund)
+{
+	TArray<FText> Lines;
+	for (const FInventoryDefinitionQuantity& Line : Refund)
+	{
+		const UItemDefinition* Item = Line.DefinitionClass ? Line.DefinitionClass->GetDefaultObject<UItemDefinition>() : nullptr;
+		const FText Name = Item && !Item->ItemName.IsEmpty() ? Item->ItemName : FText::FromString(GetNameSafe(Line.DefinitionClass.Get()));
+		Lines.Add(FText::Format(LOCTEXT("RefundLine", "{0} {1}"), Name, FText::AsNumber(Line.Quantity)));
+	}
+	return FText::Join(LOCTEXT("RefundSeparator", ", "), Lines);
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -94,7 +94,13 @@ enum class EBuildResult : uint8
 	/** The cost transaction failed at payment; the piece was rolled back and the inventory is unchanged. */
 	ResourcesRejectedRolledBack,
 	/** An edge piece that requires a floor has no Active floor along either side of its edge. */
-	NeedsFloor
+	NeedsFloor,
+	/** Demolition: not an Active, player-built building piece (or one of the pieces it would take with it is not). */
+	NotDemolishable,
+	/** Demolition: the full refund does not fit into the builder's inventory; nothing was removed. */
+	RefundDoesNotFit,
+	/** Demolition: a storage piece is never demolished (its contents must never be lost). */
+	IsStorage
 };
 
 /** One occupancy slot: a floor cell, a canonical edge or a furniture cell, on one height layer. */

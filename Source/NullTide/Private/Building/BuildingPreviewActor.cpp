@@ -124,6 +124,11 @@ ABuildingPreviewActor::ABuildingPreviewActor()
 	MakeGhostMesh(ArrowHead);
 }
 
+void ABuildingPreviewActor::SetFacingArrowVisible(const bool bVisible)
+{
+	FacingArrow->SetVisibility(bVisible, true);
+}
+
 void ABuildingPreviewActor::SetFacingArrow(const bool bEdgePiece)
 {
 	// Edge pieces face local +Y (the side a door opens to); cell pieces face local +X.

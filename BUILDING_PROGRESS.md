@@ -11,8 +11,8 @@ Plan and design decisions: `BUILDING_PLAN.md`.
 | B2 Construction authority | COMPLETE / APPROVED (20/20; full automation 219/219; cook PASS; no manual PIE required; commit `bccd0bc`, pushed). Design approved 2026-10-14 (D1–D8, D3 option (a)). |
 | B3 First buildable: Wooden Floor | COMPLETE / APPROVED (4/4; full automation 223/223; cook PASS 624/7/631; no manual PIE required; commit `ff04c0e`, pushed). |
 | B4 Building mode, ghost preview, input | COMPLETE / APPROVED (7/7; full automation 230/230; cook PASS; manual rendered PIE 8/8 PASS; commit `7ce9be3`; test aid `305e23a`). |
-| B5 Wooden wall and wooden door | IMPLEMENTED AND VALIDATED — awaiting commit approval (6/6; full automation 236/236; cook PASS 639/7/646; manual rendered PIE PASS after the rework). Plan approved 2026-10-17 (B5-1 to B5-5; rework R1–R3, D1–D3). |
-| B6 | NOT STARTED |
+| B5 Wooden wall and wooden door | COMPLETE / APPROVED (6/6; full automation 236/236; cook PASS 639/7/646; manual rendered PIE PASS after the rework; commit `b20f70a`). Plan approved 2026-10-17 (B5-1 to B5-5; rework R1–R3, D1–D3). |
+| B6 Demolition and refund | IMPLEMENTED AND VALIDATED — awaiting commit approval (7/7; full automation 243/243; cook PASS 640/7/647). Plan approved 2026-10-18 (C key, cascade, storage always refused; refund 100%). |
 
 ## B1 - Data Model, Grid Coordinates, Occupancy and Placement Validation
 
@@ -654,6 +654,87 @@ The user's first PIE run found three problems:
 - Interaction targets the last overlapped interactable (risk R-4): a door next to storage or the workbench may target the wrong one.
 - Navigation with the dynamic nav mesh is PIE-only.
 
+## B6 - Demolition and Refund
+
+### Baseline and Scope
+
+- **Baseline:** `b20f70a` (B5). Full automation 236/236, cook 639/7/646.
+- **Scope (user-approved 2026-10-18; `BUILDING_PLAN.md` section 7 B6, "User decisions (2026-10-18) and the revised design"):**
+  - **B6-1:** `C` switches between build and demolish, inside building mode only.
+  - **B6-2:** a floor takes with it every wall and door it alone carries (cascade), and every affected piece is highlighted.
+  - **B6-3:** storage pieces are always refused. A workbench is allowed (`StationLost`).
+  - **B6-4:** a highlight ghost on every affected piece.
+  - **After the first PIE: refund 100%.**
+- **Not in scope:** buildable storage or workbench, repair or damage, save/load, the D3 thin-blocker fix.
+
+### Source
+
+| File | Content |
+| --- | --- |
+| `Building/BuildingTypes.h` | Appended `NotDemolishable`, `RefundDoesNotFit`, `IsStorage`. |
+| `Building/ConstructionComponent.h/.cpp` | `FBuildingDemolishResult` (native-only weak `Pieces`, summed `Refund`), `OnDemolishResult`, `CanDemolish`, `TryDemolish` and static `ComputeRefund`. <br>• **Validation:** a player-built `Active` target with authority; its refund first; range; the cascade from `FindDependentEdgePieces`; no storage anywhere; every dependent player-built and `Active`; an active inventory; the summed refund preflight. <br>• **Commit:** all `Removing` → one addition-only refund transaction (the commit point) → on failure all `Active` again → on success `Destroy` dependents, then the target (weak actors). A refund of nothing runs no transaction. One result per non-reentrant request; nested requests return `BuildInProgress`. |
+| `Building/BuildingSubsystem.h/.cpp` | `FindDependentEdgePieces`: a registry read over the floor's cell edges. Dependents are edge pieces with `bRequiresFloor` and no other `Active` floor across. Wall layers are L and the layer of the floor's top; far-side floors count at the wall's layer or the one below. |
+| `Building/BuildingDefinition.h` | `RefundFraction` defaults to 1.0 (full refund). |
+| `Building/BuildingPlacementComponent.h/.cpp` | Demolish sub-mode: `ToggleDemolishMode`, `ConfirmDemolish`, `GetDemolishPreview`, `GetVisibleDemolishHighlights`, `DescribeRefund`. <br>• `DemolishAction` (Started) is bound; LMB routes to the current sub-mode; R is ignored in demolish; a valid 1–3 key returns to building. <br>• A pooled highlight per affected piece: the piece's class ghost on its transform ×1.02, arrow hidden, orange when allowed and red on the target alone when refused. <br>• HUD: "Demolish: {name} (+ N more)", "Refund: …", "Ready to demolish" or the reason. <br>• Every exit resets to building and destroys the highlights. <br>• New seam `GetCursorHitActor`. |
+| `Building/BuildingPreviewActor`, `UI/BuildingHudWidget` | `SetFacingArrowVisible`; `SetHintText`/`GetHintText` (build and demolish hints). |
+| Tests | `BuildingTestTypes.h`: thin wall, storage wall and station pieces; tiny (partial-refund), supported-wall, storage-wall and station definitions; a cursor-hit seam on the placement test component; demolish results on the listener. `ConstructionTests.cpp`: the B6 section. The B1, B3 and B5 refund assertions now expect 1.0, and `B5.ProductionInput` expects 10 mappings including C. |
+
+### Assets (Unreal MCP)
+
+- New `Input/IA_BuildDemolish` (Boolean, consume, no triggers). `IMC_BuildingMode` adds C → Demolish (10 mappings).
+- `BP_TopDownCharacter`: the placement component's `DemolishAction`.
+- `Building_WoodFloor`, `Building_WoodWall`, `Building_WoodDoor`: `RefundFraction` 1.0.
+- All compiled with warnings as errors and saved by path. No map change.
+
+### Tests `NullTide.Building.B6.*` (7)
+
+| Test | Covers |
+| --- | --- |
+| `DemolishRules` | Null, non-piece, authored, provisional and out-of-range targets are refused identically by `CanDemolish` and `TryDemolish`, with nothing changed and one result each. A valid preflight changes nothing. |
+| `RefundRounding` | Full refunds: floor Wood 4, wall Wood 6, door Wood 8 + Scrap 2. A partial refund that rounds to nothing runs no transaction. A production wall refunds in one revision; the floor stays. |
+| `RefundDoesNotFit` | A stack with room for the wall's Wood 6 but not the cascade's Wood 10: the wall alone passes and the floor with its wall is refused, with nothing changed. After a slot is freed, one transaction refunds both. |
+| `ExactlyOnceAndRegistry` | One revision, one event and one result; keys freed; the cell can be rebuilt. Nested demolish and build give `BuildInProgress`. A listener destroying the piece still gives `Success`, refunded once. |
+| `Cascade` | The floor, two walls and a door go together with the summed refund (Wood 24, Scrap 2) in one revision; a wall with a floor beside it stays. A wall target goes alone. An authored dependent refuses the cascade. Layers: a floor on 16 cm ground (layer 0) takes its wall on layer 1. |
+| `StorageAndStation` | A storage wall is refused, empty, alone and in a cascade. A station with a timed craft: demolition succeeds, the craft is cancelled, nothing is consumed, Wood +2. |
+| `DemolishMode` | C works only in building mode; hints; orange highlights on the floor and its wall (scale, arrow hidden); a red highlight on an authored piece; nothing on non-pieces; LMB demolishes once; C returns to building with the selection; exit destroys every highlight; the next entry starts in building. |
+
+### Validation
+
+- **Build:** clean builds with the editor closed; 0 warnings.
+- **Tests:**
+  - first command-line Building run: 52/53. The only failure was `B5.ProductionInput` before `IA_BuildDemolish` existed.
+  - in-editor after the assets: `NullTide` 243/243.
+  - final command line after the review fixes and the refund change: `NullTide` **243/243**, exit 0.
+- **Windows cook** (editor closed): `Done!`, 0 errors, 2 environment warnings; 640 cooked, 7 skipped, 647 total (+1). `IA_BuildDemolish` is in the cooked asset registry.
+- **Content and World Partition audit:**
+  - added `IA_BuildDemolish`;
+  - modified `IMC_BuildingMode`, `BP_TopDownCharacter` and the three definitions;
+  - `__ExternalActors__` 94, `__ExternalObjects__` 3; no map change.
+- **Manual rendered PIE (user):**
+  - The first run was reported OK, with one change requested: refund 100%. Storage could not be tested (no buildable storage).
+  - Retest after the refund change and the review fixes (user, 2026-10-19): "ok có refund đầy đủ", so the full refund is confirmed.
+
+### Self-Review (including a fresh-context review pass; no P0 or P1)
+
+| Finding | Resolution |
+| --- | --- |
+| P2: a floor on layer L carries walls on L + 1 when its top rounds up (ground at 15–25 cm), so the cascade missed them; with mixed layers it could take a wall another floor supports | **CONFIRMED, fixed.** Walls are searched on L and the top's layer; far-side floors count at the wall's layer and the one below. `Cascade` covers the layer case on 16 cm ground. |
+| P3: a refused preview showed "No refund" | **CONFIRMED, fixed.** The target's refund is computed before range and cascade checks. |
+| P3: the destroy loop held weak components | **CONFIRMED, fixed.** It holds weak actors. |
+| P3: an unregistered 1–3 key left demolish mode | **CONFIRMED, fixed.** The key must name a registered building. |
+| P3: tests could not tell a summed refund preflight from a per-piece one; red and orange colours untested; no authored dependent | **CONFIRMED, fixed** (see `RefundDoesNotFit`, `DemolishMode`, `Cascade`). |
+| P3: the code's check order differs from the plan's list (range before the cascade and storage; storage before the dependents' player-built check) | **Recorded.** All orders refuse with nothing changed. The code's order is the documented one. |
+| P3: HUD says "+ N more" instead of "+ 2 walls"; an open door's highlight shows it closed | **Recorded** (cosmetic). |
+| P3: `CanDemolish` can say `Success` while a `TryDemolish` from inside another inventory broadcast gets `InvalidInventory` (`Busy`) | **Recorded.** It is the existing `TryBuild` pattern, and it is safe (rollback). |
+| P3: untested multi-cell floors, `InvalidInventory`, key routing while demolishing | **Recorded.** The interior edges of a multi-cell floor count as dependents by construction (`Other != &Floor`). |
+
+### Known Limitations Carried Forward
+
+- Storage refusal is covered only by a fixture until a buildable storage exists.
+- Highlights use each piece's default pose (an open door shows closed).
+- The cascade is one level deep and single-storey: walls depend on floors, and nothing depends on walls.
+- D3 thin border blockers (from B5) remain, to be fixed with furniture.
+
 ## Next Checkpoint
 
-B5 is implemented and validated (automation 236/236, cook PASS, manual PIE PASS). It waits for the commit approval. Next after B5: B6 (demolition and refund). Phase 5 stays IN PROGRESS.
+B5 is COMPLETE / APPROVED (commit `b20f70a`). B6 is implemented and validated (automation 243/243, cook PASS, PIE retest: full refund confirmed). It waits for the commit approval. Phase 5 stays IN PROGRESS.

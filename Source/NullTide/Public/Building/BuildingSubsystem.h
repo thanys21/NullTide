@@ -97,6 +97,12 @@ public:
 	bool IsKeyFree(const FBuildingOccupancyKey& Key, const FBuildingReservationHandle& IgnoreReservation = FBuildingReservationHandle()) const;
 	UBuildingPieceComponent* GetOccupyingPiece(const FBuildingOccupancyKey& Key) const;
 	bool IsPieceRegistered(const UBuildingPieceComponent* Piece) const;
+
+	/**
+	 * Registry read for demolition: the edge pieces on this floor's cell edges (same layer) that require a floor
+	 * and have no other Active floor on the far side, so they would be left without one. Empty for non-floors.
+	 */
+	TArray<UBuildingPieceComponent*> FindDependentEdgePieces(const UBuildingPieceComponent& Floor) const;
 	bool IsReservationActive(const FBuildingReservationHandle& Handle) const;
 	int32 GetOccupiedKeyCount() const;
 	int32 GetReservedKeyCount() const;

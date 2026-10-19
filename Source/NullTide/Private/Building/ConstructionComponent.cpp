@@ -7,6 +7,8 @@
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "Inventory/InventoryComponent.h"
+#include "Items/ItemDefinition.h"
+#include "Storage/StorageComponent.h"
 
 #if WITH_EDITOR
 #include "Misc/DataValidation.h"
@@ -451,6 +453,264 @@ void UConstructionComponent::BeginPlay()
 	Super::BeginPlay();
 	// A component can begin play again after EndPlay without being destroyed (for example level streaming).
 	bEndPlayed = false;
+}
+
+// ---- Demolition (B6) ----
+
+namespace
+{
+/** Adds refund lines to a total, one line per item. */
+void AddRefundLines(TArray<FInventoryDefinitionQuantity>& Total, const TArray<FInventoryDefinitionQuantity>& Lines)
+{
+	for (const FInventoryDefinitionQuantity& Line : Lines)
+	{
+		FInventoryDefinitionQuantity* Existing = Total.FindByPredicate([&Line](const FInventoryDefinitionQuantity& Entry)
+		{
+			return Entry.DefinitionClass == Line.DefinitionClass;
+		});
+		if (Existing)
+		{
+			Existing->Quantity += Line.Quantity;
+		}
+		else
+		{
+			Total.Add(Line);
+		}
+	}
+}
+
+/** A piece demolition may remove: alive, Active, player-built, owned with authority, with valid building data. */
+const UBuildingDefinition* ResolveDemolishablePiece(const UBuildingPieceComponent* Piece, FString& OutDiagnostic)
+{
+	const AActor* Owner = Piece ? Piece->GetOwner() : nullptr;
+	if (!IsValid(Owner) || Owner->IsActorBeingDestroyed())
+	{
+		OutDiagnostic = TEXT("The piece is gone.");
+		return nullptr;
+	}
+	if (!Piece->IsActivePiece())
+	{
+		OutDiagnostic = FString::Printf(TEXT("%s is not an Active piece."), *Owner->GetName());
+		return nullptr;
+	}
+	if (!Piece->IsPlayerBuilt())
+	{
+		OutDiagnostic = FString::Printf(TEXT("%s was not built by a player."), *Owner->GetName());
+		return nullptr;
+	}
+	if (!Owner->HasAuthority())
+	{
+		// Destroy after the refund would fail without authority (UWorld::DestroyActor), so never start.
+		OutDiagnostic = FString::Printf(TEXT("%s has no authority here."), *Owner->GetName());
+		return nullptr;
+	}
+	return UBuildingDefinition::ResolveValidBuilding(Piece->GetBuildingDefinition(), OutDiagnostic);
+}
+
+EBuildResult RefundFailureResult(const EInventoryOperationResult Result)
+{
+	return Result == EInventoryOperationResult::NotInitialized || Result == EInventoryOperationResult::Busy
+		? EBuildResult::InvalidInventory : EBuildResult::RefundDoesNotFit;
+}
+}
+
+TArray<FInventoryDefinitionQuantity> UConstructionComponent::ComputeRefund(const UBuildingDefinition& Definition)
+{
+	TArray<FInventoryDefinitionQuantity> Refund;
+	const double Fraction = FMath::Clamp(static_cast<double>(Definition.RefundFraction), 0.0, 1.0);
+	for (const FInventoryDefinitionQuantity& Line : Definition.Cost)
+	{
+		// The epsilon keeps exact products (6 x 0.5) from rounding down through float error.
+		const int32 Quantity = FMath::FloorToInt(Line.Quantity * Fraction + 1.0e-6);
+		if (Line.DefinitionClass && Quantity > 0)
+		{
+			FInventoryDefinitionQuantity Entry;
+			Entry.DefinitionClass = Line.DefinitionClass;
+			Entry.Quantity = Quantity;
+			AddRefundLines(Refund, { Entry });
+		}
+	}
+	return Refund;
+}
+
+bool UConstructionComponent::ValidateDemolish(AActor* Target, TArray<UBuildingPieceComponent*>& OutPieces,
+	UInventoryComponent*& OutInventory, FBuildingDemolishResult& OutResult) const
+{
+	OutPieces.Reset();
+	OutInventory = nullptr;
+	OutResult = FBuildingDemolishResult();
+	auto Fail = [&OutResult](const EBuildResult Code, const FString& Diagnostic)
+	{
+		OutResult.Result = Code;
+		OutResult.Diagnostic = Diagnostic;
+		return false;
+	};
+	if (bEndPlayed)
+	{
+		return Fail(EBuildResult::NotDemolishable, TEXT("The construction component has ended play."));
+	}
+	UBuildingPieceComponent* TargetPiece = IsValid(Target) ? Target->FindComponentByClass<UBuildingPieceComponent>() : nullptr;
+	if (!TargetPiece)
+	{
+		return Fail(EBuildResult::NotDemolishable, FString::Printf(TEXT("%s is not a building piece."), *GetNameSafe(Target)));
+	}
+	OutResult.Definition = TargetPiece->GetBuildingDefinition();
+	OutResult.Pieces.Add(Target);
+	const AActor* Owner = GetOwner();
+	if (!IsValid(Owner) || !Owner->HasAuthority())
+	{
+		return Fail(EBuildResult::NotDemolishable, TEXT("The builder has no authority here."));
+	}
+	FString Diagnostic;
+	const UBuildingDefinition* TargetDefinition = ResolveDemolishablePiece(TargetPiece, Diagnostic);
+	if (!TargetDefinition)
+	{
+		return Fail(EBuildResult::NotDemolishable, Diagnostic);
+	}
+	// The target's refund is known before any later refusal, so a refused preview can still show it.
+	AddRefundLines(OutResult.Refund, ComputeRefund(*TargetDefinition));
+	const double Range = TargetDefinition->BuildRangeOverride > 0.f ? TargetDefinition->BuildRangeOverride : UBuildingSubsystem::DefaultBuildRange;
+	if (FVector::DistSquared2D(Owner->GetActorLocation(), Target->GetActorLocation()) > FMath::Square(Range))
+	{
+		return Fail(EBuildResult::OutOfRange, FString::Printf(TEXT("The piece is farther than %.0f cm."), Range));
+	}
+
+	// The cascade (B6-2): a floor takes the walls and doors that would be left without a floor.
+	OutPieces.Add(TargetPiece);
+	if (TargetDefinition->Category == EBuildingCategory::Foundation)
+	{
+		const UWorld* World = GetWorld();
+		const UBuildingSubsystem* Subsystem = World ? World->GetSubsystem<UBuildingSubsystem>() : nullptr;
+		if (!Subsystem)
+		{
+			return Fail(EBuildResult::InvalidPlacement, TEXT("No building subsystem in this world."));
+		}
+		for (UBuildingPieceComponent* Dependent : Subsystem->FindDependentEdgePieces(*TargetPiece))
+		{
+			if (Dependent && !OutPieces.Contains(Dependent))
+			{
+				OutPieces.Add(Dependent);
+				OutResult.Pieces.Add(Dependent->GetOwner());
+			}
+		}
+	}
+
+	// A storage piece is never demolished, alone or in a cascade (B6-3).
+	for (const UBuildingPieceComponent* Piece : OutPieces)
+	{
+		if (Piece->GetOwner() && Piece->GetOwner()->FindComponentByClass<UStorageComponent>())
+		{
+			return Fail(EBuildResult::IsStorage, FString::Printf(TEXT("%s is a storage."), *Piece->GetOwner()->GetName()));
+		}
+	}
+	for (int32 Index = 1; Index < OutPieces.Num(); ++Index)
+	{
+		const UBuildingDefinition* DependentDefinition = ResolveDemolishablePiece(OutPieces[Index], Diagnostic);
+		if (!DependentDefinition)
+		{
+			return Fail(EBuildResult::NotDemolishable, FString::Printf(TEXT("A piece standing on this floor cannot go with it: %s"), *Diagnostic));
+		}
+		AddRefundLines(OutResult.Refund, ComputeRefund(*DependentDefinition));
+	}
+
+	OutInventory = GetInventory();
+	if (!IsValid(OutInventory) || !OutInventory->IsNativeAuthorityActive())
+	{
+		return Fail(EBuildResult::InvalidInventory, IsValid(OutInventory) ? TEXT("The builder's native inventory authority is not active.")
+			: TEXT("The construction component's owner has no inventory component."));
+	}
+	if (!OutResult.Refund.IsEmpty())
+	{
+		const FInventoryTransactionResult Preflight = OutInventory->CanApplyDefinitionTransaction({}, OutResult.Refund);
+		if (!Preflight.IsSuccess())
+		{
+			return Fail(RefundFailureResult(Preflight.Result), FString::Printf(TEXT("The refund does not fit (%s, refund line %d)."),
+				*InventoryResultName(Preflight.Result), Preflight.FailedIndex));
+		}
+	}
+	return true;
+}
+
+FBuildingDemolishResult UConstructionComponent::CanDemolish(AActor* Piece) const
+{
+	FBuildingDemolishResult Result;
+	if (bBuildInProgress)
+	{
+		Result.Result = EBuildResult::BuildInProgress;
+		Result.Diagnostic = TEXT("A build or demolition is already in progress on this construction component.");
+		return Result;
+	}
+	TArray<UBuildingPieceComponent*> Pieces;
+	UInventoryComponent* Inventory = nullptr;
+	if (ValidateDemolish(Piece, Pieces, Inventory, Result))
+	{
+		Result.Result = EBuildResult::Success;
+	}
+	return Result;
+}
+
+FBuildingDemolishResult UConstructionComponent::TryDemolish(AActor* Piece)
+{
+	if (bBuildInProgress)
+	{
+		FBuildingDemolishResult Result;
+		Result.Result = EBuildResult::BuildInProgress;
+		Result.Diagnostic = TEXT("A build or demolition is already in progress on this construction component.");
+		return Result;
+	}
+	TGuardValue<bool> BuildGuard(bBuildInProgress, true);
+	const FBuildingDemolishResult Result = RunDemolish(Piece);
+	OnDemolishResult.Broadcast(Result.Definition, Result);
+	return Result;
+}
+
+FBuildingDemolishResult UConstructionComponent::RunDemolish(AActor* Target)
+{
+	FBuildingDemolishResult Result;
+	TArray<UBuildingPieceComponent*> ValidatedPieces;
+	UInventoryComponent* Inventory = nullptr;
+	if (!ValidateDemolish(Target, ValidatedPieces, Inventory, Result))
+	{
+		return Result;
+	}
+	// Weak from here: listeners of the refund broadcast may destroy any of the pieces (or only their components).
+	TArray<TWeakObjectPtr<UBuildingPieceComponent>> Pieces;
+	TArray<TWeakObjectPtr<AActor>> PieceActors;
+	for (UBuildingPieceComponent* Piece : ValidatedPieces)
+	{
+		Piece->SetPieceState(EBuildingPieceState::Removing);
+		Pieces.Emplace(Piece);
+		PieceActors.Emplace(Piece->GetOwner());
+	}
+	if (!Result.Refund.IsEmpty())
+	{
+		const FInventoryTransactionResult Refund = Inventory->TryApplyDefinitionTransaction({}, Result.Refund);
+		if (!Refund.IsSuccess())
+		{
+			// Nothing was refunded: every piece stays as it was.
+			for (const TWeakObjectPtr<UBuildingPieceComponent>& Piece : Pieces)
+			{
+				if (Piece.IsValid() && Piece->GetPieceState() == EBuildingPieceState::Removing)
+				{
+					Piece->SetPieceState(EBuildingPieceState::Active);
+				}
+			}
+			Result.Result = RefundFailureResult(Refund.Result);
+			Result.Diagnostic = FString::Printf(TEXT("The refund was rejected (%s); nothing was removed."), *InventoryResultName(Refund.Result));
+			return Result;
+		}
+	}
+	// The refund is the commit point. Destroy cannot fail with authority; dependents go first, then the target.
+	for (int32 Index = PieceActors.Num() - 1; Index >= 0; --Index)
+	{
+		AActor* Actor = PieceActors[Index].Get();
+		if (IsValid(Actor) && !Actor->IsActorBeingDestroyed())
+		{
+			Actor->Destroy();
+		}
+	}
+	Result.Result = EBuildResult::Success;
+	return Result;
 }
 
 void UConstructionComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)

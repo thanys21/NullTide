@@ -30,6 +30,9 @@ public:
 	/** Points the facing arrow along the piece's facing: local +Y for edge pieces (a door's opening side), else +X. */
 	void SetFacingArrow(bool bEdgePiece);
 
+	/** Shows or hides the facing arrow (hidden on demolish highlights). */
+	void SetFacingArrowVisible(bool bVisible);
+
 	/** The facing arrow (shaft and head), tinted like the ghost; not counted as a preview mesh. */
 	USceneComponent* GetFacingArrow() const { return FacingArrow; }
 

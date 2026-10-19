@@ -3,10 +3,12 @@
 #include "CoreMinimal.h"
 #include "Building/BuildingTypes.h"
 #include "Components/ActorComponent.h"
+#include "Inventory/InventoryTypes.h"
 #include "ConstructionComponent.generated.h"
 
 class ABuildingPieceActor;
 class UBuildingDefinition;
+class UBuildingPieceComponent;
 class UBuildingSubsystem;
 class UInventoryComponent;
 
@@ -39,6 +41,38 @@ struct NULLTIDE_API FBuildingConstructionResult
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnBuildResult,
 	TSubclassOf<UBuildingDefinition>, DefinitionClass, const FBuildingConstructionResult&, Result);
+
+/**
+ * Outcome of CanDemolish and TryDemolish. Built once per request. The pieces are weak: on Success they are being
+ * destroyed, and for CanDemolish they are the pieces a demolition would remove.
+ */
+USTRUCT(BlueprintType)
+struct NULLTIDE_API FBuildingDemolishResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Building")
+	EBuildResult Result = EBuildResult::NotDemolishable;
+
+	/** The target piece's building, when the target is a building piece. */
+	UPROPERTY(BlueprintReadOnly, Category = "Building")
+	TSubclassOf<UBuildingDefinition> Definition;
+
+	/** The target first, then the walls and doors that would be left without a floor (the cascade). Native only. */
+	TArray<TWeakObjectPtr<AActor>> Pieces;
+
+	/** The summed refund of every piece, one line per item. */
+	UPROPERTY(BlueprintReadOnly, Category = "Building")
+	TArray<FInventoryDefinitionQuantity> Refund;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Building")
+	FString Diagnostic;
+
+	bool IsSuccess() const { return Result == EBuildResult::Success; }
+};
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnDemolishResult,
+	TSubclassOf<UBuildingDefinition>, DefinitionClass, const FBuildingDemolishResult&, Result);
 
 /**
  * A builder's construction authority (the UCraftingComponent pattern). Holds the registered buildings and builds
@@ -92,6 +126,29 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Building")
 	FOnBuildResult OnBuildResult;
 
+	/**
+	 * Exact read-only preflight of TryDemolish: the affected pieces (the target and, for a floor, the walls and doors
+	 * it alone supports), authority, player-built Active pieces, no storage, range, inventory and the summed refund
+	 * preflight. Returns BuildInProgress while a build or demolition runs. Changes nothing.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Building")
+	FBuildingDemolishResult CanDemolish(AActor* Piece) const;
+
+	/**
+	 * Demolishes the piece and every wall or door left without a floor, refunding their summed refund in one
+	 * transaction, or changes nothing. The refund is the commit point; the pieces are destroyed after it.
+	 * Broadcasts OnDemolishResult exactly once unless the call is reentrant (BuildInProgress, no notification).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Building")
+	FBuildingDemolishResult TryDemolish(AActor* Piece);
+
+	/** floor(Quantity x RefundFraction) per cost line; lines that round to zero are left out. */
+	static TArray<FInventoryDefinitionQuantity> ComputeRefund(const UBuildingDefinition& Definition);
+
+	/** Outcome of every non-reentrant TryDemolish. */
+	UPROPERTY(BlueprintAssignable, Category = "Building")
+	FOnDemolishResult OnDemolishResult;
+
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
@@ -125,6 +182,13 @@ private:
 	/** Step 7: whether the activated piece is still exactly the approved, usable piece. */
 	bool IsActivatedPieceIntact(const ABuildingPieceActor* Piece, const FBuildingPlacementResult& Resolved,
 		const UBuildingSubsystem& Subsystem, const UInventoryComponent* Inventory, FString& OutDiagnostic) const;
+
+	/** Demolition validation (shared with CanDemolish). Fills the result's pieces and refund; false on failure. */
+	bool ValidateDemolish(AActor* Target, TArray<UBuildingPieceComponent*>& OutPieces, UInventoryComponent*& OutInventory,
+		FBuildingDemolishResult& OutResult) const;
+
+	/** Demolition inside the guard; the caller broadcasts the returned result once. */
+	FBuildingDemolishResult RunDemolish(AActor* Target);
 
 	/** Fail-closed rollback (steps 4-8). Safe to repeat; never touches the inventory. */
 	void RollbackPiece(ABuildingPieceActor* Piece, const FBuildingReservationHandle& Handle, UBuildingSubsystem& Subsystem) const;

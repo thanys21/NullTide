@@ -217,8 +217,8 @@ bool FBuildingB1DefinitionValidationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Native definition root is abstract"), UBuildingDefinition::StaticClass()->HasAnyClassFlags(CLASS_Abstract));
 	TestTrue(TEXT("Native definition root is const static data"), UBuildingDefinition::StaticClass()->HasAnyClassFlags(CLASS_Const));
 	const UBuildingDefinition* Native = GetDefault<UBuildingDefinition>();
-	TestTrue(TEXT("Defaults: 1 x 1, 90 degrees, 50% refund, default range"), Native->Footprint == FIntPoint(1, 1)
-		&& Native->RotationStep == 90 && FMath::IsNearlyEqual(Native->RefundFraction, 0.5f) && Native->BuildRangeOverride == 0.f);
+	TestTrue(TEXT("Defaults: 1 x 1, 90 degrees, full refund (B6), default range"), Native->Footprint == FIntPoint(1, 1)
+		&& Native->RotationStep == 90 && FMath::IsNearlyEqual(Native->RefundFraction, 1.f) && Native->BuildRangeOverride == 0.f);
 
 	FString Diagnostic;
 	for (const UBuildingDefinition* Valid : { static_cast<const UBuildingDefinition*>(GetDefault<UBuildingTestFloorDefinition>()),

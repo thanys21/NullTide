@@ -81,7 +81,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
-- `NullTide.Building.{B1,B2,B3,B4,B5}`
+- `NullTide.Building.{B1,B2,B3,B4,B5,B6}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -180,6 +180,13 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
     That transaction is the commit point. Every earlier failure is a fail-closed rollback that never touches the inventory, and nothing fallible runs after payment.
   - `FBuildingConstructionResult` is built once after the payment returns. Its `Piece` is weak. A piece destroyed during payment still reports `Success`, with a Warning and a diagnostic and no refund (D3).
   - `SpawnProvisionalPiece` and `ActivatePiece` are protected virtual test seams; there are no debug switches.
+  - **Demolition (B6): `CanDemolish` / `TryDemolish(Piece)`, refund first, then destroy.**
+    - Only player-built `Active` pieces with authority, within range.
+    - A floor takes the walls and doors it alone carries (`UBuildingSubsystem::FindDependentEdgePieces`; one level deep, layer-tolerant).
+    - A storage piece is always refused (`IsStorage`), also inside a cascade. A station is allowed; a craft at it ends with `StationLost`.
+    - The summed refund (`ComputeRefund`: `floor(Quantity × RefundFraction)`, full by default) must fit, or nothing happens (`RefundDoesNotFit`).
+    - Order: every piece `Removing` → one addition-only `TryApplyDefinitionTransaction` (the commit point; on failure all `Active` again) → `Destroy` dependents, then the target.
+    - `OnDemolishResult` fires once per non-reentrant request, and the guard is shared with `TryBuild`.
 - `UBuildingPlacementComponent` (B4) on `BP_TopDownCharacter` is the player's building UX. It never builds by itself: `CanBuild` feeds the preview, and confirm calls `TryBuild` once per press.
   - **`B` toggles building mode.** The mode shows the cursor, spawns one `ABuildingPreviewActor` ghost (green or red, no collision, never registered) and the `W_BuildingHud` (`UBuildingHudWidget`).
   - **Input:**
@@ -188,9 +195,13 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
     - It consumes those keys, so no screen opens while the mode owns the cursor; a second press opens it.
   - **Every exit restores the remembered cursor state:** toggle, cancel, controller change, `EndPlay`.
   - **Selection and rotation (B5):** `1`/`2`/`3` (`IA_BuildSelect1/2/3`) call `SelectBuildingIndex` in `AvailableBuildings` order (missing indices ignored; the selection persists); `R` (`IA_BuildRotate`) calls `RotatePlacement` (quarter turns, wrapping; odd turns flip an edge piece's facing). Both are in `IMC_BuildingMode`.
+  - **Demolish sub-mode (B6):** `C` (`IA_BuildDemolish`, in `IMC_BuildingMode`) toggles it inside building mode only.
+    - The hovered piece and everything its demolition removes get a pooled highlight ghost: orange when allowed, red on the target when refused.
+    - LMB calls `TryDemolish` once.
+    - A registered 1–3 key returns to building. Every exit resets to building.
   - The ghost composes each template's transform up its attach chain (the door leaf under its hinge). It does not apply child-Blueprint overrides of inherited SCS templates.
   - The ghost carries a facing arrow (not a piece mesh, no collision): local +Y for edge pieces, which is the side a door opens to, and local +X for cells. It turns with `R`.
-  - Test seams: `GetCursorWorldLocation`, `IsLocalBuilderController`, `CreateHudWidget`.
+  - Test seams: `GetCursorWorldLocation`, `GetCursorHitActor`, `IsLocalBuilderController`, `CreateHudWidget`.
   - Building assets are in `Content/LevelPrototyping/BuildingSystem/{Input,Materials,UI}`.
 - `ABuildingDoorActor` (B5; abstract, Blueprint `Pieces/BP_BuildDoor`) is an edge piece with a blocking frame, a `DoorHinge` with the `DoorLeaf`, and an overlap-only `InteractionBounds`.
   - `ToggleDoor`/`SetDoorOpen`/`CanInteract` return `EBuildingDoorResult`: any pawn within `UseRange` (300 cm) of an `Active` door that is not being destroyed.
@@ -222,7 +233,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - `Pieces/BP_BuildFloor`: a child of `ABuildingPieceActor`. It only sets the inherited `PieceMesh`; it adds no components and keeps an unscaled root.
   - `Pieces/BP_BuildWall` (B5): a child of `ABuildingPieceActor`; `PieceMesh` is a 200 × 20 × 250 cm cube; no added components.
   - `Pieces/BP_BuildDoor` (B5): a child of `ABuildingDoorActor`; no added components.
-  - `Definitions/Building_WoodFloor`: Wood × 4. `Building_WoodWall`: Wood × 6. `Building_WoodDoor`: Wood × 8 + Scrap × 2. All refund 0.5; the wall and door have `bRequiresFloor`.
+  - `Definitions/Building_WoodFloor`: Wood × 4. `Building_WoodWall`: Wood × 6. `Building_WoodDoor`: Wood × 8 + Scrap × 2. All refund 100% (`RefundFraction` 1.0, the default since B6); the wall and door have `bRequiresFloor`.
 - The `Lvl_TopDown` ground `Floor_0` uses `BlockAll` (`WorldStatic`) since B4, so it supports building like every other map block. It is a World Partition external actor; MCP cannot save actor packages, so map actor edits are saved in the editor (Ctrl+S) and then audited with `git status`.
 - `BP_PickUpItem`'s `Quantity` is Instance Editable (B4 test aid). Test pickups near `PlayerStart` (Wood × 100, Stone × 10, Scrap × 10) were placed at the user's request; the user may remove them.
 

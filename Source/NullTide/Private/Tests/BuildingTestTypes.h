@@ -192,11 +192,15 @@ public:
 	/** A transient world's player controller has no local player; tests decide whether it counts as local. */
 	bool bTreatControllerAsLocal = true;
 
+	/** Demolish mode: the actor "under the cursor". */
+	TWeakObjectPtr<AActor> CursorHitActor;
+
 	void SetCursor(const FVector& Location) { CursorLocation = Location; bHasCursor = true; }
 	void SetHudClass(TSubclassOf<UBuildingHudWidget> InClass) { HudWidgetClass = InClass; }
 
 protected:
 	virtual bool GetCursorWorldLocation(FVector& OutLocation) const override;
+	virtual AActor* GetCursorHitActor() const override { return CursorHitActor.Get(); }
 	virtual bool IsLocalBuilderController(const APlayerController& PlayerController) const override { return bTreatControllerAsLocal; }
 	virtual UBuildingHudWidget* CreateHudWidget(APlayerController& PlayerController) override;
 };
@@ -217,6 +221,10 @@ public:
 	UFUNCTION()
 	void HandleBuildingModeChanged(bool bBuildingModeActive);
 
+	UFUNCTION()
+	void HandleDemolishResult(TSubclassOf<UBuildingDefinition> DefinitionClass, const FBuildingDemolishResult& Result);
+
+	TArray<FBuildingDemolishResult> DemolishResults;
 	TArray<bool> ModeChanges;
 	TFunction<void()> InventoryHook;
 	TFunction<void(const FBuildingConstructionResult&)> BuildResultHook;
@@ -256,4 +264,85 @@ class ABuildingTestTurnedHingeDoorActor : public ABuildingTestDoorActor
 
 public:
 	ABuildingTestTurnedHingeDoorActor();
+};
+
+// ---- B6 demolition fixtures ----
+
+class UStorageComponent;
+class UCraftingStationComponent;
+
+/** A thin 200 x 20 x 250 cm wall piece (the test piece's slab turned into a wall). */
+UCLASS(Transient, NotBlueprintable)
+class ABuildingTestWallPieceActor : public ABuildingTestPieceActor
+{
+	GENERATED_BODY()
+
+public:
+	ABuildingTestWallPieceActor();
+};
+
+/** A wall piece that is a storage: demolition must always refuse it. */
+UCLASS(Transient, NotBlueprintable)
+class ABuildingStorageTestPiece : public ABuildingTestWallPieceActor
+{
+	GENERATED_BODY()
+
+public:
+	ABuildingStorageTestPiece();
+
+	UPROPERTY()
+	TObjectPtr<UStorageComponent> Storage;
+};
+
+/** A floor-sized piece that is a crafting station (its station kind is set by the test). */
+UCLASS(Transient, NotBlueprintable)
+class ABuildingStationTestPiece : public ABuildingTestPieceActor
+{
+	GENERATED_BODY()
+
+public:
+	ABuildingStationTestPiece();
+
+	UPROPERTY()
+	TObjectPtr<UCraftingStationComponent> Station;
+};
+
+/** Floor costing Wood x 1: its refund rounds to nothing. */
+UCLASS(Transient, NotBlueprintable)
+class UBuildingTestTinyFloorDefinition : public UBuildingDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UBuildingTestTinyFloorDefinition();
+};
+
+/** Wall that needs a floor (the production rule), on the thin test wall piece; Wood x 6. */
+UCLASS(Transient, NotBlueprintable)
+class UBuildingTestSupportedWallDefinition : public UBuildingDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UBuildingTestSupportedWallDefinition();
+};
+
+/** Storage wall that needs a floor; Wood x 2. */
+UCLASS(Transient, NotBlueprintable)
+class UBuildingTestStorageWallDefinition : public UBuildingDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UBuildingTestStorageWallDefinition();
+};
+
+/** Station on a cell; Wood x 2. */
+UCLASS(Transient, NotBlueprintable)
+class UBuildingTestStationDefinition : public UBuildingDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UBuildingTestStationDefinition();
 };

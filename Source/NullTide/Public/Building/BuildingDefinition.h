@@ -50,9 +50,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Building")
 	TArray<FInventoryDefinitionQuantity> Cost;
 
-	/** Share of each cost line returned on demolition, rounded down. */
+	/** Share of each cost line returned on demolition, rounded down (B6: full refund by default). */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Building", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float RefundFraction = 0.5f;
+	float RefundFraction = 1.f;
 
 	/** Build range for this building; 0 uses the default range. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Building", meta = (ClampMin = "0.0", Units = "cm"))

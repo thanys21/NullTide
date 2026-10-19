@@ -310,6 +310,59 @@ UBuildingPieceComponent* UBuildingSubsystem::GetOccupyingPiece(const FBuildingOc
 	return const_cast<UBuildingPieceComponent*>(Cast<UBuildingPieceComponent>(Occupant->Holder.Get()));
 }
 
+TArray<UBuildingPieceComponent*> UBuildingSubsystem::FindDependentEdgePieces(const UBuildingPieceComponent& Floor) const
+{
+	TArray<UBuildingPieceComponent*> Dependents;
+	const TArray<FBuildingOccupancyKey> FloorKeys = Floor.GetOccupancyKeys();
+	auto IsOtherActiveFloorAt = [this, &Floor](const int32 X, const int32 Y, const int32 Layer)
+	{
+		const UBuildingPieceComponent* Other = GetOccupyingPiece(
+			FBuildingOccupancyKey(EBuildingOccupancyCategory::Floor, EBuildingEdgeAxis::None, X, Y, Layer));
+		const UBuildingDefinition* Definition = Other && Other->GetBuildingDefinition()
+			? Other->GetBuildingDefinition()->GetDefaultObject<UBuildingDefinition>() : nullptr;
+		return Other && Other != &Floor && Other->IsActivePiece() && Definition && Definition->Category == EBuildingCategory::Foundation;
+	};
+	// A wall's layer comes from the highest floor top beside it, so a floor on layer L carries walls on L or, when
+	// its top rounds up, on L + 1; a wall on layer W can stand on a floor of layer W - 1 or W.
+	auto IsOtherFloorUnder = [&IsOtherActiveFloorAt](const int32 X, const int32 Y, const int32 WallLayer)
+	{
+		return IsOtherActiveFloorAt(X, Y, WallLayer) || IsOtherActiveFloorAt(X, Y, WallLayer - 1);
+	};
+	const int32 TopLayer = HeightToLayer(Floor.GetPlacement().SurfaceZ + FloorThickness);
+	for (const FBuildingOccupancyKey& Cell : FloorKeys)
+	{
+		if (Cell.Category != EBuildingOccupancyCategory::Floor)
+		{
+			continue;
+		}
+		TArray<int32, TInlineAllocator<2>> WallLayers = { Cell.Layer };
+		WallLayers.AddUnique(TopLayer);
+		// The cell's four edges and the cell across each of them.
+		struct FEdgeAcross { EBuildingEdgeAxis Axis; int32 EdgeX; int32 EdgeY; int32 CellX; int32 CellY; };
+		const FEdgeAcross Edges[4] = {
+			{ EBuildingEdgeAxis::X, Cell.X, Cell.Y, Cell.X, Cell.Y - 1 },         // south
+			{ EBuildingEdgeAxis::X, Cell.X, Cell.Y + 1, Cell.X, Cell.Y + 1 },     // north
+			{ EBuildingEdgeAxis::Y, Cell.X, Cell.Y, Cell.X - 1, Cell.Y },         // west
+			{ EBuildingEdgeAxis::Y, Cell.X + 1, Cell.Y, Cell.X + 1, Cell.Y },     // east
+		};
+		for (const FEdgeAcross& Edge : Edges)
+		{
+			for (const int32 WallLayer : WallLayers)
+			{
+				UBuildingPieceComponent* EdgePiece = GetOccupyingPiece(
+					FBuildingOccupancyKey(EBuildingOccupancyCategory::Edge, Edge.Axis, Edge.EdgeX, Edge.EdgeY, WallLayer));
+				const UBuildingDefinition* Definition = EdgePiece && EdgePiece->GetBuildingDefinition()
+					? EdgePiece->GetBuildingDefinition()->GetDefaultObject<UBuildingDefinition>() : nullptr;
+				if (Definition && Definition->bRequiresFloor && !IsOtherFloorUnder(Edge.CellX, Edge.CellY, WallLayer))
+				{
+					Dependents.AddUnique(EdgePiece);
+				}
+			}
+		}
+	}
+	return Dependents;
+}
+
 bool UBuildingSubsystem::IsPieceRegistered(const UBuildingPieceComponent* Piece) const
 {
 	return Piece && Pieces.Contains(FObjectKey(Piece));

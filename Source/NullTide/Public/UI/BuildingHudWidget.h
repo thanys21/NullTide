@@ -24,9 +24,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Building|UI")
 	void SetStatusText(const FText& Status, bool bValid);
 
+	/** Controls hint for the current sub-mode (build or demolish). */
+	UFUNCTION(BlueprintCallable, Category = "Building|UI")
+	void SetHintText(const FText& Hint);
+
 	FText GetBuildingNameText() const;
 	FText GetCostText() const;
 	FText GetStatusText() const;
+	FText GetHintText() const;
 	bool IsStatusValid() const { return bStatusValid; }
 
 protected:
@@ -41,7 +46,7 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "Building|UI", meta = (BindWidget))
 	TObjectPtr<UTextBlock> StatusText;
 
-	/** Optional controls hint ("1-3 select · R rotate · LMB build · RMB / B exit"). */
+	/** Optional controls hint, set per sub-mode by the placement component. */
 	UPROPERTY(BlueprintReadOnly, Category = "Building|UI", meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> HintText;
 

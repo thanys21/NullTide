@@ -829,6 +829,82 @@ The user's first PIE run found three problems:
 - One Stone test pickup (× 10) covers one workbench only.
 - Highlights and ghosts use each piece's default pose.
 
+## B7.1 - Facing-Based Interaction Targeting
+
+### Baseline and Scope
+
+- **Baseline:** `8f4ae66` (B7, committed). Full automation 250/250, cook 646/7/653.
+- **Scope (user-approved 2026-10-19; `BUILDING_PLAN.md` B7.1, I-1 to I-4 as recommended):**
+  - a forward probe plus facing selection (radius 90 cm, 90 cm ahead, ±70°);
+  - no prompt when nothing is in front;
+  - a 0.1 s refresh that re-renders only on change.
+- **Not in scope:** interactable actors, `BPI_Interactable`, the prompt widget, building mode.
+
+### Source (new area `Interaction/`)
+
+| File | Content |
+| --- | --- |
+| `Interaction/InteractionTargetingLibrary.h/.cpp` | `SelectFacingInteractable(Viewer, Candidates, MaxAngleDegrees = 70)`, BlueprintPure. It picks the smallest 2D angle from the viewer's forward vector; angles within 1° tie and the nearer wins. It skips invalid candidates, the viewer, actors being destroyed and `ShouldShowInteractionPromptFor` = false. `GetFacingInteractableFor(Owner)` asks the owner's probe. |
+| `Interaction/InteractionProbeComponent.h/.cpp` | `USphereComponent`: radius 90, relative (90, 0, 0), no collision of its own and no overlap events (it only places and sizes the query), no navigation, hidden. `GetInteractableCandidates` runs a fresh Pawn-channel overlap query. It ignores the owner and the actors attached to it, and keeps unique `InteractableInterface` actors. `GetFacingInteractable`. `RefreshFacingInteractable` runs on a 0.1 s looping world timer (no tick) and broadcasts `OnFacingInteractableChanged` only on change. Its `LastTarget` is weak; a destroyed previous target is reported as null. |
+| `Tests/InteractionTargetingTests.cpp`, `Tests/InteractionTestTypes.h` | `NullTide.Gameplay.G8.*` (3) and `UInteractionTestListener` (records broadcasts). |
+
+### Assets (Unreal MCP, no manual step)
+
+- **`BP_TopDownCharacter`:**
+  - new `InteractionProbe` (`UInteractionProbeComponent`) under `CollisionCylinder`;
+  - `InteractableInterface` = `BPI_Interactable`;
+  - class defaults for the rest.
+- **`PlayerInteractionComponent`:**
+  - `GetActiveInteractable` now returns `GetFacingInteractableFor(GetOwner)`. The output `Active Interacble` (Actor) is recreated with the same name, so the callers are untouched.
+  - New function `OnFacingInteractableChanged(NewTarget: Actor)` → `RenderInteractionWidget`.
+  - BeginPlay ends with: `GetComponentByClass(InteractionProbe)` → `IsValid` → `Bind Event to OnFacingInteractableChanged` (a Create Event bound to that function).
+  - The capsule overlap events and `InteractableInRange` are unchanged; they no longer choose the target.
+- Both compiled with warnings as errors and saved by path. No map change.
+
+### Tests `NullTide.Gameplay.G8.*` (3)
+
+| Test | Covers |
+| --- | --- |
+| `FacingSelection` | Front beats side; the nearer wins a tie; ≈84° and behind are outside ±70°; a narrower cone drops the side marker; destroyed, null and the viewer itself are ignored; empty input gives none; turning the viewer changes the result; the tie rule gives the same winner in both input orders (0°/0.9°/1.8°); a depleted resource node straight ahead is skipped; no probe gives none. |
+| `ProbeAsset` | The `BP_TopDownCharacter` SCS has exactly one `InteractionProbe` with `InteractableInterface` = `BPI_Interactable`, ahead of the capsule (X > 0), cone 70, refresh 0.1, no collision, no overlap events, no navigation. |
+| `TwoInteractablesInFront` | The production `BP_BuildChest` and `BP_BuildWorkbench` one cell apart, a pawn with a probe. Facing 0° finds both as candidates; +45° gives the chest, -45° the bench, 180° none; `GetFacingInteractableFor` matches; an interactable attached to the pawn is not a candidate. A bound listener sees exactly one broadcast per change (chest, bench), none on a repeat refresh, one null broadcast when the bench is destroyed, then none. |
+
+### Validation
+
+- **Build:** clean with the editor closed; 0 warnings.
+- **Tests:**
+  - command line before the assets: G8 2/3 (`ProbeAsset` expected to fail);
+  - the first probe used cached overlaps and found 0 candidates in the test world; it now runs a fresh query;
+  - in-editor after the assets: `NullTide` 253/253, 0 failed, no warnings;
+  - final command line after the review fixes, with the editor closed (base DLL; `UnrealEditor.modules` names `UnrealEditor-NullTide.dll`): **253/253**, exit 0.
+- **Windows cook** (editor closed): `Done!`, 0 errors, 2 environment warnings; 646 cooked, 7 skipped, 653 total (unchanged; no new asset).
+- **Content and World Partition audit:**
+  - modified `BP_TopDownCharacter` and `PlayerInteractionComponent`;
+  - no added asset, no map change;
+  - `__ExternalActors__` 94, `__ExternalObjects__` 3.
+- **Manual rendered PIE (user, 2026-10-19):** accepted ("a bit far but fine, tune later"). The probe reach (I-2: radius 90 cm, 90 cm ahead) is to be tuned in a later pass.
+
+### Self-Review (fresh-context review pass)
+
+| Finding | Resolution |
+| --- | --- |
+| A destroyed target reads as null through the weak `LastTarget`, so the change to "no target" was never broadcast and the prompt stayed up (for example after taking the only pickup) | **CONFIRMED, fixed.** A stale `LastTarget` with no new target broadcasts null; tested. |
+| The probe was QueryOnly, object type Pawn, Overlap on every channel, with overlap events, although the candidates come from a world query. Other volumes (triggers, pickups, interaction bounds) got overlap events against the player 180 cm ahead. | **CONFIRMED, fixed.** `NoCollision`, no overlap events. It still never blocks and never affects navigation. `ProbeAsset` asserts it. |
+| The 1° tie rule was applied one pair at a time and depended on overlap order, which could make the prompt flicker | **CONFIRMED, fixed.** Two passes: the nearest within 1° of the smallest angle. Tested in both orders. |
+| The broadcast test read `LastTarget` instead of counting broadcasts; `UpdateOverlaps` in the test was dead | **CONFIRMED, fixed** (`UInteractionTestListener`; exact counts and payloads). |
+| An interactable attached to the player could become the target | **CONFIRMED, fixed** (the owner's attached actors are ignored; tested). |
+| The angle uses the actor origin, so a large object's centre can be outside the cone near its ends | **Recorded** (design; workbench bounds are 150 × 120 half extents, so normal approaches stay well inside ±70°). |
+| A small pickup at the character's feet or beside it is outside the sphere | **Recorded**: plan risk R-3, checked in PIE; tune the probe (I-2) if needed. |
+| `F` uses a fresh query while the prompt shows the last refresh (up to 0.1 s apart) | **Recorded** (the fresh result is the accurate one). |
+| The timer path (`BeginPlay`/`EndPlay`) is not exercised by automation | **Recorded** (covered by PIE). |
+| Resource nodes' collision is Blueprint-only, so the Pawn query finding them is not proven by automation | **Recorded** (PIE step 4). |
+
+### Known Limitations Carried Forward
+
+- The player turns only by moving (`bOrientRotationToMovement`); standing still keeps the last facing.
+- The angle is measured to each candidate's actor location, which is its root (for pieces, the cell or edge centre).
+- The interaction reach feels slightly far in PIE; tune the probe radius and offset later.
+
 ## Next Checkpoint
 
-B6 is COMPLETE / APPROVED (`7dd0c1d`). B7 is implemented and validated (automation 250/250, cook PASS, PIE done with two findings, one fixed in B7 and one planned as B7.1). It waits for the commit approval. Then B7.1 (approved), then B8 (UI). Phase 5 stays IN PROGRESS.
+B7.1 is COMPLETE / APPROVED (automation 253/253, cook PASS, PIE accepted). Next: plan B8 (building UI: build bar). Phase 5 stays IN PROGRESS.

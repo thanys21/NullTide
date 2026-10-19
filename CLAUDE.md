@@ -78,7 +78,7 @@ The engine is installed at `D:/game/epic/UE_5.8`.
 The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WITH_DEV_AUTOMATION_TESTS`. Shared fixtures are in the `*TestTypes.h` headers there. Test names are grouped by milestone:
 
 - `NullTide.Inventory.{M1..M6,G7,Stacking}`
-- `NullTide.Gameplay.{G1,G2,G4,G5,G6}`
+- `NullTide.Gameplay.{G1,G2,G4,G5,G6,G8}` (G8 = interaction targeting)
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
 - `NullTide.Building.{B1,B2,B3,B4,B5,B6,B7}`
@@ -212,6 +212,14 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - They open their screens through the same shared helpers as the authored `AStorageContainerActor` / `ACraftingStationActor`: `FStorageInteraction::OpenStorageScreen` and `FCraftingStationInteraction`.
   - They never open while the piece is not `Active` (`CanOpenStorage`; `StationUnavailable`).
 - The shared interaction prompt `WB_interactionWidget` reads its key with `UInputPromptLibrary::GetKeyMappedToAction(IMC_Default, IA_Interact)` (B5). The live query returned no key while `IMC_BuildingMode` consumed F, which showed "None".
+
+**Interaction targeting (`Interaction/`)** — B7.1
+- The Blueprint `PlayerInteractionComponent` (`Content/LevelPrototyping/interactionSystem/`) runs interactions through `BPI_Interactable`. Its `GetActiveInteractable` returns `UInteractionTargetingLibrary::GetFacingInteractableFor(GetOwner)`: the player interacts with what they face, not with the last object that overlapped the capsule.
+- `UInteractionProbeComponent` (a sphere named `InteractionProbe` on `BP_TopDownCharacter`, attached to the capsule) has radius 90 cm and sits 90 cm ahead.
+  - It has no collision of its own and no overlap events: it only places and sizes a fresh Pawn-channel overlap query for `BPI_Interactable` candidates, ignoring the owner and actors attached to it. It never affects navigation.
+  - A 0.1 s timer (no tick) broadcasts `OnFacingInteractableChanged` only when the target changes, including to null when the previous target was destroyed. `PlayerInteractionComponent` binds it to re-render the prompt.
+- `SelectFacingInteractable` considers candidates within ±70° of the actor's forward vector (2D). It picks the nearest of those within 1° of the smallest angle, which is independent of input order. It skips depleted resource nodes (`ShouldShowInteractionPromptFor`). With nothing in front there is no target and no prompt.
+- Targeting is read-only and never interacts. Interactable actors need no change; their interaction volume must overlap the Pawn channel.
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

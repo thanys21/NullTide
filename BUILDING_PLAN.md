@@ -1515,7 +1515,15 @@ Expected full suite **250** (243 + 7).
 - **R-6 Interaction target ambiguity** (B5 R-4): a chest next to a door may target the wrong one; bounds are kept tight.
 - **R-7 Station screen while the bench is demolished:** the C8C screen closes itself when its station becomes unusable; PIE step 6 checks it.
 
-### B7.1 — Facing-Based Interaction Targeting — PLAN APPROVED (user, 2026-10-19; I-1 to I-4 as recommended), starts after the B7 commit
+### B7.1 — Facing-Based Interaction Targeting — COMPLETE / APPROVED (user, 2026-10-19; I-1 to I-4 as recommended; PIE accepted, reach to be tuned later)
+
+**Implementation notes (2026-10-19; behaviour as approved, mechanics moved native):**
+- The probe is a native `UInteractionProbeComponent` (a `USphereComponent`). It queries its candidates fresh (`OverlapMultiByChannel` on the Pawn channel, the channel interaction volumes already answer for the capsule) instead of relying on Blueprint overlap bindings. Cached overlap state missed volumes in a world without play (test finding).
+- The 0.1 s refresh timer lives in the probe, which broadcasts `OnFacingInteractableChanged` only on change. `PlayerInteractionComponent` binds that delegate in BeginPlay to a new function `OnFacingInteractableChanged(NewTarget)` that calls `RenderInteractionWidget`. No Blueprint timer.
+- `GetActiveInteractable` returns `GetFacingInteractableFor(GetOwner)`. The prompt filter (`ShouldShowInteractionPromptFor`) runs inside the native selector.
+- The capsule overlap bindings and `InteractableInRange` stay untouched. They no longer choose the target; an overlap only re-renders the prompt, which is idempotent.
+- Self-review: the probe component has `NoCollision` and no overlap events. It only places and sizes the query, so it is even less intrusive than "overlap-only": other volumes no longer get overlap events from it. It also ignores actors attached to the owner, and the tie rule takes two passes (order-independent).
+- R-2: no hold lock was added. The hold path already re-resolved the target on every update before B7.1, and the character only turns while moving, so the target is stable while standing and holding. PIE step 4 checks hold gathering.
 
 **PIE finding (user, B7):** "the character's hitbox is too broad, so objects placed near each other block each other's interaction". The user asks to adjust the character's interaction area towards the direction the character is facing.
 

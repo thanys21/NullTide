@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building IN PROGRESS: B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 (construction authority: activate first, pay last) COMPLETE / APPROVED (full automation 219/219, cook PASS); B3 (Wooden Floor: first buildable, construction component on the player) COMPLETE / APPROVED (full automation 223/223, cook PASS); B4 (building mode, ghost preview, input) COMPLETE / APPROVED (full automation 230/230, cook PASS, manual PIE 8/8 PASS); B5 (walls and doors, selection and rotation) COMPLETE / APPROVED (full automation 236/236, cook PASS, manual PIE PASS; `b20f70a`); B6 (demolition: C key, cascade, full refund) COMPLETE / APPROVED (full automation 243/243, cook PASS, manual PIE PASS; `7dd0c1d`); B7 (buildable chest and workbench) IMPLEMENTED AND VALIDATED, awaiting commit approval (full automation 250/250, cook PASS); B7.1 (facing-based interaction targeting) approved; B8 (building UI: build bar) outlined. Crafting queue and the inventory/crafting UI-UX pass are deferred.
+> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building IN PROGRESS: B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 (construction authority: activate first, pay last) COMPLETE / APPROVED (full automation 219/219, cook PASS); B3 (Wooden Floor: first buildable, construction component on the player) COMPLETE / APPROVED (full automation 223/223, cook PASS); B4 (building mode, ghost preview, input) COMPLETE / APPROVED (full automation 230/230, cook PASS, manual PIE 8/8 PASS); B5 (walls and doors, selection and rotation) COMPLETE / APPROVED (full automation 236/236, cook PASS, manual PIE PASS; `b20f70a`); B6 (demolition: C key, cascade, full refund) COMPLETE / APPROVED (full automation 243/243, cook PASS, manual PIE PASS; `7dd0c1d`); B7 (buildable chest and workbench) COMPLETE / APPROVED (full automation 250/250, cook PASS, manual PIE done; `8f4ae66`); B7.1 (facing-based interaction targeting) COMPLETE / APPROVED (full automation 253/253, cook PASS, manual PIE accepted; reach to be tuned later); B8 (building UI: build bar) outlined. Crafting queue and the inventory/crafting UI-UX pass are deferred.
 
 ---
 
@@ -808,7 +808,7 @@ Crafting C8C Workstation Crafting UI  ✅
 Phase 4 Crafting                    ✅
 
 NEXT:
-Phase 5 Building: IN PROGRESS — B0 approved, B1-B6 complete; B7 implemented, awaiting acceptance; B7.1 interaction targeting approved; B8 building UI outlined (see BUILDING_PROGRESS.md)
+Phase 5 Building: IN PROGRESS — B0 approved, B1-B7 and B7.1 complete; B8 building UI outlined (see BUILDING_PROGRESS.md)
 ```
 
 ---
@@ -1578,7 +1578,21 @@ Full permanent suite                                                       223/2
 
 B3 clean build: 0 compiler warnings (test code only). Windows cook: `Done!`, 0 errors, 2 environment warnings (624/7/631, +2: `Building_WoodFloor` and `BP_BuildFloor`, both in the cooked asset registry). Content: 2 added assets and `BP_TopDownCharacter` modified; no map or World Partition change (`__ExternalActors__` 91, `__ExternalObjects__` 3). No manual PIE required.
 
-At the completion of Building B7 (implemented and validated, awaiting user acceptance):
+At the completion of Building B7.1 (approved; manual PIE accepted, probe reach to be tuned later):
+
+```text
+Focused Gameplay G8                                                              3/3
+Full permanent suite                                                       253/253
+```
+
+B7.1 clean build: 0 compiler warnings. Windows cook: `Done!`, 0 errors, 2 environment warnings (646/7/653, unchanged).
+
+Content:
+- `BP_TopDownCharacter` (new `InteractionProbe`) and `PlayerInteractionComponent` (facing target, change binding) modified;
+- no added asset, no map change;
+- `__ExternalActors__` 94, `__ExternalObjects__` 3.
+
+At the completion of Building B7 (approved, `8f4ae66`):
 
 ```text
 Focused Building B7                                                              7/7
@@ -1810,17 +1824,18 @@ Current tools:
 - context-sensitive Equip/Unequip inventory button
 
 Current input:
-- F interact
+- F interact (with the object the character faces, B7.1)
 - I or Tab inventory (inventory + character + crafting screen)
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
 - Building B7 7/7, B6 7/7, B5 6/6, B4 7/7, B3 4/4, B2 20/20, B1 9/9 (8 + OverlapOnlyVolumes); Crafting C8C 7/7 (C8B 3/3, C8A 11/11)
 - crafting C1-C8C 69/69
-- full 250/250 (243 + 7 Building B7)
+- Gameplay G8 (interaction targeting, B7.1) 3/3
+- full 253/253 (250 + 3 Gameplay G8)
 
 Next:
-Phase 5 Building: B7 commit approval; then B7.1 (facing-based interaction targeting, approved), then B8 (building UI: build bar). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
+Phase 5 Building: plan B8 (building UI: build bar). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1864,7 +1879,7 @@ Phase 4  Crafting                           ✅
                 C8B Workbench actor          ✅
                 C8C Station crafting UI      ✅
 
-Phase 5  Building                           ⏭ IN PROGRESS (B0 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅, B7 awaiting acceptance, B7.1 approved, B8 UI outlined)
+Phase 5  Building                           ⏭ IN PROGRESS (B0 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅, B7 ✅, B7.1 ✅, B8 UI outlined)
 
 Phase 6  Colony
 

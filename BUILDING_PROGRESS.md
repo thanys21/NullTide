@@ -985,6 +985,57 @@ The user's first PIE run found three problems:
 | P3: the bar forces `Visible`, so the R-1 fallback is a code change | **Recorded** in the plan's R-1. |
 | P3: test gaps (HUD root visibility, empty descriptions passing, click not through the button) | **CONFIRMED, fixed.** The HUD sets its root visibility in `NativeOnInitialized` and the test asserts it. `BarSlots` requires non-empty descriptions. `SelectionSync` clicks through `SlotButton->OnClicked`. |
 
+## B9 - Polish and Phase 5 Closeout
+
+### Baseline and Scope
+
+- **Baseline:** `e20b30e` (B8). Full automation 258/258, cook 648/7/655.
+- **Scope (user-approved 2026-10-19; `BUILDING_PLAN.md` B9: B9-1 = 75/75, B9-2 and B9-3 as recommended):**
+  - interaction reach;
+  - the first click after closing a screen;
+  - `BUILDING_REPORT.md`.
+
+### Source
+
+| File | Content |
+| --- | --- |
+| `UI/GameInputMode.h/.cpp` (new) | `NullTideInput::RestoreGameOnlyInput(APlayerController&)`: `FInputModeGameOnly` with `SetConsumeCaptureMouseDown(false)`. |
+| `UI/InventoryScreenWidget.cpp`, `UI/StorageScreenWidget.cpp` | `CloseInventory` / `CloseStorage` use the helper instead of `SetInputMode_GameOnly(PC, false)`; the unused `WidgetBlueprintLibrary` include was removed. |
+| `Building/BuildingPlacementComponent.cpp` | `ExitBuildingMode` uses the helper (same behaviour as B8). |
+| `Tests/InteractionTargetingTests.cpp` | `G8.ProbeAsset` pins radius 75 and relative (75, 0, 0). |
+
+### Assets (Unreal MCP)
+
+- `BP_TopDownCharacter` `InteractionProbe`: `SphereRadius` 75, `RelativeLocation` (75, 0, 0). It reaches 150 cm ahead (was 180 cm).
+- Compiled with warnings as errors and saved by path.
+- `BP_TopDownController` was read only: its only input-mode node is `SetInputModeUIOnly` on opening the inventory, so no Blueprint change is needed.
+
+### Validation
+
+- **Build:** clean with the editor closed (base DLL); 0 warnings.
+- **Tests:** command line **258/258**, exit 0 (`G8.ProbeAsset` passes with 75/75).
+- **Windows cook:** `Done!`, 0 errors, 2 environment warnings; 648/7/655 (unchanged).
+- **Content and World Partition audit:**
+  - modified `BP_TopDownCharacter`;
+  - no added asset, no map change;
+  - `__ExternalActors__` 94, `__ExternalObjects__` 3.
+- **Closeout:** `BUILDING_REPORT.md` (new), `NULLTIDE_MASTER_PLAN.md`, `CLAUDE.md`.
+- After the review fix (scale assertion): rebuilt, command line **258/258**, exit 0.
+- **Manual rendered PIE (user, 2026-10-20): PASS, 3/3.**
+  1. The `F` reach is shorter, and the chest, workbench, door and pickups are still interactable.
+  2. The first left click after closing the inventory or a chest works.
+  3. Building mode behaves as in B8.
+
+### Self-Review (fresh-context review pass; no P0, P1 or P2)
+
+| Finding | Resolution |
+| --- | --- |
+| The helper is equivalent to `SetInputMode_GameOnly(PC, false)` except for the capture flag: no flush was lost, the null checks are kept by the callers, and it is a no-op without a local player. | Confirmed by the reviewer against engine `WidgetBlueprintLibrary.cpp:137-155` and `PlayerController.cpp:6439-6454`. |
+| No other GameOnly restore remains in `Source/` or `Content/`. | Confirmed. |
+| P3: `G8.ProbeAsset` did not check the template's scale, which would change the real reach. | **CONFIRMED, fixed** (asserts unit relative scale). |
+| P3: with the new capture mode, a Close button that clicks on mouse-down could let the release reach the game. | **REJECTED WITH EVIDENCE:** MCP read of `W_Inventory` and `W_StorageScreen` `CloseButton`: `ClickMethod` `DownAndUp` (the button owns both down and up). |
+| P3: closing a screen on `I`/`Tab`/`Esc` lets that key's release reach the viewport. | **Recorded** (unchanged by B9; no input acts on those releases). |
+
 ## Next Checkpoint
 
-B8 is COMPLETE / APPROVED (automation 258/258, cook PASS, manual PIE 5/5 PASS). The B8 plan's scope is done. The next Phase 5 checkpoint needs a new plan and the user's go-ahead. Phase 5 stays IN PROGRESS.
+B9 is COMPLETE / APPROVED (automation 258/258, cook PASS, manual PIE 3/3 PASS). **Phase 5 Building is COMPLETE**; the summary is in `BUILDING_REPORT.md`. Next: Phase 6 Colony, to be planned with the user.

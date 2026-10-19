@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building IN PROGRESS: B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 (construction authority: activate first, pay last) COMPLETE / APPROVED (full automation 219/219, cook PASS); B3 (Wooden Floor: first buildable, construction component on the player) COMPLETE / APPROVED (full automation 223/223, cook PASS); B4 (building mode, ghost preview, input) COMPLETE / APPROVED (full automation 230/230, cook PASS, manual PIE 8/8 PASS); B5 (walls and doors, selection and rotation) COMPLETE / APPROVED (full automation 236/236, cook PASS, manual PIE PASS; `b20f70a`); B6 (demolition: C key, cascade, full refund) COMPLETE / APPROVED (full automation 243/243, cook PASS, manual PIE PASS; `7dd0c1d`); B7 (buildable chest and workbench) COMPLETE / APPROVED (full automation 250/250, cook PASS, manual PIE done; `8f4ae66`); B7.1 (facing-based interaction targeting) COMPLETE / APPROVED (full automation 253/253, cook PASS, manual PIE accepted; reach to be tuned later; `208b12e`); B8 (building UI: build bar) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 5/5 PASS). Crafting queue and the inventory/crafting UI-UX pass are deferred.
+> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building COMPLETE (B0–B9, summary in `BUILDING_REPORT.md`): B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 (construction authority: activate first, pay last) COMPLETE / APPROVED (full automation 219/219, cook PASS); B3 (Wooden Floor: first buildable, construction component on the player) COMPLETE / APPROVED (full automation 223/223, cook PASS); B4 (building mode, ghost preview, input) COMPLETE / APPROVED (full automation 230/230, cook PASS, manual PIE 8/8 PASS); B5 (walls and doors, selection and rotation) COMPLETE / APPROVED (full automation 236/236, cook PASS, manual PIE PASS; `b20f70a`); B6 (demolition: C key, cascade, full refund) COMPLETE / APPROVED (full automation 243/243, cook PASS, manual PIE PASS; `7dd0c1d`); B7 (buildable chest and workbench) COMPLETE / APPROVED (full automation 250/250, cook PASS, manual PIE done; `8f4ae66`); B7.1 (facing-based interaction targeting) COMPLETE / APPROVED (full automation 253/253, cook PASS, manual PIE accepted; reach to be tuned later; `208b12e`); B8 (building UI: build bar) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 5/5 PASS; `e20b30e`); B9 (polish: interaction reach 75/75, first click after closing a screen; Phase 5 closeout) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 3/3 PASS). Next: Phase 6 Colony, to be planned with the user. Crafting queue and the inventory/crafting UI-UX pass are deferred.
 
 ---
 
@@ -806,9 +806,10 @@ Crafting C8A Station Data/Authority  ✅
 Crafting C8B Workbench Actor/Interaction ✅
 Crafting C8C Workstation Crafting UI  ✅
 Phase 4 Crafting                    ✅
+Phase 5 Building                    ✅
 
 NEXT:
-Phase 5 Building: IN PROGRESS — B0 approved, B1-B8 and B7.1 complete (see BUILDING_PROGRESS.md)
+Phase 6 Colony: to be planned with the user (Phase 5 Building COMPLETE, B0–B9; see BUILDING_REPORT.md).
 ```
 
 ---
@@ -1835,7 +1836,7 @@ Current validation baseline:
 - full 258/258 (253 + 5 Building B8)
 
 Next:
-Phase 5 Building: next checkpoint to be planned with the user (B1-B8 complete). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
+Phase 5 Building COMPLETE (B0–B9). Next: Phase 6 Colony, to be planned with the user (first checkpoint: one NPC, one job, navigation, one job action). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1879,7 +1880,7 @@ Phase 4  Crafting                           ✅
                 C8B Workbench actor          ✅
                 C8C Station crafting UI      ✅
 
-Phase 5  Building                           ⏭ IN PROGRESS (B0 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅, B7 ✅, B7.1 ✅, B8 ✅)
+Phase 5  Building                           ✅ (B0 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅, B7 ✅, B7.1 ✅, B8 ✅, B9 ✅)
 
 Phase 6  Colony
 

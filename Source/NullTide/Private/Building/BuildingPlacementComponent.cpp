@@ -16,6 +16,7 @@
 #include "Inventory/InventoryComponent.h"
 #include "Items/ItemDefinition.h"
 #include "UI/BuildingHudWidget.h"
+#include "UI/GameInputMode.h"
 
 #define LOCTEXT_NAMESPACE "BuildingPlacement"
 
@@ -387,12 +388,9 @@ void UBuildingPlacementComponent::ExitBuildingMode()
 		PlayerController->SetShowMouseCursor(bCursorWasShown);
 		if (bInputModeChanged)
 		{
-			// Back to the resting game mode with the project's capture mode (CapturePermanently_IncludingInitialMouseDown),
-			// so the first click after leaving reaches the game. Building mode keeps every screen key, so no other UI
+			// Back to the resting game mode, first click included. Building mode keeps every screen key, so no other UI
 			// mode can be active here.
-			FInputModeGameOnly GameOnly;
-			GameOnly.SetConsumeCaptureMouseDown(false);
-			PlayerController->SetInputMode(GameOnly);
+			NullTideInput::RestoreGameOnlyInput(*PlayerController);
 		}
 	}
 	bInputModeChanged = false;

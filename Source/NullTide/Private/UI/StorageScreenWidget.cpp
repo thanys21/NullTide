@@ -1,6 +1,5 @@
 #include "UI/StorageScreenWidget.h"
 
-#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Components/WrapBox.h"
@@ -9,6 +8,7 @@
 #include "Inventory/InventoryComponent.h"
 #include "Items/ItemInstance.h"
 #include "Storage/StorageComponent.h"
+#include "UI/GameInputMode.h"
 #include "UI/StorageSlotWidget.h"
 
 void UStorageScreenWidget::NativeConstruct()
@@ -93,7 +93,8 @@ void UStorageScreenWidget::CloseStorage()
 	if (APlayerController* PlayerController = GetOwningPlayer())
 	{
 		PlayerController->SetShowMouseCursor(false);
-		UWidgetBlueprintLibrary::SetInputMode_GameOnly(PlayerController, false);
+		// The first click after closing reaches the game (B9).
+		NullTideInput::RestoreGameOnlyInput(*PlayerController);
 	}
 	RemoveFromParent();
 }

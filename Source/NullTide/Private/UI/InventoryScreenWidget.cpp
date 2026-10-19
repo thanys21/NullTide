@@ -1,6 +1,5 @@
 #include "UI/InventoryScreenWidget.h"
 
-#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/Button.h"
 #include "Components/Image.h"
 #include "Components/TextBlock.h"
@@ -18,6 +17,7 @@
 #include "ToolLoadout/ToolLoadoutComponent.h"
 #include "UI/CraftingPanelWidget.h"
 #include "UI/InventoryDragDropOperation.h"
+#include "UI/GameInputMode.h"
 #include "UI/InventorySlotWidget.h"
 
 void UInventoryScreenWidget::NativeConstruct()
@@ -248,7 +248,8 @@ void UInventoryScreenWidget::CloseInventory()
 	if (APlayerController* PlayerController = GetOwningPlayer())
 	{
 		PlayerController->SetShowMouseCursor(false);
-		UWidgetBlueprintLibrary::SetInputMode_GameOnly(PlayerController, false);
+		// The first click after closing reaches the game (B9).
+		NullTideInput::RestoreGameOnlyInput(*PlayerController);
 	}
 	RemoveFromParent();
 }

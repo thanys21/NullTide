@@ -1698,6 +1698,69 @@ Expected full suite **250** (243 + 7).
 - **R-4 Hover under the bar:** the ghost still follows the cursor beneath the bar; the confirm guard prevents a build there. This is acceptable.
 - **R-5 MCP UMG authoring:** creating the two widget Blueprints and placing `BuildBar` relies on `UMGToolSet` (`CreateWidgetBlueprint`, `AddWidget`). If an anchor or property cannot be set, STOP and ask (a manual editor step).
 
+### B9 — Polish and Phase 5 Closeout — COMPLETE / APPROVED (user, 2026-10-19: B9-1 = 75/75; B9-2 and B9-3 as recommended; PIE 3/3 PASS 2026-10-20)
+
+**Why:** B1–B8 (and B7.1) complete the Building MVP. Before Phase 5 closes, two small follow-ups are pending:
+- the interaction reach "a bit far" (user, B7.1 PIE: tune later);
+- the swallowed first click after closing a screen (B8 review, recorded, not changed in B8).
+
+The user chose a short polish checkpoint plus the closeout (2026-10-19).
+
+**Audit (source, 2026-10-19):**
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| The probe is a 90 cm sphere 90 cm ahead of the capsule centre, so it reaches 180 cm ahead plus each object's interaction bounds (chest 130, bench 150 × 120, door 100 × 110 half extents). | `BP_TopDownCharacter` `InteractionProbe`; `BuildingStorageActor.cpp`, `BuildingCraftingStationActor.cpp`, `BuildingDoorActor.cpp` | Shrinking the probe shortens the reach without touching any interactable; the bounds stay (authored actors and pickups share the pattern). |
+| `G8.ProbeAsset` asserts only X > 0 and radius > 0. | `InteractionTargetingTests.cpp:158` | It can pin the tuned values. |
+| The inventory and storage screens close with `SetInputMode_GameOnly(PC, false)`, whose default `bConsumeCaptureMouseDown` sets `CapturePermanently`. The project default is `CapturePermanently_IncludingInitialMouseDown`, so the first click after closing only takes capture. | `InventoryScreenWidget.cpp:251`; `StorageScreenWidget.cpp:96`; engine `PlayerController.cpp:6450`; `Config/DefaultInput.ini:75` | The same fix as B8's exit, in one shared helper. |
+| Building mode already restores GameOnly with `SetConsumeCaptureMouseDown(false)` (B8). | `BuildingPlacementComponent.cpp:389-396` | Three call sites share one rule. |
+| `BP_TopDownController`'s only input-mode node is `SetInputModeUIOnly` on opening the inventory (`IA_OpeningInventory` Started → CreateWidget → AddToViewport → set variable → UIOnly). It never restores GameOnly. | MCP node read of `BP_TopDownController:EventGraph` (`K2Node_CallFunction_1`), 2026-10-19 | Closing is native only (`CloseInventory`); no Blueprint change is needed. |
+
+**Design (recommended):**
+- **Probe reach (data only):**
+  - `InteractionProbe` radius 75 cm, 75 cm ahead (user decision B9-1), so it reaches 150 cm ahead instead of 180 cm (−30 cm);
+  - cone ±70° and refresh 0.1 s unchanged;
+  - set on the `BP_TopDownCharacter` template by MCP. `G8.ProbeAsset` pins 75/75.
+- **Restore helper (native):**
+  - `UI/GameInputMode.h/.cpp`: `NullTideInput::RestoreGameOnlyInput(APlayerController&)` applies `FInputModeGameOnly` with `SetConsumeCaptureMouseDown(false)`;
+  - used by `UInventoryScreenWidget::CloseInventory`, `UStorageScreenWidget::CloseStorage` and `UBuildingPlacementComponent::ExitBuildingMode` (no behaviour change for building mode);
+  - cursor handling is unchanged.
+- **Closeout (docs):**
+  - new `BUILDING_REPORT.md`: the Phase 5 summary (checkpoints and commits, architecture and authority, approved decisions, test groups and the final baseline, assets, known limitations, deferred features);
+  - `NULLTIDE_MASTER_PLAN.md`: Phase 5 COMPLETE, next Phase 6 Colony (to be planned);
+  - `CLAUDE.md`: Building "complete", test list, interaction reach.
+
+**Decisions (user):**
+- **B9-1 Reach.**
+  - Recommended: 60/60 (120 cm ahead).
+  - Alternatives: 75/75 (150 cm), or keep 90/90.
+  - Tuned again in PIE if needed (I-2).
+- **B9-2 Screens' first click.**
+  - Recommended: fix with the shared helper.
+  - Alternative: leave as is; it was never reported in PIE.
+- **B9-3 Closeout form.**
+  - Recommended: one `BUILDING_REPORT.md`, the `*_REPORT.md` pattern of earlier phases.
+  - Alternative: only status lines in the existing docs.
+
+**Failure and scope:**
+- The helper only replaces the input-mode call. A null or non-local controller behaves as before, because `SetInputMode` without a local player is a no-op.
+- Not in scope: interaction bounds sizes, the cone, any new Building feature.
+
+**Tests:**
+- `G8.ProbeAsset` asserts radius 75 and X 75.
+- No new test for the input mode: there is no viewport in automation, so it is a PIE step.
+- Expected suite: 258 (unchanged count).
+
+**PIE:**
+1. Interact (`F`) with a chest, the workbench, a door and a pickup: the prompt appears only when close in front, about one step nearer than before.
+2. Open and close the inventory (`I`/`Tab`) and a chest. The first left click afterwards works at once.
+3. Building mode enter and exit still behaves as in B8.
+
+**Self-critique (open risks):**
+- **R-1 A shorter reach** could miss tall or offset interactables (resource nodes are Blueprint-only), or large ones approached from a corner. PIE step 1 covers this. 75/75 is the fallback.
+- **R-2 (resolved in the audit):** `BP_TopDownController` only sets UIOnly on open, so the native close paths are the whole fix.
+- **R-3 Closeout accuracy:** the report is compiled from `BUILDING_PROGRESS.md` and the commits; no new claims.
+
 **Dependencies:** B1 → B2 → B3 → B4 → B5 → B6 → B7 → B8. B5 needs B4 for PIE; B6 needs B3–B5 content. Each checkpoint gets a build, focused tests, regressions (Crafting, Inventory, Gameplay, ResourceGathering), the full suite, the cook, a content and WP audit, docs, and a commit only after review.
 
 ---

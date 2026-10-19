@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Null Tide is an Unreal Engine 5.8 top-down game project (single runtime module `NullTide`, Windows). The C++ work so far is mostly about inventory, items, storage, resource gathering and crafting (Phase 4 complete, including workstations). Blueprints and UMG widgets are built on top of that code.
+Null Tide is an Unreal Engine 5.8 top-down game project (single runtime module `NullTide`, Windows). The C++ work so far covers inventory, items, storage, resource gathering, crafting (Phase 4 complete, including workstations) and building (Phase 5 complete; summary in `BUILDING_REPORT.md`). Blueprints and UMG widgets are built on top of that code.
 
 ## Project roadmap
 
@@ -149,7 +149,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - Crafting progress is tracked in `CRAFTING_PLAN.md` / `CRAFTING_PROGRESS.md`.
 - MCP cannot add a Blueprint interface to a new Blueprint. `BP_Workbench` was made by duplicating `BP_Sword` and reparenting it. Duplicating marks the source Blueprint dirty in the editor; never save that source.
 
-**Building (`Building/`)** — Phase 5, in progress (design in `BUILDING_PLAN.md`, status in `BUILDING_PROGRESS.md`)
+**Building (`Building/`)** — Phase 5, complete (design in `BUILDING_PLAN.md`, evidence in `BUILDING_PROGRESS.md`, summary in `BUILDING_REPORT.md`)
 - `UBuildingDefinition` is an abstract, const UObject with data-only Blueprint subclasses read from the CDO (the items/recipes/stations pattern). It holds the category, `PieceActorClass` (must carry a `UBuildingPieceComponent`), placement mode (`GridCell` for floors and furniture, `GridEdge` for walls and doors), footprint, cost (`FInventoryDefinitionQuantity`), `RefundFraction` and range override. `ValidateBuilding` and `IsDataValid` report the first problem.
 - `UBuildingSubsystem` (`UWorldSubsystem`) is the grid, occupancy and placement-validation authority.
   - Grid: 200 cm cells from the world origin (floor division); canonical edges (X edge `(ix,iy)` runs along X from `(ix*200, iy*200)`; Y edge likewise along Y); edge snapping tie order South, West, North, East.
@@ -221,7 +221,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 
 **Interaction targeting (`Interaction/`)** — B7.1
 - The Blueprint `PlayerInteractionComponent` (`Content/LevelPrototyping/interactionSystem/`) runs interactions through `BPI_Interactable`. Its `GetActiveInteractable` returns `UInteractionTargetingLibrary::GetFacingInteractableFor(GetOwner)`: the player interacts with what they face, not with the last object that overlapped the capsule.
-- `UInteractionProbeComponent` (a sphere named `InteractionProbe` on `BP_TopDownCharacter`, attached to the capsule) has radius 90 cm and sits 90 cm ahead.
+- `UInteractionProbeComponent` (a sphere named `InteractionProbe` on `BP_TopDownCharacter`, attached to the capsule) has radius 75 cm and sits 75 cm ahead (B9; reach 150 cm).
   - It has no collision of its own and no overlap events: it only places and sizes a fresh Pawn-channel overlap query for `BPI_Interactable` candidates, ignoring the owner and actors attached to it. It never affects navigation.
   - A 0.1 s timer (no tick) broadcasts `OnFacingInteractableChanged` only when the target changes, including to null when the previous target was destroyed. `PlayerInteractionComponent` binds it to re-render the prompt.
 - `SelectFacingInteractable` considers candidates within ±70° of the actor's forward vector (2D). It picks the nearest of those within 1° of the smallest angle, which is independent of input order. It skips depleted resource nodes (`ShouldShowInteractionPromptFor`). With nothing in front there is no target and no prompt.
@@ -241,6 +241,9 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - `OpenForCraftingStation` gives a station screen its context. Close and destruction clear it, and the screen closes itself when its station becomes unusable.
   - The controller-owned hand screen never has a station context.
   - `I`, `Tab` and `Esc` close the screen in `NativeOnPreviewKeyDown` (and `NativeOnKeyDown`) through `CloseInventory`. The preview pass is required because a focused child (slot, recipe entry, button) otherwise consumes `Tab` as Slate focus navigation.
+- Returning to game input (closing the inventory or storage screen, leaving building mode) goes through `NullTideInput::RestoreGameOnlyInput` (`UI/GameInputMode.h`, B9).
+  - It applies GameOnly with `SetConsumeCaptureMouseDown(false)` to match the project's `CapturePermanently_IncludingInitialMouseDown`, so the first click afterwards reaches the game.
+  - Do not call `SetInputMode_GameOnly` directly; its default swallows that click.
   - Keep every widget name that `UInventoryScreenWidget` binds when editing `W_Inventory`.
 
 **Content**

@@ -153,10 +153,12 @@ bool FGameplayG8ProbeAssetTest::RunTest(const FString& Parameters)
 	const UInteractionProbeComponent* Probe = Probes[0];
 	TestTrue(TEXT("Named InteractionProbe, looking for BPI_Interactable"), Probe->GetName().StartsWith(TEXT("InteractionProbe"))
 		&& Probe->InteractableInterface == InteractableClass);
-	TestTrue(FString::Printf(TEXT("In front of the capsule (%s), radius %.0f, cone %.0f, refresh %.2f s"), *Probe->GetRelativeLocation().ToString(),
+	// B9-1 (user): radius 75 cm, 75 cm ahead of the capsule centre (reach 150 cm).
+	TestTrue(FString::Printf(TEXT("75 cm ahead of the capsule (%s), radius %.0f (75), cone %.0f, refresh %.2f s"), *Probe->GetRelativeLocation().ToString(),
 		Probe->GetUnscaledSphereRadius(), Probe->FacingConeDegrees, Probe->RefreshInterval),
-		Probe->GetRelativeLocation().X > 0.0 && Probe->GetUnscaledSphereRadius() > 0.f && FMath::IsNearlyEqual(Probe->FacingConeDegrees, 70.f)
-		&& FMath::IsNearlyEqual(Probe->RefreshInterval, 0.1f));
+		Probe->GetRelativeLocation().Equals(FVector(75.0, 0.0, 0.0)) && Probe->GetRelativeScale3D().Equals(FVector::OneVector)
+		&& FMath::IsNearlyEqual(Probe->GetUnscaledSphereRadius(), 75.f)
+		&& FMath::IsNearlyEqual(Probe->FacingConeDegrees, 70.f) && FMath::IsNearlyEqual(Probe->RefreshInterval, 0.1f));
 	TestTrue(TEXT("No collision of its own, no overlap events, never affects navigation"),
 		Probe->GetCollisionEnabled() == ECollisionEnabled::NoCollision && !Probe->GetGenerateOverlapEvents() && !Probe->CanEverAffectNavigation());
 	return true;

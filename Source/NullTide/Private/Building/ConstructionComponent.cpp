@@ -575,7 +575,7 @@ bool UConstructionComponent::ValidateDemolish(AActor* Target, TArray<UBuildingPi
 		return Fail(EBuildResult::OutOfRange, FString::Printf(TEXT("The piece is farther than %.0f cm."), Range));
 	}
 
-	// The cascade (B6-2): a floor takes the walls and doors that would be left without a floor.
+	// The cascade (B6-2, B7-4): a floor takes the walls, doors and furniture that would be left without a floor.
 	OutPieces.Add(TargetPiece);
 	if (TargetDefinition->Category == EBuildingCategory::Foundation)
 	{
@@ -585,7 +585,7 @@ bool UConstructionComponent::ValidateDemolish(AActor* Target, TArray<UBuildingPi
 		{
 			return Fail(EBuildResult::InvalidPlacement, TEXT("No building subsystem in this world."));
 		}
-		for (UBuildingPieceComponent* Dependent : Subsystem->FindDependentEdgePieces(*TargetPiece))
+		for (UBuildingPieceComponent* Dependent : Subsystem->FindDependentPieces(*TargetPiece))
 		{
 			if (Dependent && !OutPieces.Contains(Dependent))
 			{
@@ -595,12 +595,14 @@ bool UConstructionComponent::ValidateDemolish(AActor* Target, TArray<UBuildingPi
 		}
 	}
 
-	// A storage piece is never demolished, alone or in a cascade (B6-3).
+	// A storage that holds items is never demolished, alone or in a cascade; its contents must never be lost (B7-2).
 	for (const UBuildingPieceComponent* Piece : OutPieces)
 	{
-		if (Piece->GetOwner() && Piece->GetOwner()->FindComponentByClass<UStorageComponent>())
+		const UStorageComponent* Storage = Piece->GetOwner() ? Piece->GetOwner()->FindComponentByClass<UStorageComponent>() : nullptr;
+		if (Storage && Storage->GetItemCount() > 0)
 		{
-			return Fail(EBuildResult::IsStorage, FString::Printf(TEXT("%s is a storage."), *Piece->GetOwner()->GetName()));
+			return Fail(EBuildResult::StorageNotEmpty, FString::Printf(TEXT("%s still holds %d item stack(s)."), *Piece->GetOwner()->GetName(),
+				Storage->GetItemCount()));
 		}
 	}
 	for (int32 Index = 1; Index < OutPieces.Num(); ++Index)

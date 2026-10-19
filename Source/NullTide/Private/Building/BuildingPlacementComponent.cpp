@@ -728,7 +728,7 @@ void UBuildingPlacementComponent::RefreshHud()
 		RefreshDemolishHud();
 		return;
 	}
-	HudWidget->SetHintText(LOCTEXT("BuildHint", "1-3 select  ·  R rotate  ·  C demolish  ·  LMB build  ·  RMB / B exit"));
+	HudWidget->SetHintText(LOCTEXT("BuildHint", "1-5 select  ·  R rotate  ·  C demolish  ·  LMB build  ·  RMB / B exit"));
 	const UBuildingDefinition* Definition = SelectedBuilding ? SelectedBuilding->GetDefaultObject<UBuildingDefinition>() : nullptr;
 	const UConstructionComponent* Construction = GetConstruction();
 	if (Definition)
@@ -821,6 +821,8 @@ FText UBuildingPlacementComponent::DescribeResult(const EBuildResult Result)
 		return LOCTEXT("RefundDoesNotFit", "Inventory full");
 	case EBuildResult::IsStorage:
 		return LOCTEXT("IsStorage", "Storage can't be demolished");
+	case EBuildResult::StorageNotEmpty:
+		return LOCTEXT("StorageNotEmpty", "Empty it first");
 	case EBuildResult::InsufficientResources:
 		return LOCTEXT("Insufficient", "Not enough resources");
 	case EBuildResult::InvalidInventory:

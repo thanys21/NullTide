@@ -206,11 +206,11 @@ TArray<FVector2D> UBuildingSubsystem::GetSurfaceSamplePoints(const UBuildingDefi
 		return Samples;
 	}
 	const FIntPoint Size = GetRotatedFootprint(Definition.Footprint, Placement.Rotation);
-	// Corners inset past a neighbouring wall's half thickness, plus the center.
-	const double MinX = Placement.Anchor.X * CellSize + EdgeEndInset;
-	const double MinY = Placement.Anchor.Y * CellSize + EdgeEndInset;
-	const double MaxX = (Placement.Anchor.X + Size.X) * CellSize - EdgeEndInset;
-	const double MaxY = (Placement.Anchor.Y + Size.Y) * CellSize - EdgeEndInset;
+	// Corners (inset) plus the center. Walls and doors on the cell's own edges are ignored by validation (B7-5).
+	const double MinX = Placement.Anchor.X * CellSize + CellSampleInset;
+	const double MinY = Placement.Anchor.Y * CellSize + CellSampleInset;
+	const double MaxX = (Placement.Anchor.X + Size.X) * CellSize - CellSampleInset;
+	const double MaxY = (Placement.Anchor.Y + Size.Y) * CellSize - CellSampleInset;
 	Samples.Add(FVector2D(MinX, MinY));
 	Samples.Add(FVector2D(MaxX, MinY));
 	Samples.Add(FVector2D(MinX, MaxY));
@@ -222,7 +222,7 @@ TArray<FVector2D> UBuildingSubsystem::GetSurfaceSamplePoints(const UBuildingDefi
 FBox UBuildingSubsystem::GetCollisionBox(const UBuildingDefinition& Definition, const FBuildingPlacement& Placement)
 {
 	// The box starts 1 cm above the support surface, so the ground or floor the piece stands on never overlaps it;
-	// everything else inside the volume does. No actor is excluded by identity.
+	// everything else inside the volume does. Only a cell's own edge pieces are excluded, by registry (B7-5).
 	const double Bottom = Placement.SurfaceZ + 1.0;
 	if (Placement.PlacementMode == EBuildingPlacementMode::GridEdge)
 	{
@@ -238,10 +238,9 @@ FBox UBuildingSubsystem::GetCollisionBox(const UBuildingDefinition& Definition, 
 	}
 	const FIntPoint Size = GetRotatedFootprint(Definition.Footprint, Placement.Rotation);
 	const double Height = Definition.Category == EBuildingCategory::Foundation ? FloorThickness : WallHeight;
-	// Shrunk past a neighbouring wall's half thickness, so walls and doors on the cell's edges do not block it.
 	return FBox(
-		FVector(Placement.Anchor.X * CellSize + EdgeEndInset, Placement.Anchor.Y * CellSize + EdgeEndInset, Bottom),
-		FVector((Placement.Anchor.X + Size.X) * CellSize - EdgeEndInset, (Placement.Anchor.Y + Size.Y) * CellSize - EdgeEndInset,
+		FVector(Placement.Anchor.X * CellSize + CollisionClearance, Placement.Anchor.Y * CellSize + CollisionClearance, Bottom),
+		FVector((Placement.Anchor.X + Size.X) * CellSize - CollisionClearance, (Placement.Anchor.Y + Size.Y) * CellSize - CollisionClearance,
 			Placement.SurfaceZ + Height));
 }
 
@@ -310,7 +309,37 @@ UBuildingPieceComponent* UBuildingSubsystem::GetOccupyingPiece(const FBuildingOc
 	return const_cast<UBuildingPieceComponent*>(Cast<UBuildingPieceComponent>(Occupant->Holder.Get()));
 }
 
-TArray<UBuildingPieceComponent*> UBuildingSubsystem::FindDependentEdgePieces(const UBuildingPieceComponent& Floor) const
+TArray<const AActor*> UBuildingSubsystem::CollectOwnEdgeActors(const UBuildingDefinition& Definition, const FBuildingPlacement& Placement) const
+{
+	TArray<const AActor*> Actors;
+	const FIntPoint Size = GetRotatedFootprint(Definition.Footprint, Placement.Rotation);
+	auto IsOwnEdge = [&Placement, &Size](const FBuildingOccupancyKey& Key)
+	{
+		// The footprint's perimeter only: X edges on its south and north lines, Y edges on its west and east lines.
+		// A wall across the inside of a multi-cell footprint is never ignored.
+		const int32 MinX = Placement.Anchor.X;
+		const int32 MinY = Placement.Anchor.Y;
+		return Key.Axis == EBuildingEdgeAxis::X
+			? Key.X >= MinX && Key.X < MinX + Size.X && (Key.Y == MinY || Key.Y == MinY + Size.Y)
+			: Key.Axis == EBuildingEdgeAxis::Y && Key.Y >= MinY && Key.Y < MinY + Size.Y && (Key.X == MinX || Key.X == MinX + Size.X);
+	};
+	for (const TPair<FBuildingOccupancyKey, FOccupant>& Entry : Occupancy)
+	{
+		if (Entry.Key.Category != EBuildingOccupancyCategory::Edge || Entry.Value.bReserved || !IsOwnEdge(Entry.Key))
+		{
+			continue;
+		}
+		const UBuildingPieceComponent* Piece = Cast<UBuildingPieceComponent>(Entry.Value.Holder.Get());
+		const AActor* Owner = Piece && Piece->IsActivePiece() ? Piece->GetOwner() : nullptr;
+		if (Owner)
+		{
+			Actors.AddUnique(Owner);
+		}
+	}
+	return Actors;
+}
+
+TArray<UBuildingPieceComponent*> UBuildingSubsystem::FindDependentPieces(const UBuildingPieceComponent& Floor) const
 {
 	TArray<UBuildingPieceComponent*> Dependents;
 	const TArray<FBuildingOccupancyKey> FloorKeys = Floor.GetOccupancyKeys();
@@ -357,6 +386,15 @@ TArray<UBuildingPieceComponent*> UBuildingSubsystem::FindDependentEdgePieces(con
 				{
 					Dependents.AddUnique(EdgePiece);
 				}
+			}
+		}
+		// Furniture (chests, stations) standing on this cell's floor goes with it (B7-4), whatever its own rule.
+		for (const int32 FurnitureLayer : WallLayers)
+		{
+			if (UBuildingPieceComponent* Furniture = GetOccupyingPiece(
+				FBuildingOccupancyKey(EBuildingOccupancyCategory::Furniture, EBuildingEdgeAxis::None, Cell.X, Cell.Y, FurnitureLayer)))
+			{
+				Dependents.AddUnique(Furniture);
 			}
 		}
 	}
@@ -719,6 +757,10 @@ FBuildingPlacementResult UBuildingSubsystem::ValidatePlacement(TSubclassOf<UBuil
 	{
 		TraceParams.AddIgnoredActor(IgnoreActor);
 	}
+	// A cell ignores only the walls and doors registered on its own edges (B7-5): they stand on the border and reach
+	// 10 cm into the cell. Any other actor near the border, such as a thin world blocker, still counts.
+	const TArray<const AActor*> OwnEdgeActors = bEdge ? TArray<const AActor*>() : CollectOwnEdgeActors(*Definition, Placement);
+	TraceParams.AddIgnoredActors(OwnEdgeActors);
 	const double MinNormalZ = FMath::Cos(FMath::DegreesToRadians(MaxSlopeDegrees));
 	double MinZ = TNumericLimits<double>::Max();
 	double MaxZ = TNumericLimits<double>::Lowest();
@@ -727,6 +769,8 @@ FBuildingPlacementResult UBuildingSubsystem::ValidatePlacement(TSubclassOf<UBuil
 	// Edge pieces: whether every sample on the negative / positive side of the edge line is an Active floor.
 	const double EdgeLine = Placement.EdgeAxis == EBuildingEdgeAxis::Y ? Placement.Anchor.X * CellSize : Placement.Anchor.Y * CellSize;
 	bool bFloorSide[2] = { true, true };
+	// Cell pieces: whether every sample is an Active floor.
+	bool bAllFloor = true;
 	for (const FVector2D& Sample : GetSurfaceSamplePoints(*Definition, Placement))
 	{
 		FHitResult Hit;
@@ -746,6 +790,10 @@ FBuildingPlacementResult UBuildingSubsystem::ValidatePlacement(TSubclassOf<UBuil
 		{
 			const double Across = Placement.EdgeAxis == EBuildingEdgeAxis::Y ? Sample.X : Sample.Y;
 			bFloorSide[Across < EdgeLine ? 0 : 1] &= IsActiveFloorHit(Hit);
+		}
+		else
+		{
+			bAllFloor &= IsActiveFloorHit(Hit);
 		}
 		bSteep |= Hit.ImpactNormal.Z < MinNormalZ;
 		MinZ = FMath::Min(MinZ, Hit.ImpactPoint.Z);
@@ -773,6 +821,10 @@ FBuildingPlacementResult UBuildingSubsystem::ValidatePlacement(TSubclassOf<UBuil
 	{
 		return MakeFailure(Result, EBuildResult::NeedsFloor, TEXT("Needs an Active floor along one side of the edge."));
 	}
+	if (!bEdge && Definition->bRequiresFloor && !bAllFloor)
+	{
+		return MakeFailure(Result, EBuildResult::NeedsFloor, TEXT("Needs an Active floor under the whole cell."));
+	}
 
 	// Occupancy.
 	for (const FBuildingOccupancyKey& Key : Result.Keys)
@@ -791,6 +843,7 @@ FBuildingPlacementResult UBuildingSubsystem::ValidatePlacement(TSubclassOf<UBuil
 	{
 		OverlapParams.AddIgnoredActor(IgnoreActor);
 	}
+	OverlapParams.AddIgnoredActors(OwnEdgeActors);
 	TArray<FOverlapResult> Overlaps;
 	World->OverlapMultiByChannel(Overlaps, Box.GetCenter(), FQuat::Identity, ECC_Pawn,
 		FCollisionShape::MakeBox(Box.GetExtent()), OverlapParams);

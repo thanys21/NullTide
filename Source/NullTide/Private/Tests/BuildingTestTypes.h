@@ -2,9 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "Building/BuildingDefinition.h"
+#include "Building/BuildingCraftingStationActor.h"
 #include "Building/BuildingDoorActor.h"
 #include "Building/BuildingPieceActor.h"
 #include "Building/BuildingPlacementComponent.h"
+#include "Building/BuildingStorageActor.h"
 #include "Building/ConstructionComponent.h"
 #include "BuildingTestTypes.generated.h"
 
@@ -345,4 +347,40 @@ class UBuildingTestStationDefinition : public UBuildingDefinition
 
 public:
 	UBuildingTestStationDefinition();
+};
+
+// ---- B7 chest and workbench fixtures ----
+
+/** Concrete native chest (the production layout). */
+UCLASS(Transient, NotBlueprintable)
+class ABuildingTestChestActor : public ABuildingStorageActor
+{
+	GENERATED_BODY()
+};
+
+/** Concrete native workbench (the production layout); the test sets its station kind. */
+UCLASS(Transient, NotBlueprintable)
+class ABuildingTestBenchActor : public ABuildingCraftingStationActor
+{
+	GENERATED_BODY()
+};
+
+/** Chest on a floor (Furniture, GridCell, requires a floor); Wood x 2. */
+UCLASS(Transient, NotBlueprintable)
+class UBuildingTestChestDefinition : public UBuildingDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UBuildingTestChestDefinition();
+};
+
+/** Workbench (Station, GridCell, ground or floor); Wood x 2. */
+UCLASS(Transient, NotBlueprintable)
+class UBuildingTestBenchDefinition : public UBuildingDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UBuildingTestBenchDefinition();
 };

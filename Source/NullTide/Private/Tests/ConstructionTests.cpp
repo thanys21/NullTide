@@ -32,6 +32,8 @@
 #include "InputMappingContext.h"
 #include "Inventory/InventoryComponent.h"
 #include "Items/ItemDefinition.h"
+#include "Items/ItemInstance.h"
+#include "Storage/StorageTransferLibrary.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/AutomationTest.h"
@@ -183,6 +185,23 @@ UBuildingTestStorageWallDefinition::UBuildingTestStorageWallDefinition()
 UBuildingTestStationDefinition::UBuildingTestStationDefinition()
 {
 	B2MakeFloor(*this, TEXT("Test Station"), ABuildingStationTestPiece::StaticClass());
+	Category = EBuildingCategory::Station;
+	Cost.Reset();
+	Cost.Add(B2Cost(UInventoryStackableTestItemDefinition::StaticClass(), 2));
+}
+
+UBuildingTestChestDefinition::UBuildingTestChestDefinition()
+{
+	B2MakeFloor(*this, TEXT("Test Chest"), ABuildingTestChestActor::StaticClass());
+	Category = EBuildingCategory::Furniture;
+	bRequiresFloor = true;
+	Cost.Reset();
+	Cost.Add(B2Cost(UInventoryStackableTestItemDefinition::StaticClass(), 2));
+}
+
+UBuildingTestBenchDefinition::UBuildingTestBenchDefinition()
+{
+	B2MakeFloor(*this, TEXT("Test Bench"), ABuildingTestBenchActor::StaticClass());
 	Category = EBuildingCategory::Station;
 	Cost.Reset();
 	Cost.Add(B2Cost(UInventoryStackableTestItemDefinition::StaticClass(), 2));
@@ -2716,8 +2735,9 @@ bool FBuildingB5ProductionInputTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("IMC_BuildingMode: no per-mapping triggers or modifiers"), bPlain);
 	// B6 adds C -> IA_BuildDemolish (decision B6-1).
-	TestTrue(TEXT("IMC_BuildingMode: exactly LMB, RMB, I, Tab, F, R, 1, 2, 3, C to the right actions"), ModeContext->GetMappings().Num() == 10
-		&& Mode.Num() == 10 && Mode.FindRef(EKeys::LeftMouseButton) == Confirm && Mode.FindRef(EKeys::RightMouseButton) == Cancel
+	// The exact key set (B7 adds 4 and 5) is asserted in B7.ProductionInput.
+	TestTrue(TEXT("IMC_BuildingMode: LMB, RMB, I, Tab, F, R, 1, 2, 3, C to the right actions"), ModeContext->GetMappings().Num() >= 10
+		&& Mode.FindRef(EKeys::LeftMouseButton) == Confirm && Mode.FindRef(EKeys::RightMouseButton) == Cancel
 		&& Mode.FindRef(EKeys::I) == Cancel && Mode.FindRef(EKeys::Tab) == Cancel && Mode.FindRef(EKeys::F) == Cancel
 		&& Mode.FindRef(EKeys::R) == Rotate && Mode.FindRef(EKeys::One) == Select1 && Mode.FindRef(EKeys::Two) == Select2
 		&& Mode.FindRef(EKeys::Three) == Select3 && Mode.FindRef(EKeys::C) == Demolish);
@@ -2735,14 +2755,15 @@ bool FBuildingB5ProductionInputTest::RunTest(const FString& Parameters)
 		}
 	}
 	if (!TestTrue(TEXT("Production player has construction and placement components"), Construction && Placement)) { return false; }
-	TestTrue(TEXT("Registered buildings are [Floor, Wall, Door] in that order"),
-		Construction->GetAvailableBuildings() == FB2Buildings({ Assets.Base.Floor, Assets.Wall, Assets.Door }));
+	const FB2Buildings Registered = Construction->GetAvailableBuildings();
+	TestTrue(TEXT("Floor, Wall, Door are registered first, in that order (B7 appends more)"),
+		Registered.Num() >= 3 && Registered[0] == Assets.Base.Floor && Registered[1] == Assets.Wall && Registered[2] == Assets.Door);
 	TestTrue(TEXT("Placement rotates with IA_BuildRotate"), B4ReadObject<UInputAction>(Placement, TEXT("RotateAction")) == Rotate);
 	TestTrue(TEXT("Placement demolishes with IA_BuildDemolish"), B4ReadObject<UInputAction>(Placement, TEXT("DemolishAction")) == Demolish);
 	const FArrayProperty* SelectProperty = FindFProperty<FArrayProperty>(UBuildingPlacementComponent::StaticClass(), TEXT("SelectBuildingActions"));
 	const TArray<TObjectPtr<UInputAction>>* SelectActions = SelectProperty
 		? SelectProperty->ContainerPtrToValuePtr<TArray<TObjectPtr<UInputAction>>>(Placement) : nullptr;
-	TestTrue(TEXT("Placement selects with IA_BuildSelect1/2/3 in order"), SelectActions && SelectActions->Num() == 3
+	TestTrue(TEXT("Placement selects with IA_BuildSelect1/2/3 first, in order"), SelectActions && SelectActions->Num() >= 3
 		&& (*SelectActions)[0] == Select1 && (*SelectActions)[1] == Select2 && (*SelectActions)[2] == Select3);
 
 	// B5-R2: the interaction prompt reads its key from IMC_Default, not from the live (possibly consumed) mappings.
@@ -3138,7 +3159,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FBuildingB6StorageAndStationTest::RunTest(const FString& Parameters)
 {
-	// Storage is always refused, alone or in a cascade.
+	// Storage with items is refused, alone or in a cascade; an empty storage is demolished (B7-2).
 	{
 		FB2World Fixture;
 		if (!Fixture.IsValid(*this)) { return false; }
@@ -3147,13 +3168,26 @@ bool FBuildingB6StorageAndStationTest::RunTest(const FString& Parameters)
 		ABuildingPieceActor* Floor = B6Build(*this, Builder, B2FloorClass(), B2CellA);
 		ABuildingPieceActor* Storage = B6Build(*this, Builder, UBuildingTestStorageWallDefinition::StaticClass(), B5EdgeX11);
 		if (!TestTrue(TEXT("Floor and storage wall built"), Floor && Storage && Storage->FindComponentByClass<UStorageComponent>())) { return false; }
-		TestEqual(TEXT("The storage is empty"), Storage->FindComponentByClass<UStorageComponent>()->GetItemCount(), 0);
+		UStorageComponent* StorageComponent = Storage->FindComponentByClass<UStorageComponent>();
+		Builder.Inventory->TryAddDefinitionQuantity(UInventoryTestItemDefinition::StaticClass(), 1);
+		const UItemInstance* Kept = Builder.Inventory->GetItemsSnapshot().IsEmpty() ? nullptr : Builder.Inventory->GetItemsSnapshot()[0];
+		if (!TestTrue(TEXT("An item moves into the storage"), Kept
+			&& UStorageTransferLibrary::TransferInventoryToStorage(Builder.Inventory, StorageComponent, Kept->GetInstanceId()).IsSuccess()))
+		{
+			return false;
+		}
 		const FB2Counts Before = FB2Counts::Capture(Builder);
-		B6Expect(*this, TEXT("An empty storage (CanDemolish)"), Builder.Construction->CanDemolish(Storage), EBuildResult::IsStorage);
-		B6Expect(*this, TEXT("An empty storage (TryDemolish)"), Builder.Construction->TryDemolish(Storage), EBuildResult::IsStorage);
-		B6Expect(*this, TEXT("The floor under it (the storage is in the cascade)"), Builder.Construction->TryDemolish(Floor), EBuildResult::IsStorage);
+		B6Expect(*this, TEXT("A storage with items (CanDemolish)"), Builder.Construction->CanDemolish(Storage), EBuildResult::StorageNotEmpty);
+		B6Expect(*this, TEXT("A storage with items (TryDemolish)"), Builder.Construction->TryDemolish(Storage), EBuildResult::StorageNotEmpty);
+		B6Expect(*this, TEXT("The floor under it (the storage is in the cascade)"), Builder.Construction->TryDemolish(Floor), EBuildResult::StorageNotEmpty);
 		B2ExpectDelta(*this, TEXT("Storage refusals change nothing"), Before, Builder, 0, 0, 0, 0);
-		TestTrue(TEXT("Floor and storage stay Active"), B6ActiveAlive(Floor) && B6ActiveAlive(Storage));
+		TestTrue(TEXT("Floor and storage stay Active; the item is still stored"), B6ActiveAlive(Floor) && B6ActiveAlive(Storage)
+			&& StorageComponent->GetItemCount() == 1);
+		const FGuid StoredId = Kept->GetInstanceId();
+		TestTrue(TEXT("The item comes back"), UStorageTransferLibrary::TransferStorageToInventory(StorageComponent, Builder.Inventory, StoredId).IsSuccess()
+			&& StorageComponent->GetItemCount() == 0);
+		B6Expect(*this, TEXT("The empty storage"), Builder.Construction->TryDemolish(Storage), EBuildResult::Success);
+		TestTrue(TEXT("The storage is gone; the floor stays"), !B6Alive(Storage) && B6ActiveAlive(Floor));
 		Fixture.Clean(*this, TEXT("Storage"));
 	}
 
@@ -3278,6 +3312,439 @@ bool FBuildingB6DemolishModeTest::RunTest(const FString& Parameters)
 	Placement->ExitBuildingMode();
 	TestEqual(TEXT("Exactly one demolish result"), Results.Num(), 1);
 	Fixture.Clean(*this, TEXT("Demolish mode"));
+	return true;
+}
+
+
+// ---- B7: buildable chest and workbench ----
+
+namespace
+{
+const TCHAR* B7ChestDefinitionPath = TEXT("/Game/LevelPrototyping/BuildingSystem/Definitions/Building_WoodChest.Building_WoodChest_C");
+const TCHAR* B7BenchDefinitionPath = TEXT("/Game/LevelPrototyping/BuildingSystem/Definitions/Building_Workbench.Building_Workbench_C");
+const TCHAR* B7ChestPiecePath = TEXT("/Game/LevelPrototyping/BuildingSystem/Pieces/BP_BuildChest.BP_BuildChest_C");
+const TCHAR* B7BenchPiecePath = TEXT("/Game/LevelPrototyping/BuildingSystem/Pieces/BP_BuildWorkbench.BP_BuildWorkbench_C");
+const TCHAR* B7StonePath = TEXT("/Game/LevelPrototyping/InventorySystem/Items/Item_Stone.Item_Stone_C");
+const TCHAR* B7StationPath = TEXT("/Game/LevelPrototyping/CraftingSystem/Stations/Station_Workbench.Station_Workbench_C");
+const TCHAR* B7SwordRecipePath = TEXT("/Game/LevelPrototyping/CraftingSystem/Recipes/Recipe_ShortSword.Recipe_ShortSword_C");
+
+TSubclassOf<UBuildingDefinition> B7TestChest() { return UBuildingTestChestDefinition::StaticClass(); }
+TSubclassOf<UBuildingDefinition> B7TestBench() { return UBuildingTestBenchDefinition::StaticClass(); }
+
+const FVector B7CellD(300.0, 100.0, 0.0);  // Cell (1, 0), south of cell A
+
+struct FB7Assets
+{
+	FB5Assets B5;
+	TSubclassOf<UBuildingDefinition> Chest;
+	TSubclassOf<UBuildingDefinition> Bench;
+	TSubclassOf<ABuildingStorageActor> ChestPiece;
+	TSubclassOf<ABuildingCraftingStationActor> BenchPiece;
+	TSubclassOf<UItemDefinition> Stone;
+	TSubclassOf<UCraftingStationDefinition> Station;
+	TSubclassOf<UCraftingRecipeDefinition> Sword;
+
+	static FB7Assets Load()
+	{
+		FB7Assets Assets;
+		Assets.B5 = FB5Assets::Load();
+		Assets.Chest = LoadClass<UBuildingDefinition>(nullptr, B7ChestDefinitionPath);
+		Assets.Bench = LoadClass<UBuildingDefinition>(nullptr, B7BenchDefinitionPath);
+		Assets.ChestPiece = LoadClass<ABuildingStorageActor>(nullptr, B7ChestPiecePath);
+		Assets.BenchPiece = LoadClass<ABuildingCraftingStationActor>(nullptr, B7BenchPiecePath);
+		Assets.Stone = LoadClass<UItemDefinition>(nullptr, B7StonePath);
+		Assets.Station = LoadClass<UCraftingStationDefinition>(nullptr, B7StationPath);
+		Assets.Sword = LoadClass<UCraftingRecipeDefinition>(nullptr, B7SwordRecipePath);
+		return Assets;
+	}
+
+	bool IsValid(FAutomationTestBase& Test) const
+	{
+		return B5.IsValid(Test) && Test.TestTrue(TEXT("Chest and workbench definitions and pieces, Item_Stone, Station_Workbench and Recipe_ShortSword load"),
+			Chest && Bench && ChestPiece && BenchPiece && Stone && Station && Sword);
+	}
+};
+
+void B7SetStationKind(UCraftingStationComponent* Station, TSubclassOf<UCraftingStationDefinition> Kind)
+{
+	FClassProperty* Property = FindFProperty<FClassProperty>(UCraftingStationComponent::StaticClass(), TEXT("StationDefinition"));
+	check(Property);
+	*Property->ContainerPtrToValuePtr<TSubclassOf<UCraftingStationDefinition>>(Station) = Kind;
+}
+
+UCraftingComponent* B7AddCrafting(APawn* Pawn, const TArray<TSubclassOf<UCraftingRecipeDefinition>>& Recipes)
+{
+	UCraftingComponent* Crafting = NewObject<UCraftingComponent>(Pawn);
+	Pawn->AddInstanceComponent(Crafting);
+	Crafting->RegisterComponent();
+	FArrayProperty* Property = FindFProperty<FArrayProperty>(UCraftingComponent::StaticClass(), TEXT("AvailableRecipes"));
+	check(Property);
+	*Property->ContainerPtrToValuePtr<TArray<TSubclassOf<UCraftingRecipeDefinition>>>(Crafting) = Recipes;
+	return Crafting;
+}
+
+/** Adds one single item and moves it into the storage; returns its id (invalid on failure). */
+FGuid B7StoreOne(UInventoryComponent* Inventory, UStorageComponent* Storage)
+{
+	Inventory->TryAddDefinitionQuantity(UInventoryTestItemDefinition::StaticClass(), 1);
+	for (const UItemInstance* Item : Inventory->GetItemsSnapshot())
+	{
+		if (Item && Item->GetDefinitionClass() == UInventoryTestItemDefinition::StaticClass())
+		{
+			const FGuid Id = Item->GetInstanceId();
+			return UStorageTransferLibrary::TransferInventoryToStorage(Inventory, Storage, Id).IsSuccess() ? Id : FGuid();
+		}
+	}
+	return FGuid();
+}
+
+template <typename T>
+T* B7ReadClassDefault(UClass* Class, const TCHAR* PropertyName)
+{
+	const FClassProperty* Property = FindFProperty<FClassProperty>(Class, PropertyName);
+	return Property ? Cast<T>(Property->GetPropertyValue_InContainer(Class->GetDefaultObject())) : nullptr;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB7ProductionDefinitionsTest,
+	"NullTide.Building.B7.ProductionDefinitions",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB7ProductionDefinitionsTest::RunTest(const FString& Parameters)
+{
+	const FB7Assets Assets = FB7Assets::Load();
+	UClass* InteractableClass = LoadClass<UInterface>(nullptr, B5InteractablePath);
+	if (!Assets.IsValid(*this) || !TestNotNull(TEXT("BPI_Interactable loads"), InteractableClass)) { return false; }
+	const UBuildingDefinition* Chest = Assets.Chest->GetDefaultObject<UBuildingDefinition>();
+	const UBuildingDefinition* Bench = Assets.Bench->GetDefaultObject<UBuildingDefinition>();
+	FString Diagnostic;
+	TestTrue(FString::Printf(TEXT("Building_WoodChest is valid (%s)"), *Diagnostic), Chest->ValidateBuilding(Diagnostic));
+	TestTrue(FString::Printf(TEXT("Building_Workbench is valid (%s)"), *Diagnostic), Bench->ValidateBuilding(Diagnostic));
+	TestTrue(TEXT("Chest: Wooden Chest, Furniture, GridCell 1 x 1, Wood x 12, full refund, needs a floor, BP_BuildChest"),
+		Chest->BuildingName.ToString() == TEXT("Wooden Chest") && Chest->Category == EBuildingCategory::Furniture
+		&& Chest->PlacementMode == EBuildingPlacementMode::GridCell && Chest->Footprint == FIntPoint(1, 1) && Chest->Cost.Num() == 1
+		&& Chest->Cost[0].DefinitionClass == Assets.B5.Base.Wood && Chest->Cost[0].Quantity == 12 && FMath::IsNearlyEqual(Chest->RefundFraction, 1.f)
+		&& Chest->bRequiresFloor && Chest->PieceActorClass == Assets.ChestPiece);
+	TestTrue(TEXT("Workbench: Workbench, Station, GridCell 1 x 1, Wood x 20 + Stone x 10, full refund, needs a floor, BP_BuildWorkbench"),
+		Bench->BuildingName.ToString() == TEXT("Workbench") && Bench->Category == EBuildingCategory::Station
+		&& Bench->PlacementMode == EBuildingPlacementMode::GridCell && Bench->Footprint == FIntPoint(1, 1) && Bench->Cost.Num() == 2
+		&& Bench->Cost[0].DefinitionClass == Assets.B5.Base.Wood && Bench->Cost[0].Quantity == 20 && Bench->Cost[1].DefinitionClass == Assets.Stone
+		&& Bench->Cost[1].Quantity == 10 && FMath::IsNearlyEqual(Bench->RefundFraction, 1.f) && Bench->bRequiresFloor
+		&& Bench->PieceActorClass == Assets.BenchPiece);
+#if WITH_EDITOR
+	FDataValidationContext Context;
+	TestTrue(TEXT("Editor data validation passes"), Chest->IsDataValid(Context) != EDataValidationResult::Invalid
+		&& Bench->IsDataValid(Context) != EDataValidationResult::Invalid);
+#endif
+	TestTrue(TEXT("Both pieces implement BPI_Interactable and add no components"), Assets.ChestPiece->ImplementsInterface(InteractableClass)
+		&& Assets.BenchPiece->ImplementsInterface(InteractableClass) && B5AddedComponents(Assets.ChestPiece.Get()) == 0
+		&& B5AddedComponents(Assets.BenchPiece.Get()) == 0);
+	TestTrue(TEXT("The chest opens W_StorageScreen; the bench opens a crafting screen"),
+		B7ReadClassDefault<UClass>(Assets.ChestPiece.Get(), TEXT("StorageScreenClass")) != nullptr
+		&& B7ReadClassDefault<UClass>(Assets.BenchPiece.Get(), TEXT("CraftingScreenClass")) != nullptr);
+
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ABuildingStorageActor* ChestActor = Fixture.World->SpawnActor<ABuildingStorageActor>(Assets.ChestPiece, FVector(300.0, 300.0, 0.0), FRotator::ZeroRotator, Params);
+	ABuildingCraftingStationActor* BenchActor = Fixture.World->SpawnActor<ABuildingCraftingStationActor>(Assets.BenchPiece, FVector(300.0, -300.0, 0.0),
+		FRotator::ZeroRotator, Params);
+	if (!TestTrue(TEXT("Both pieces spawn"), ChestActor && BenchActor)) { return false; }
+	B5ExpectPieceContract(*this, TEXT("BP_BuildChest"), *ChestActor);
+	B5ExpectPieceContract(*this, TEXT("BP_BuildWorkbench"), *BenchActor);
+	TestTrue(TEXT("The chest has a storage titled Wooden Chest and overlap-only bounds"), ChestActor->GetStorageComponent()
+		&& ChestActor->GetContainerTitle().ToString() == TEXT("Wooden Chest") && B5OverlapOnly(ChestActor->GetInteractionBounds()));
+	TestTrue(TEXT("The bench is a Station_Workbench with overlap-only bounds"), BenchActor->GetCraftingStationComponent()
+		&& BenchActor->GetCraftingStationComponent()->GetStationDefinition() == Assets.Station && B5OverlapOnly(BenchActor->GetInteractionBounds()));
+	for (AActor* Piece : { static_cast<AActor*>(ChestActor), static_cast<AActor*>(BenchActor) })
+	{
+		UFunction* GetType = Piece->FindFunction(FName(TEXT("GetInteractionType")));
+		TestTrue(FString::Printf(TEXT("%s: interaction type is Press"), *Piece->GetClass()->GetName()), GetType && B5CallEnumGetter(Piece, GetType) == TEXT("Press"));
+	}
+	Fixture.Clean(*this, TEXT("Production definitions"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB7ChestStorageTest,
+	"NullTide.Building.B7.ChestStorage",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB7ChestStorageTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { B2FloorClass(), B7TestChest() }, 6);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid() && Builder.Inventory)) { return false; }
+
+	// The chest needs a floor under it (user decision for B7).
+	const FB2Counts Before = FB2Counts::Capture(Builder);
+	B2Expect(*this, TEXT("Chest on bare ground"), Builder.Construction->TryBuild(B7TestChest(), B5Place(B7TestChest(), B2CellA)), EBuildResult::NeedsFloor);
+	B2ExpectDelta(*this, TEXT("Refused chest: nothing consumed"), Before, Builder, 0, 0, 1, 0);
+	ABuildingPieceActor* Floor = B6Build(*this, Builder, B2FloorClass(), B2CellA);
+	ABuildingTestChestActor* Chest = Cast<ABuildingTestChestActor>(B6Build(*this, Builder, B7TestChest(), B2CellA));
+	if (!TestTrue(TEXT("Chest built on the floor"), Floor && Chest)) { return false; }
+	TestTrue(TEXT("The chest stands on the floor's top and holds the cell's furniture key"),
+		FMath::IsNearlyEqual(Chest->GetActorLocation().Z, UBuildingSubsystem::FloorThickness, 0.1)
+		&& Fixture.Subsystem->GetOccupyingPiece(FBuildingOccupancyKey(EBuildingOccupancyCategory::Furniture, EBuildingEdgeAxis::None, 1, 1, 0))
+			== Chest->GetBuildingPieceComponent());
+
+	// Items move in and out through the storage authority, keeping their ItemId.
+	UStorageComponent* Storage = Chest->GetStorageComponent();
+	const FGuid Stored = B7StoreOne(Builder.Inventory, Storage);
+	TestTrue(TEXT("An item moves into the chest"), Stored.IsValid() && Storage->GetItemCount() == 1
+		&& Builder.Inventory->GetTotalQuantity(UInventoryTestItemDefinition::StaticClass()) == 0);
+	const FInventoryStorageTransferResult Back = UStorageTransferLibrary::TransferStorageToInventory(Storage, Builder.Inventory, Stored);
+	TestTrue(TEXT("It comes back with the same ItemId"), Back.IsSuccess() && Back.ItemId == Stored && Storage->GetItemCount() == 0
+		&& Builder.Inventory->GetTotalQuantity(UInventoryTestItemDefinition::StaticClass()) == 1);
+
+	// The chest never opens while it is not an Active piece (the read-only gate; opening itself needs a viewport).
+	TestTrue(TEXT("An Active chest can be opened"), Chest->CanOpenStorage());
+	Chest->GetBuildingPieceComponent()->SetPieceState(EBuildingPieceState::Removing);
+	TestTrue(TEXT("A chest being removed cannot be opened, and does not open"), !Chest->CanOpenStorage()
+		&& !Chest->OpenStorageForInteractor(Builder.Pawn));
+	Chest->GetBuildingPieceComponent()->SetPieceState(EBuildingPieceState::Active);
+	Chest->SetProvisional(true);
+	TestFalse(TEXT("A provisional chest cannot be opened"), Chest->CanOpenStorage());
+	Chest->SetProvisional(false);
+	TestTrue(TEXT("Active again: it can be opened"), Chest->CanOpenStorage());
+	Fixture.Clean(*this, TEXT("Chest storage"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB7WorkbenchStationTest,
+	"NullTide.Building.B7.WorkbenchStation",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB7WorkbenchStationTest::RunTest(const FString& Parameters)
+{
+	const FB7Assets Assets = FB7Assets::Load();
+	if (!Assets.IsValid(*this)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(100.0, -150.0, 92.0), { Assets.B5.Base.Floor, Assets.Bench }, 0);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid() && Builder.Inventory)) { return false; }
+	UInventoryComponent* Inventory = Builder.Inventory;
+	Inventory->TryAddDefinitionQuantity(Assets.B5.Base.Wood, 24);
+	Inventory->TryAddDefinitionQuantity(Assets.Stone, 10);
+
+	// The workbench needs a floor (user decision after the B7 PIE).
+	const FVector BenchCell(100.0, 100.0, 0.0);
+	B2Expect(*this, TEXT("Workbench on bare ground"), Builder.Construction->TryBuild(Assets.Bench, B5Place(Assets.Bench, BenchCell)), EBuildResult::NeedsFloor);
+	B6Build(*this, Builder, Assets.B5.Base.Floor, BenchCell);
+	ABuildingCraftingStationActor* Bench = Cast<ABuildingCraftingStationActor>(B6Build(*this, Builder, Assets.Bench, BenchCell));
+	if (!TestNotNull(TEXT("Workbench built on the floor"), Bench)) { return false; }
+	UCraftingStationComponent* Station = Bench->GetCraftingStationComponent();
+	TestTrue(TEXT("Wood 20 and Stone 10 paid"), Inventory->GetTotalQuantity(Assets.B5.Base.Wood) == 0 && Inventory->GetTotalQuantity(Assets.Stone) == 0);
+	TestTrue(TEXT("A usable Station_Workbench"), Station && Station->IsStationUsable() && Station->GetStationDefinition() == Assets.Station);
+	TestEqual(TEXT("Open request from a pawn without a player controller"), Bench->GetOpenCraftingResult(Builder.Pawn),
+		ECraftingStationOpenResult::NoPlayerController);
+	Bench->GetBuildingPieceComponent()->SetPieceState(EBuildingPieceState::Removing);
+	TestEqual(TEXT("Not usable while not Active"), Bench->GetOpenCraftingResult(Builder.Pawn), ECraftingStationOpenResult::StationUnavailable);
+	Bench->GetBuildingPieceComponent()->SetPieceState(EBuildingPieceState::Active);
+	Bench->DispatchBeginPlay();
+
+	// The production station recipe crafts here, following the station's range.
+	UCraftingComponent* Crafting = B7AddCrafting(Builder.Pawn, { Assets.Sword });
+	TStrongObjectPtr<UCraftingTimedTestListener> CraftListener(NewObject<UCraftingTimedTestListener>(GetTransientPackage()));
+	Crafting->OnCraftCancelled.AddDynamic(CraftListener.Get(), &UCraftingTimedTestListener::HandleCancelled);
+	Inventory->TryAddDefinitionQuantity(Assets.B5.Base.Wood, 2);
+	Inventory->TryAddDefinitionQuantity(Assets.B5.Scrap, 4);
+	TestTrue(TEXT("Short Sword can be crafted at the built bench"), Crafting->CanCraftRecipeAtStation(Assets.Sword, Station).IsSuccess());
+	Builder.Pawn->SetActorLocation(FVector(100.0, -400.0, 92.0));
+	TestTrue(TEXT("Out of the bench's range"), Crafting->CanCraftRecipeAtStation(Assets.Sword, Station).Result == ECraftingTransactionResult::StationOutOfRange);
+	Builder.Pawn->SetActorLocation(FVector(100.0, -150.0, 92.0));
+	if (!TestTrue(TEXT("The timed craft starts at the bench"),
+		Crafting->TryStartCraftAtStation(Assets.Sword, Station).Result == ECraftingTransactionResult::Started))
+	{
+		return false;
+	}
+
+	// Demolishing the bench cancels the craft (StationLost); nothing is consumed and the bench is refunded in full.
+	B6Expect(*this, TEXT("Demolish the bench"), Builder.Construction->TryDemolish(Bench), EBuildResult::Success);
+	TestTrue(TEXT("The craft is cancelled once, with StationLost"), !Crafting->IsCrafting() && !Crafting->GetActiveCraftStation()
+		&& CraftListener->CancelledEvents == 1 && CraftListener->LastCancelReason == ECraftCancelReason::StationLost);
+	TestTrue(TEXT("Ingredients untouched; full refund Wood 20 + Stone 10"), Inventory->GetTotalQuantity(Assets.B5.Base.Wood) == 22
+		&& Inventory->GetTotalQuantity(Assets.B5.Scrap) == 4 && Inventory->GetTotalQuantity(Assets.Stone) == 10);
+	Fixture.Clean(*this, TEXT("Workbench station"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB7StorageDemolishRulesTest,
+	"NullTide.Building.B7.StorageDemolishRules",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB7StorageDemolishRulesTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { B2FloorClass(), B7TestChest() }, 6);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid())) { return false; }
+	ABuildingPieceActor* Floor = B6Build(*this, Builder, B2FloorClass(), B2CellA);
+	ABuildingTestChestActor* Chest = Cast<ABuildingTestChestActor>(B6Build(*this, Builder, B7TestChest(), B2CellA));
+	if (!TestTrue(TEXT("Floor and chest built"), Floor && Chest)) { return false; }
+
+	const FGuid Stored = B7StoreOne(Builder.Inventory, Chest->GetStorageComponent());
+	const FB2Counts Before = FB2Counts::Capture(Builder);
+	const FBuildingDemolishResult Refused = Builder.Construction->TryDemolish(Chest);
+	B6Expect(*this, TEXT("A chest with items"), Refused, EBuildResult::StorageNotEmpty);
+	TestEqual(TEXT("Reason text"), UBuildingPlacementComponent::DescribeResult(Refused.Result).ToString(), FString(TEXT("Empty it first")));
+	B2ExpectDelta(*this, TEXT("Refused: nothing changed"), Before, Builder, 0, 0, 0, 0);
+	TestTrue(TEXT("The chest and its item stay"), B6ActiveAlive(Chest) && Chest->GetStorageComponent()->GetItemCount() == 1);
+
+	UStorageTransferLibrary::TransferStorageToInventory(Chest->GetStorageComponent(), Builder.Inventory, Stored);
+	const FB2Counts Emptied = FB2Counts::Capture(Builder);
+	B6Expect(*this, TEXT("The emptied chest"), Builder.Construction->TryDemolish(Chest), EBuildResult::Success);
+	B2ExpectDelta(*this, TEXT("Full refund Wood 2 in one transaction"), Emptied, Builder, 1, 1, 0, 2);
+	TestTrue(TEXT("The chest is gone; the floor stays"), !B6Alive(Chest) && B6ActiveAlive(Floor));
+	Fixture.Clean(*this, TEXT("Storage demolish rules"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB7FurnitureCascadeTest,
+	"NullTide.Building.B7.FurnitureCascade",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB7FurnitureCascadeTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { B2FloorClass(), B7TestChest(), B6Wall(), B7TestBench() }, 30);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid())) { return false; }
+	ABuildingPieceActor* FloorA = B6Build(*this, Builder, B2FloorClass(), B2CellA);
+	ABuildingTestChestActor* Chest = Cast<ABuildingTestChestActor>(B6Build(*this, Builder, B7TestChest(), B2CellA));
+	ABuildingPieceActor* Wall = B6Build(*this, Builder, B6Wall(), B5EdgeX11);
+	ABuildingPieceActor* FloorE = B6Build(*this, Builder, B2FloorClass(), B6CellE);
+	ABuildingPieceActor* Bench = B6Build(*this, Builder, B7TestBench(), B6CellE);
+	if (!TestTrue(TEXT("Room built"), FloorA && Chest && Wall && FloorE && Bench)) { return false; }
+
+	const FBuildingDemolishResult Preview = Builder.Construction->CanDemolish(FloorA);
+	B6Expect(*this, TEXT("Floor A (CanDemolish)"), Preview, EBuildResult::Success);
+	TestTrue(TEXT("The cascade takes the chest and the wall on floor A"), Preview.Pieces.Num() == 3 && B6Contains(Preview, Chest)
+		&& B6Contains(Preview, Wall) && B6RefundOf(Preview.Refund, B2Wood()) == 4 + 2 + 6);
+
+	// A chest with items refuses the whole cascade.
+	const FGuid Stored = B7StoreOne(Builder.Inventory, Chest->GetStorageComponent());
+	const FB2Counts Before = FB2Counts::Capture(Builder);
+	B6Expect(*this, TEXT("Floor A under a chest with items"), Builder.Construction->TryDemolish(FloorA), EBuildResult::StorageNotEmpty);
+	B2ExpectDelta(*this, TEXT("Refused cascade changes nothing"), Before, Builder, 0, 0, 0, 0);
+	TestTrue(TEXT("Floor, chest and wall stay"), B6ActiveAlive(FloorA) && B6ActiveAlive(Chest) && B6ActiveAlive(Wall));
+
+	UStorageTransferLibrary::TransferStorageToInventory(Chest->GetStorageComponent(), Builder.Inventory, Stored);
+	const FB2Counts Emptied = FB2Counts::Capture(Builder);
+	B6Expect(*this, TEXT("Floor A with an empty chest"), Builder.Construction->TryDemolish(FloorA), EBuildResult::Success);
+	B2ExpectDelta(*this, TEXT("One transaction refunds floor, chest and wall"), Emptied, Builder, 1, 1, 0, 12);
+	TestTrue(TEXT("All three are gone"), !B6Alive(FloorA) && !B6Alive(Chest) && !B6Alive(Wall));
+
+	const FBuildingDemolishResult BenchCascade = Builder.Construction->CanDemolish(FloorE);
+	TestTrue(TEXT("A floor under a workbench takes it with it"), BenchCascade.IsSuccess() && BenchCascade.Pieces.Num() == 2
+		&& B6Contains(BenchCascade, Bench));
+	Fixture.Clean(*this, TEXT("Furniture cascade"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB7ThinBlockerRegressionTest,
+	"NullTide.Building.B7.ThinBlockerRegression",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB7ThinBlockerRegressionTest::RunTest(const FString& Parameters)
+{
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB2Builder Builder = Fixture.SpawnBuilder(FVector(0.0, 0.0, 92.0), { B2FloorClass(), B6Wall(), B7TestChest() }, 46);
+	if (!TestTrue(TEXT("Builder set up"), Builder.IsValid())) { return false; }
+
+	// A 10 cm world fence on cell A's west border (x 195..205) reaches 5 cm into the cell: it blocks a floor again.
+	AActor* Fence = B2SpawnBlocker(Fixture.World, FVector(200.0, 300.0, 25.0), FVector(5.0, 60.0, 25.0));
+	const FBuildingConstructionResult Blocked = Builder.Construction->TryBuild(B2FloorClass(), B5Place(B2FloorClass(), B2CellA));
+	B2ExpectBranch(*this, TEXT("Floor over a thin border fence"), Blocked, EBuildResult::Blocked, Fence ? *Fence->GetName() : TEXT("<no fence>"));
+	if (Fence)
+	{
+		Fence->Destroy();
+	}
+
+	// Walls on the cell's own edges never block it: build them from the neighbouring floors first.
+	B6Build(*this, Builder, B2FloorClass(), B7CellD);
+	B6Build(*this, Builder, B2FloorClass(), B6CellE);
+	ABuildingPieceActor* South = B6Build(*this, Builder, B6Wall(), B5EdgeX11);
+	ABuildingPieceActor* East = B6Build(*this, Builder, B6Wall(), B6EdgeY21);
+	if (!TestTrue(TEXT("Walls on cell A's south and east edges"), South && East)) { return false; }
+	// A wall on a neighbouring cell's edge that only touches cell A's corner (not ignored) never reaches the cell either.
+	TestNotNull(TEXT("A wall on cell E's south edge, diagonal to cell A"), B6Build(*this, Builder, B6Wall(), FVector(500.0, 205.0, 0.0)));
+	ABuildingPieceActor* FloorA = B6Build(*this, Builder, B2FloorClass(), B2CellA);
+	TestNotNull(TEXT("A floor builds between walls on its own edges"), FloorA);
+	TestNotNull(TEXT("A chest builds on it, against the walls"), B6Build(*this, Builder, B7TestChest(), B2CellA));
+	Fixture.Clean(*this, TEXT("Thin blocker regression"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB7ProductionInputTest,
+	"NullTide.Building.B7.ProductionInput",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB7ProductionInputTest::RunTest(const FString& Parameters)
+{
+	const FB7Assets Assets = FB7Assets::Load();
+	if (!Assets.IsValid(*this)) { return false; }
+	const TCHAR* InputRoot = TEXT("/Game/LevelPrototyping/BuildingSystem/Input/");
+	auto LoadAction = [InputRoot](const TCHAR* Name) { return LoadObject<UInputAction>(nullptr, *FString::Printf(TEXT("%s%s.%s"), InputRoot, Name, Name)); };
+	const UInputMappingContext* ModeContext = LoadObject<UInputMappingContext>(nullptr,
+		TEXT("/Game/LevelPrototyping/BuildingSystem/Input/IMC_BuildingMode.IMC_BuildingMode"));
+	const UInputAction* Selects[5] = { LoadAction(TEXT("IA_BuildSelect1")), LoadAction(TEXT("IA_BuildSelect2")), LoadAction(TEXT("IA_BuildSelect3")),
+		LoadAction(TEXT("IA_BuildSelect4")), LoadAction(TEXT("IA_BuildSelect5")) };
+	if (!TestTrue(TEXT("IMC_BuildingMode and the five select actions load"), ModeContext && Selects[0] && Selects[1] && Selects[2] && Selects[3]
+		&& Selects[4]))
+	{
+		return false;
+	}
+	for (const UInputAction* Action : { Selects[3], Selects[4] })
+	{
+		TestTrue(FString::Printf(TEXT("%s: digital, consumes its keys, no triggers"), *Action->GetName()),
+			Action->ValueType == EInputActionValueType::Boolean && Action->bConsumeInput && Action->Triggers.IsEmpty());
+	}
+	TMap<FKey, const UInputAction*> Mode;
+	for (const FEnhancedActionKeyMapping& Mapping : ModeContext->GetMappings())
+	{
+		Mode.Add(Mapping.Key, Mapping.Action);
+	}
+	const FKey Keys[5] = { EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five };
+	bool bSelectKeys = true;
+	for (int32 Index = 0; Index < 5; ++Index)
+	{
+		bSelectKeys &= Mode.FindRef(Keys[Index]) == Selects[Index];
+	}
+	TestTrue(TEXT("IMC_BuildingMode: exactly 12 mappings, 1-5 select in order"), ModeContext->GetMappings().Num() == 12 && Mode.Num() == 12 && bSelectKeys);
+
+	UBlueprint* PlayerBlueprint = LoadObject<UBlueprint>(nullptr, B3PlayerPath);
+	const UConstructionComponent* Construction = nullptr;
+	const UBuildingPlacementComponent* Placement = nullptr;
+	if (const USimpleConstructionScript* ConstructionScript = PlayerBlueprint ? PlayerBlueprint->SimpleConstructionScript.Get() : nullptr)
+	{
+		for (const USCS_Node* Node : ConstructionScript->GetAllNodes())
+		{
+			Construction = Construction ? Construction : (Node ? Cast<UConstructionComponent>(Node->ComponentTemplate) : nullptr);
+			Placement = Placement ? Placement : (Node ? Cast<UBuildingPlacementComponent>(Node->ComponentTemplate) : nullptr);
+		}
+	}
+	if (!TestTrue(TEXT("Production player has construction and placement components"), Construction && Placement)) { return false; }
+	TestTrue(TEXT("Registered buildings: Floor, Wall, Door, Chest, Workbench"), Construction->GetAvailableBuildings()
+		== FB2Buildings({ Assets.B5.Base.Floor, Assets.B5.Wall, Assets.B5.Door, Assets.Chest, Assets.Bench }));
+	const FArrayProperty* SelectProperty = FindFProperty<FArrayProperty>(UBuildingPlacementComponent::StaticClass(), TEXT("SelectBuildingActions"));
+	const TArray<TObjectPtr<UInputAction>>* SelectActions = SelectProperty
+		? SelectProperty->ContainerPtrToValuePtr<TArray<TObjectPtr<UInputAction>>>(Placement) : nullptr;
+	bool bSelectActions = SelectActions && SelectActions->Num() == 5;
+	for (int32 Index = 0; bSelectActions && Index < 5; ++Index)
+	{
+		bSelectActions &= (*SelectActions)[Index] == Selects[Index];
+	}
+	TestTrue(TEXT("Placement selects with IA_BuildSelect1-5 in order"), bSelectActions);
 	return true;
 }
 

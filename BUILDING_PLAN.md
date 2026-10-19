@@ -1225,7 +1225,7 @@ PIE findings (user): walls and doors build without a floor; the door prompt read
 - **R-6 Ghost transform composition.** A wrong composition misplaces the leaf ghost. The test asserts the composed hinge transform against a spawned door's real leaf.
 - **R-7 Map change for test resources.** One modified and one added external actor package. Saved by the user with Ctrl+S, then audited with `git status`.
 
-### B6 — Demolition and Refund — PLAN APPROVED (user, 2026-10-18; revised design; refund 100%), IMPLEMENTED AND VALIDATED
+### B6 — Demolition and Refund — COMPLETE / APPROVED (`7dd0c1d`)
 
 **Goal:** in building mode, `X` switches to demolish. The piece under the cursor is highlighted with its refund, and LMB removes it and returns half its cost. Only player-built pieces can be demolished, and nothing is ever lost.
 
@@ -1413,7 +1413,202 @@ PIE findings (user): walls and doors build without a floor; the door prompt read
 - **R-6 Demolishing the floor under the player:** the player drops 10 cm. No refusal is planned.
 - **R-7 Network:** a client is refused before any refund (authority check). Multiplayer is otherwise out of scope.
 
-**Dependencies:** B1 → B2 → B3 → B4 → B5 → B6. B5 needs B4 for PIE; B6 needs B3–B5 content. Each checkpoint gets a build, focused tests, regressions (Crafting, Inventory, Gameplay, ResourceGathering), the full suite, the cook, a content and WP audit, docs, and a commit only after review.
+### B7 — Buildable Chest and Workbench — PLAN APPROVED (user, 2026-10-19; chest and workbench need a floor), IMPLEMENTED AND VALIDATED
+
+**Goal:** the two remaining Phase 5 production examples ("Storage", "Campfire / Workbench", `NULLTIDE_MASTER_PLAN.md` Phase 5) become buildable. The player builds a wooden chest and a workbench in building mode (`4`, `5`), uses them with `F` exactly like the authored ones, and can demolish them under the B6 rules. This checkpoint also fixes the D3 thin-blocker trade-off (decided in B5 for "when furniture lands").
+
+**Baseline:** `7dd0c1d` (B6). Full automation 243/243, cook 640/7/647.
+
+#### Audit (2026-10-19)
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| Construction only spawns piece classes deriving from `ABuildingPieceActor` (it relies on `SetProvisional`). | `ConstructionComponent.cpp:68-77` (B2 decision) | The buildable chest and workbench need native hosts deriving from `ABuildingPieceActor`. |
+| `AStorageContainerActor` roots on a **scaled** mesh (1.1, 0.7, 0.7) and holds `UStorageComponent`, `InteractionBounds`, `ContainerTitle`, `StorageScreenClass`; `OpenStorageForInteractor` creates or reuses the screen and sets UI-only input. | `StorageContainerActor.cpp:12-80` | Not usable as a piece (actor scale ≠ 1 fails the B2 transform check). Its open logic is extracted into a shared helper, so both actors use one implementation. |
+| `ACraftingStationActor` has an unscaled `StationRoot` and implements `GetOpenCraftingResult` / `OpenCraftingForInteractor` (about 40 lines). | `CraftingStationActor.cpp:18-34`, C8B | Same extraction: a shared helper used by the authored and the buildable workbench. |
+| `UCraftingStationComponent` and the crafting component work with any owner actor (`StationLost` through the station actor's `OnEndPlay`). | C8A, B6 `StorageAndStation` test | No crafting change. |
+| `Recipe_ShortSword` requires `Station_Workbench`. | `CRAFTING_PROGRESS.md:535-537` | PIE can craft at a built workbench. |
+| B6 refuses every storage piece (`IsStorage`), decided while no buildable storage existed. | B6 decision B6-3 | A built chest could never be removed. B7-2 asks to relax it to "only while it holds items". |
+| Cells are validated with a 12 cm inset since B5 (D3), so thin border blockers are missed. | B5-D3, RW-6 | B7-5 restores 2 cm / 5 cm and ignores only the Active edge pieces on the cell's own edges. |
+| Furniture keys (`Furniture` category) are separate from floor keys; a floor demolished under furniture leaves it floating. | B1, B6 | B7-4 adds furniture standing on a floor to the B6 cascade. |
+| MCP cannot add a Blueprint interface. | B5 (door) | Two manual editor steps (`BPI_Interactable` on `BP_BuildChest` and `BP_BuildWorkbench`), as for the door. |
+| Items available: Wood, Stone, Scrap and others. | `Content/.../Items` | Costs below use Wood and Stone. |
+
+#### Scope (with the recommended decisions)
+
+**Source:**
+- **Shared interaction helpers (no behaviour change for the authored actors):**
+  - `Storage/StorageInteraction` (static): `OpenStorageScreen(Interactor, Storage, Title, ScreenClass, CachedScreen)`, the body of `AStorageContainerActor::OpenStorageForInteractor`, which now calls it.
+  - `Crafting/CraftingStationInteraction` (static): `GetOpenResult(...)` and `Open(...)`, the bodies of `ACraftingStationActor::GetOpenCraftingResult` / `OpenCraftingForInteractor`, which now call them.
+- **`Building/BuildingStorageActor` (new, abstract):** `ABuildingPieceActor` + `UStorageComponent` + overlap-only `InteractionBounds`, with `ContainerTitle`, `StorageScreenClass` and `OpenStorageForInteractor` (through the helper). It refuses to open while the piece is not `Active`.
+- **`Building/BuildingCraftingStationActor` (new, abstract):** `ABuildingPieceActor` + `UCraftingStationComponent` + overlap-only `InteractionBounds`, with `CraftingScreenClass`, `GetOpenCraftingResult` and `OpenCraftingForInteractor` (through the helper). It is not usable while not `Active`.
+- **Demolition (B6 changes):**
+  - B7-2: storage is refused only while `GetItemCount() > 0` (new `StorageNotEmpty`, "Empty it first"); an empty chest is demolished and refunded. `IsStorage` stays in the enum, unused.
+  - B7-4: `FindDependentPieces` also returns furniture registered on the floor's cells (same layer rules as walls). The cascade therefore takes an empty chest or a workbench on the floor, and refuses when the chest holds items.
+- **D3 fix (B7-5):** cell samples back at 5 cm and the cell collision box back at 2 cm. Hits and overlaps from `Active` edge pieces registered on the cell's own four edges (same layer rules) are ignored. A thin world blocker on the border blocks again.
+- **Selection:** `IA_BuildSelect4/5` on `4`/`5` (B7-6). `SelectBuildingActions` gets five entries. HUD hint "1-5 select".
+
+**Assets (MCP; two manual steps):**
+- `Pieces/BP_BuildChest` (child of `ABuildingStorageActor`): engine-cube placeholder about 110 × 70 × 70 cm; `ContainerTitle` "Wooden Chest"; `StorageScreenClass` = `W_StorageScreen`. **Manual:** add `BPI_Interactable`; MCP writes `Interact` → `OpenStorageForInteractor`, Press, hold 0.
+- `Pieces/BP_BuildWorkbench` (child of `ABuildingCraftingStationActor`): the authored bench's placeholder (160 × 80 × 80 cm); `Station_Workbench`; `CraftingScreenClass` = `W_Inventory`. **Manual:** add `BPI_Interactable`; MCP writes `Interact` → `OpenCraftingForInteractor`, Press, hold 0.
+- `Definitions/Building_WoodChest`: "Wooden Chest", Furniture, GridCell 1 × 1, **Wood × 12** (B7-3).
+- `Definitions/Building_Workbench`: "Workbench", Station, GridCell 1 × 1, **Wood × 20 + Stone × 10** (B7-3).
+- `IA_BuildSelect4/5`, mapped to Four and Five in `IMC_BuildingMode` (12 mappings).
+- `BP_TopDownCharacter`: `AvailableBuildings` = Floor, Wall, Door, Chest, Workbench; five select actions.
+- No map change. The existing test pickups (Wood × 100, Stone × 10) cover the costs; one Stone pickup may need +10 (B7-3).
+
+**Not in B7:**
+- campfire and forge;
+- chest or bench art;
+- moving placed furniture;
+- multi-cell furniture;
+- save/load.
+
+#### Tests `NullTide.Building.B7.*` (planned, 7)
+
+| Test | Assertions |
+| --- | --- |
+| `ProductionDefinitions` | Chest and workbench definitions are valid (category, GridCell, costs, full refund, piece class). Piece contracts: unscaled root, no child actors, storage or station component, overlap-only interaction bounds. `BP_BuildChest` and `BP_BuildWorkbench` implement `BPI_Interactable` (Press). |
+| `ChestStorage` | A built chest's storage accepts and returns items through `UStorageTransferLibrary` (same ItemId). `OpenStorageForInteractor` is refused while provisional and without a player controller (the screen itself needs a viewport, as in G-tests). |
+| `WorkbenchStation` | A built workbench is a usable `Station_Workbench`; `CanCraftRecipeAtStation(Recipe_ShortSword)` follows range; a timed craft at it is cancelled with `StationLost` when it is demolished. |
+| `StorageDemolishRules` | An empty chest is demolished and refunded (Wood 12); a chest with items is refused (`StorageNotEmpty`) with nothing changed. |
+| `FurnitureCascade` | A floor carrying an empty chest and a wall → all removed with the summed refund; a chest with items under the cascade refuses the whole request. |
+| `ThinBlockerRegression` (D3) | A thin world blocker on a cell border blocks a floor (`Blocked`) again; a wall and a door on the cell's own edges still do not; a floor next to a wall on another cell's edge still builds. The B5 corner and floor-next-to-wall cases stay green. |
+| `ProductionInput` | `IMC_BuildingMode` 12 mappings (adds 4, 5); the character registers the five buildings in order and five select actions. `B5.ProductionInput` and `B6` assertions are updated to the new counts. |
+
+Expected full suite **250** (243 + 7).
+
+#### Manual rendered PIE (user)
+
+1. `4` selects the chest: the HUD shows "Wooden Chest · Wood x/12"; it builds on the ground and on a floor.
+2. `F` at the built chest opens the storage screen; items move in and out; `I`/`Tab`/`Esc` close it.
+3. `5` builds a workbench (Wood −20, Stone −10); `F` opens the crafting screen titled "WORKBENCH"; Short Sword crafts there.
+4. Demolish an empty chest: Wood +12. A chest with items: red, "Empty it first".
+5. Demolish a floor carrying a chest and a wall: everything highlighted, all removed, full refund. With items in the chest: refused.
+6. Demolish the workbench while crafting the Short Sword: the craft is cancelled, nothing lost.
+7. The authored storage and workbench behave exactly as before and cannot be demolished.
+8. Floors, walls and doors next to each other still build as in B5 (D3 regression).
+
+#### User decisions (2026-10-19) — APPROVED: B7-1 to B7-6 as recommended, plus one change
+
+- **The chest needs a floor under it.** `bRequiresFloor` is extended to GridCell pieces: every surface sample of the cell must hit an `Active` floor, else `NeedsFloor`. `Building_WoodChest` sets it. The workbench keeps the default (ground or floor); the user can change this later.
+- The chest therefore always stands on a floor, so B7-4 (furniture in the floor cascade) always applies to it.
+- **Tests:** `ChestStorage` also asserts that a chest on bare ground is refused (`NeedsFloor`) and that one on a floor builds.
+- **After the B7 PIE (user, 2026-10-19):** the workbench must need a floor too. `Building_Workbench` sets `bRequiresFloor`; tests and the PIE checklist are updated.
+
+#### Decisions (as proposed)
+
+- **B7-1 Scope.** Recommended: chest and workbench together in B7 (one pattern, shared helpers). Alternative: B7 chest only, B8 workbench.
+- **B7-2 Demolishing a chest.** Recommended: allowed when empty (full refund); refused while it holds items. Alternative: keep B6 (storage always refused), so a built chest is permanent.
+- **B7-3 Costs.** Recommended: chest Wood × 12; workbench Wood × 20 + Stone × 10. Raise the Stone test pickup to 20 if needed.
+- **B7-4 Furniture on a demolished floor.** Recommended: part of the cascade (a chest with items refuses the whole request). Alternative: refuse demolishing a floor that carries furniture.
+- **B7-5 D3 fix.** Recommended: restore the 2 cm / 5 cm cell inset and ignore only `Active` edge pieces registered on the cell's own edges. This is an identity exclusion, against the B1 "geometric" rule; it was agreed in B5 for this checkpoint.
+- **B7-6 Selection keys.** Recommended: `4` and `5` (new actions). Alternative: a build-bar UI (deferred feature).
+
+#### Self-critique (open risks)
+
+- **R-1 Refactoring the authored storage and workbench.** The extraction must not change behaviour. G-tests (storage), C8B/C8C (workbench) and PIE step 7 cover it.
+- **R-2 Furniture layer rules.** Furniture on a floor top uses the same layer tolerance as walls (L and the top's layer). Covered by `FurnitureCascade`.
+- **R-3 D3 identity exclusion.** It ignores pieces by registry key, not by geometry; a wall on the cell's edge whose mesh is wider than 20 cm would still be ignored. Production walls and doors are 20 cm.
+- **R-4 Furniture on a cell bounded by walls.** With the 2 cm box, a chest mesh smaller than the cell never meets the walls; validation ignores the walls on the cell's edges anyway.
+- **R-5 Two manual editor steps** (the interfaces). If MCP cannot write the interface graphs, STOP and ask.
+- **R-6 Interaction target ambiguity** (B5 R-4): a chest next to a door may target the wrong one; bounds are kept tight.
+- **R-7 Station screen while the bench is demolished:** the C8C screen closes itself when its station becomes unusable; PIE step 6 checks it.
+
+### B7.1 — Facing-Based Interaction Targeting — PLAN APPROVED (user, 2026-10-19; I-1 to I-4 as recommended), starts after the B7 commit
+
+**PIE finding (user, B7):** "the character's hitbox is too broad, so objects placed near each other block each other's interaction". The user asks to adjust the character's interaction area towards the direction the character is facing.
+
+**Audit (MCP graph read, 2026-10-19):**
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| `PlayerInteractionComponent` (Blueprint) binds the character **capsule**'s begin/end overlap and adds every overlapping `BPI_Interactable` actor to `InteractableInRange`. | `PlayerInteractionComponent` EventGraph | Anything whose interaction bounds touch the capsule is a candidate, including objects behind the character. |
+| `GetActiveInteractable` returns the **last** element of `InteractableInRange`, if `ShouldShowInteractionPromptFor` allows it, else none. | `PlayerInteractionComponent:GetActiveInteractable` | The most recently overlapped object always wins, whatever the character faces; a filtered last element hides valid others. |
+| `RenderInteractionWidget` runs only on overlap begin/end. | EventGraph | Turning in place never changes the target or the prompt. |
+| Interaction bounds are large: storage 130 × 130 × 110, stations 150 × 120 × 110, door 100 × 110 × 110 (half extents). | the actor constructors | Placed pieces one cell apart overlap the capsule together. |
+| The character faces its movement (`bOrientRotationToMovement`, yaw rate 640). | `BP_TopDownCharacter` `CharMoveComp` | The actor's forward vector is the facing direction. |
+
+**Design (recommended):**
+- **Forward interaction probe:** a sphere on `BP_TopDownCharacter` named `InteractionProbe`, overlap-only, never affecting navigation. It sits about 90 cm in front of the capsule centre with a radius of about 90 cm, and turns with the character.
+  - `PlayerInteractionComponent` binds the probe's overlaps instead of the capsule's, falling back to the capsule if no probe exists.
+  - Objects behind the character no longer become candidates.
+- **Facing selection (native):** `UInteractionTargetingLibrary::SelectFacingInteractable(Pawn, Candidates)`, BlueprintPure.
+  - Among valid candidates, it picks the one with the smallest 2D angle between the pawn's forward vector and the direction to the candidate; ties go to the shorter distance.
+  - Candidates outside a ±70° cone are ignored. If none is in front, there is no target and no prompt.
+  - `GetActiveInteractable` filters the whole list with `ShouldShowInteractionPromptFor`, then calls the selector.
+- **Refresh:** a 0.1 s looping timer in `PlayerInteractionComponent` re-evaluates the target and re-renders the prompt **only when the target changes**, so turning in place switches the prompt. There is no per-frame tick.
+- **Unchanged:** `BPI_Interactable`, every interactable actor, hold interactions (gathering), the prompt widget, building mode.
+
+**Assets (MCP):**
+- `BP_TopDownCharacter` gets the `InteractionProbe` sphere.
+- `PlayerInteractionComponent` graphs are edited as follows:
+  - the BeginPlay binding moves to the probe;
+  - `GetActiveInteractable` filters, then selects;
+  - a refresh timer is added.
+
+  Compiled with warnings as errors.
+
+**Tests (`NullTide.Gameplay.G8.*`, planned 3):**
+- `FacingSelection`, native:
+  - front beats side;
+  - behind and outside the cone are ignored;
+  - a tie goes to the nearer;
+  - invalid and destroyed actors are ignored;
+  - empty input gives none.
+- `ProbeAsset`: the character has exactly one overlap-only `InteractionProbe` in front of the capsule that does not affect navigation; `PlayerInteractionComponent` compiles.
+- `TwoInteractablesInFront`: a chest and a bench one cell apart, with the pawn facing each in turn. The selector returns the one faced, using the real actors' locations.
+- Expected suite: 250 + 3 after B7.
+
+**PIE:**
+1. A chest and a workbench side by side: facing each shows its own prompt, and `F` opens the one faced.
+2. Turning in place switches the prompt without moving.
+3. An object behind the character shows no prompt.
+4. Doors, pickups, resource nodes (hold to gather), the authored storage and workbench all still work.
+
+**Decisions — APPROVED (user, 2026-10-19): I-1 to I-4 as recommended.**
+- **I-1 Approach.**
+  - Recommended: forward probe plus facing selection.
+  - Alternatives:
+    - (b) facing selection only, keeping capsule overlaps, so objects behind can still be chosen when nothing is in front;
+    - (c) only shrink each object's interaction bounds.
+- **I-2 Probe and cone.** Recommended: radius 90 cm, 90 cm forward, ±70°. Tuned in PIE.
+- **I-3 Nothing in front.** Recommended: no prompt. Alternative: fall back to the nearest candidate.
+- **I-4 Order.** Recommended: commit B7 first (with the review fixes and the workbench floor rule), then implement B7.1 before B8 (UI).
+
+**Self-critique (open risks):**
+- **R-1 Blueprint graph edits through MCP** (`PlayerInteractionComponent` is shared by every interaction). If MCP cannot express the timer or the binding change, STOP and ask; the fallback is a small native interaction component.
+- **R-2 Hold interactions:** the active target switching mid-hold could cancel or redirect a gather. Lock the target while a hold is in progress.
+- **R-3 Pickups use the same route:** a pickup lying beside the character but outside the cone gets no prompt. PIE step 4 checks it.
+- **R-4 Facing while standing still:** the character keeps its last movement direction, so the player turns by moving. Acceptable for top-down WASD.
+
+### B8 — Building UI (build bar) — OUTLINE, to be planned after B7
+
+**Why:** there is no building UI plan yet.
+- B0 section 3.3 mentions a "HUD build bar", but B4–B6 implemented only the text HUD (`W_BuildingHud`: name, cost, status, hint) and number keys.
+- "Build menu with categories and icons" sits in Deferred Features (section 11).
+- With five buildings (B7), keys alone no longer show what can be built.
+
+**Proposed scope (to be confirmed in the B8 plan):**
+- **Build bar** at the bottom of the screen in building mode: one slot per registered building in `AvailableBuildings` order, showing:
+  - the key (1–5);
+  - an icon (`BuildingIcon`; a placeholder or the name's initial until art exists);
+  - the name;
+  - the cost against the inventory, greyed out when unaffordable.
+- **Interaction:**
+  - the selected slot is highlighted and follows `SelectBuildingIndex`, `1`–`5` and clicking a slot;
+  - a demolish slot (`C`) shows the demolish sub-mode.
+- **Display only:** it reads `GetAvailableBuildings`, `CanBuild` affordability and the inventory, and calls `SelectBuildingIndex` / `ToggleDemolishMode`. It never builds.
+- **Native widget base classes** (`UBuildingBarWidget`, `UBuildingBarSlotWidget`) bound into `W_BuildingHud`, the inventory-slot pattern.
+- **Open questions for the B8 plan:**
+  - categories or tabs (floor and walls, furniture, stations) versus one flat bar;
+  - whether clicking a slot conflicts with LMB placement (the bar must consume its clicks while the world placement ignores them);
+  - icon art;
+  - a tooltip with the description;
+  - whether the bar also shows outside building mode.
+- **Tests:** a slot per building in order; selection sync both ways; affordability updates on inventory change; the click path; no world build from a bar click.
+
+**Dependencies:** B1 → B2 → B3 → B4 → B5 → B6 → B7 → B8. B5 needs B4 for PIE; B6 needs B3–B5 content. Each checkpoint gets a build, focused tests, regressions (Crafting, Inventory, Gameplay, ResourceGathering), the full suite, the cook, a content and WP audit, docs, and a commit only after review.
 
 ---
 
@@ -1503,4 +1698,4 @@ Refinements required by the review and integrated here:
 
 ## 11. Deferred Features
 
-Free (non-grid) placement; building tiers and upgrades; structural support and stability; snapping to arbitrary actors; stairs, roofs and multi-level building; furniture; buildable Storage, Workbench, Campfire and Forge (designed for, not in the MVP); hammer or tool requirement; repair and durability; NPC construction jobs and blueprints (ghost plans built later by colonists); multiplayer and replication; save/load of built structures (Phase 7); nav-based enclosure checks; build menu with categories and icons beyond the MVP build bar; undo; area or drag placement of multiple floors or walls.
+Free (non-grid) placement; building tiers and upgrades; structural support and stability; snapping to arbitrary actors; stairs, roofs and multi-level building; furniture; buildable Storage, Workbench, Campfire and Forge (designed for, not in the MVP); hammer or tool requirement; repair and durability; NPC construction jobs and blueprints (ghost plans built later by colonists); multiplayer and replication; save/load of built structures (Phase 7); nav-based enclosure checks; build menu categories, tabs and icon art beyond the B8 build bar; undo; area or drag placement of multiple floors or walls.

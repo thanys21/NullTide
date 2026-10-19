@@ -80,7 +80,4 @@ protected:
 private:
 	/** This station's screen; reused across openings for the same player. Its station context is reset on close. */
 	TWeakObjectPtr<UInventoryScreenWidget> ActiveCraftingScreen;
-
-	/** The interacting pawn and its player controller; either may be null. */
-	static void ResolveInteractor(AActor* Interactor, APawn*& OutPawn, APlayerController*& OutController);
 };

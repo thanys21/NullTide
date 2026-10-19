@@ -37,10 +37,12 @@ public:
 	/** Edge collision boxes are this much thinner than a wall, and edge samples this far inside its faces. */
 	static constexpr double CollisionClearance = 2.0;
 	/**
-	 * Surface samples and collision boxes stay this far inside a cell's border or an edge's ends: more than half a
-	 * wall thickness, so a wall or door on a neighbouring edge is neither under a sample nor inside the box (B5).
+	 * Edge pieces keep their end samples and collision box this far from the grid corners: more than half a wall
+	 * thickness, so a perpendicular wall meeting at the corner is neither under a sample nor inside the box (B5).
 	 */
 	static constexpr double EdgeEndInset = WallThickness * 0.5 + CollisionClearance;
+	/** Cell surface samples are taken this far inside the footprint corners (walls on the cell's edges are ignored). */
+	static constexpr double CellSampleInset = 5.0;
 	/** The builder's capsule must stay this far from a new piece. */
 	static constexpr double BuilderClearance = 5.0;
 	/** Surface traces run from the height hint plus this distance to the hint minus this distance. */
@@ -99,10 +101,11 @@ public:
 	bool IsPieceRegistered(const UBuildingPieceComponent* Piece) const;
 
 	/**
-	 * Registry read for demolition: the edge pieces on this floor's cell edges (same layer) that require a floor
-	 * and have no other Active floor on the far side, so they would be left without one. Empty for non-floors.
+	 * Registry read for demolition: the pieces this floor alone carries. Edge pieces on its cell edges that require
+	 * a floor and have no other Active floor on the far side, and furniture on its cells. Layer-tolerant (the floor's
+	 * layer and its top's layer). Empty for non-floors.
 	 */
-	TArray<UBuildingPieceComponent*> FindDependentEdgePieces(const UBuildingPieceComponent& Floor) const;
+	TArray<UBuildingPieceComponent*> FindDependentPieces(const UBuildingPieceComponent& Floor) const;
 	bool IsReservationActive(const FBuildingReservationHandle& Handle) const;
 	int32 GetOccupiedKeyCount() const;
 	int32 GetReservedKeyCount() const;
@@ -151,6 +154,8 @@ private:
 	};
 
 	bool IsOccupantAlive(const FOccupant& Occupant) const;
+	/** The actors of the Active edge pieces registered on the four edges of every cell a cell placement covers (any layer). */
+	TArray<const AActor*> CollectOwnEdgeActors(const UBuildingDefinition& Definition, const FBuildingPlacement& Placement) const;
 	static bool HasDuplicateKeys(const TArray<FBuildingOccupancyKey>& Keys);
 	static bool SameKeySet(const TArray<FBuildingOccupancyKey>& A, const TArray<FBuildingOccupancyKey>& B);
 	static TArray<FVector2D> GetSurfaceSamplePoints(const UBuildingDefinition& Definition, const FBuildingPlacement& Placement);

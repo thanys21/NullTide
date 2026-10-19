@@ -214,7 +214,7 @@ private:
 	UPROPERTY(EditDefaultsOnly, Category = "Building|Input", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UInputAction> RotateAction;
 
-	/** Started: select the registered building at the action's index (1, 2, 3 -> index 0, 1, 2). */
+	/** Started: select the registered building at the action's index (1-5 -> index 0-4). */
 	UPROPERTY(EditDefaultsOnly, Category = "Building|Input", meta = (AllowPrivateAccess = "true"))
 	TArray<TObjectPtr<UInputAction>> SelectBuildingActions;
 

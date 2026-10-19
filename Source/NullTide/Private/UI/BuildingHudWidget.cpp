@@ -11,7 +11,7 @@ void UBuildingHudWidget::NativeConstruct()
 	SetVisibility(ESlateVisibility::HitTestInvisible);
 	if (HintText)
 	{
-		HintText->SetText(LOCTEXT("Hint", "1-3 select  ·  R rotate  ·  C demolish  ·  LMB build  ·  RMB / B exit"));
+		HintText->SetText(LOCTEXT("Hint", "1-5 select  ·  R rotate  ·  C demolish  ·  LMB build  ·  RMB / B exit"));
 	}
 }
 

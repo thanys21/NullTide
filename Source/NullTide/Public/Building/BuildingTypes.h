@@ -99,8 +99,10 @@ enum class EBuildResult : uint8
 	NotDemolishable,
 	/** Demolition: the full refund does not fit into the builder's inventory; nothing was removed. */
 	RefundDoesNotFit,
-	/** Demolition: a storage piece is never demolished (its contents must never be lost). */
-	IsStorage
+	/** Demolition (B6 only): a storage piece was never demolished. Unused since B7, which refuses only non-empty storage. */
+	IsStorage,
+	/** Demolition: a storage piece still holds items (its contents must never be lost). */
+	StorageNotEmpty
 };
 
 /** One occupancy slot: a floor cell, a canonical edge or a furniture cell, on one height layer. */

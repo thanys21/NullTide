@@ -12,7 +12,10 @@ Plan and design decisions: `BUILDING_PLAN.md`.
 | B3 First buildable: Wooden Floor | COMPLETE / APPROVED (4/4; full automation 223/223; cook PASS 624/7/631; no manual PIE required; commit `ff04c0e`, pushed). |
 | B4 Building mode, ghost preview, input | COMPLETE / APPROVED (7/7; full automation 230/230; cook PASS; manual rendered PIE 8/8 PASS; commit `7ce9be3`; test aid `305e23a`). |
 | B5 Wooden wall and wooden door | COMPLETE / APPROVED (6/6; full automation 236/236; cook PASS 639/7/646; manual rendered PIE PASS after the rework; commit `b20f70a`). Plan approved 2026-10-17 (B5-1 to B5-5; rework R1–R3, D1–D3). |
-| B6 Demolition and refund | IMPLEMENTED AND VALIDATED — awaiting commit approval (7/7; full automation 243/243; cook PASS 640/7/647). Plan approved 2026-10-18 (C key, cascade, storage always refused; refund 100%). |
+| B6 Demolition and refund | COMPLETE / APPROVED (7/7; full automation 243/243; cook PASS 640/7/647; manual PIE PASS with full refund; commit `7dd0c1d`, pushed). Plan approved 2026-10-18 (C key, cascade, storage always refused; refund 100%). |
+| B7 Buildable chest and workbench | IMPLEMENTED AND VALIDATED — awaiting commit approval (7/7; full automation 250/250; cook PASS 646/7/653; PIE done). Plan approved 2026-10-19 (B7-1 to B7-6; chest and workbench need a floor). |
+| B7.1 Facing-based interaction targeting | PLAN APPROVED (user, 2026-10-19; I-1 to I-4 as recommended) — starts after the B7 commit. |
+| B8 Building UI (build bar) | OUTLINE in `BUILDING_PLAN.md` section 7 B8; to be planned after B7. |
 
 ## B1 - Data Model, Grid Coordinates, Occupancy and Placement Validation
 
@@ -735,6 +738,97 @@ The user's first PIE run found three problems:
 - The cascade is one level deep and single-storey: walls depend on floors, and nothing depends on walls.
 - D3 thin border blockers (from B5) remain, to be fixed with furniture.
 
+## B7 - Buildable Chest and Workbench
+
+### Baseline and Scope
+
+- **Baseline:** `7dd0c1d` (B6). Full automation 243/243, cook 640/7/647.
+- **Scope (user-approved 2026-10-19; `BUILDING_PLAN.md` section 7 B7):**
+  - B7-1 to B7-6 as recommended;
+  - the chest needs a floor;
+  - after the B7 PIE, the workbench needs a floor too.
+- **Not in scope:** campfire and forge, art, multi-cell furniture, save/load.
+
+### Source
+
+| File | Content |
+| --- | --- |
+| `Storage/StorageInteraction.h/.cpp` (new) | `FStorageInteraction::OpenStorageScreen`, the former body of `AStorageContainerActor::OpenStorageForInteractor`, which now delegates (no behaviour change). |
+| `Crafting/CraftingStationInteraction.h/.cpp` (new) | `FCraftingStationInteraction::ResolveInteractor` / `GetOpenResult` / `Open`, the former bodies in `ACraftingStationActor`, which now delegates (same result order, log category and per-player screen cache). |
+| `Building/BuildingStorageActor.h/.cpp` (new) | Buildable chest: `ABuildingPieceActor` + `UStorageComponent` + overlap-only `InteractionBounds`; a placeholder 110 × 70 × 70 cm mesh; `CanOpenStorage` (`Active`, not provisional, not being destroyed); `OpenStorageForInteractor` through the helper. |
+| `Building/BuildingCraftingStationActor.h/.cpp` (new) | Buildable workbench: `ABuildingPieceActor` + `UCraftingStationComponent` + overlap-only `InteractionBounds`; the authored bench's placeholder mesh. `GetOpenCraftingResult` returns `StationUnavailable` unless the piece is `Active`; `OpenCraftingForInteractor` goes through the helper. |
+| `Building/BuildingTypes.h` | Appended `StorageNotEmpty`. `IsStorage` is kept and unused. |
+| `Building/ConstructionComponent.cpp` | A storage is refused only while it holds items (`StorageNotEmpty`). The cascade uses `FindDependentPieces`. |
+| `Building/BuildingSubsystem.h/.cpp` | `FindDependentPieces` (renamed) also returns furniture on the floor's cells, on the same layer set. `bRequiresFloor` applies to cells: every sample must be an `Active` floor. D3 fix: cell samples at `CellSampleInset` 5 cm and the cell box at `CollisionClearance` 2 cm; `CollectOwnEdgeActors` ignores only `Active` edge pieces on the footprint's perimeter edges, in traces and overlaps. |
+| `Building/BuildingPlacementComponent`, `UI/BuildingHudWidget` | "1-5 select" hint; the `StorageNotEmpty` text "Empty it first". |
+| Tests | `BuildingTestTypes.h`: test chest and bench actors and definitions. `ConstructionTests.cpp`: the B7 section. B6 `StorageAndStation` now expects an empty storage to be demolished and one with items refused. `B5.ProductionInput` no longer pins exact counts. |
+
+### Assets (Unreal MCP; two manual steps)
+
+- **New `Pieces/BP_BuildChest`:** title "Wooden Chest", `W_StorageScreen`.
+  - **Manual (user):** `BPI_Interactable`.
+  - **MCP:** `Interact` → `OpenStorageForInteractor`; the template events were removed.
+- **New `Pieces/BP_BuildWorkbench`:** `CraftingStation.StationDefinition` = `Station_Workbench`; `W_Inventory`.
+  - **Manual (user):** `BPI_Interactable`. The first attempt was not saved and was redone.
+  - **MCP:** `Interact` → `OpenCraftingForInteractor`.
+- **New definitions:**
+  - `Building_WoodChest`: Furniture, GridCell, Wood × 12, full refund, `bRequiresFloor`.
+  - `Building_Workbench`: Station, GridCell, Wood × 20 + Stone × 10, full refund, `bRequiresFloor` (set after the PIE).
+- **New `IA_BuildSelect4/5`;** `IMC_BuildingMode` has 12 mappings.
+- **`BP_TopDownCharacter`:** five buildings and five select actions.
+- All compiled with warnings as errors and saved by path. No map change.
+
+### Tests `NullTide.Building.B7.*` (7)
+
+| Test | Covers |
+| --- | --- |
+| `ProductionDefinitions` | Both definitions (category, GridCell, costs, full refund, floor rule, piece class, data validation); pieces implement `BPI_Interactable`, add no components, have screen classes; piece contracts; storage title; station kind; overlap-only bounds; Press. |
+| `ChestStorage` | A chest on bare ground → `NeedsFloor`; on a floor it stands at 10 cm on its furniture key. Storage transfers in and out keep the ItemId. `CanOpenStorage`: Active yes; `Removing` and provisional no. |
+| `WorkbenchStation` | Bench on bare ground → `NeedsFloor`; built on a floor; a usable `Station_Workbench`; open result `NoPlayerController` / `StationUnavailable` when not Active; `Recipe_ShortSword` in range and out of range; demolishing during the timed craft cancels it once with `StationLost`, ingredients untouched, full refund. |
+| `StorageDemolishRules` | A chest with items → `StorageNotEmpty` ("Empty it first"), nothing changed; emptied → demolished, Wood +2. |
+| `FurnitureCascade` | A floor takes its chest and wall; a chest with items refuses the whole cascade; emptied → one transaction refunds all three; a floor takes its bench. |
+| `ThinBlockerRegression` | A 10 cm fence on a cell border blocks a floor again; walls on the cell's own edges and a wall on a neighbour's edge touching the corner do not; a chest builds against the walls. |
+| `ProductionInput` | 12 mappings with 1–5 in order; five registered buildings in order; five select actions. |
+
+### Validation
+
+- **Build:** clean builds with the editor closed; 0 warnings.
+  - One build ran while the editor was open and produced a hot-reload `UnrealEditor-NullTide-0001.dll`. It was rebuilt with the editor closed: the base DLL, and `UnrealEditor.modules` names `UnrealEditor-NullTide.dll`.
+- **Tests:**
+  - command line before the assets: 247/250 (the three production-asset tests);
+  - in-editor after the assets: `NullTide` 250/250;
+  - final command line after the review fixes and the workbench floor rule: **250/250**, exit 0.
+- **Windows cook** (editor closed): `Done!`, 0 errors, 2 environment warnings; 646 cooked, 7 skipped, 653 total (+6). The six new assets are in the cooked asset registry.
+- **Content and World Partition audit:**
+  - added 6 assets;
+  - modified `IMC_BuildingMode` and `BP_TopDownCharacter`;
+  - `__ExternalActors__` 94, `__ExternalObjects__` 3; no map change.
+- **Manual rendered PIE (user, 2026-10-19):** "ok done test". Two findings:
+  1. The workbench built without a floor. Fixed by data: `bRequiresFloor`.
+  2. Neighbouring objects block each other's interaction. This became the approved plan B7.1 (facing-based interaction targeting).
+
+  A short retest of the workbench floor rule is part of the B7.1 PIE.
+
+### Self-Review (fresh-context review pass; no P0 or P1)
+
+| Finding | Resolution |
+| --- | --- |
+| P2: the chest "not Active" test passed vacuously (the pawn has no player controller) | **CONFIRMED, fixed.** New read-only `CanOpenStorage`; the test asserts Active yes, `Removing` and provisional no. |
+| P3: `CollectOwnEdgeActors` included a multi-cell footprint's interior edges | **CONFIRMED, fixed.** Perimeter edges only. |
+| P3: the `StationLost` reason was not asserted | **CONFIRMED, fixed** (cancel listener). |
+| P3: no corner neighbour-edge case | **CONFIRMED, fixed** (a wall on cell E's south edge, diagonal to cell A). |
+| P3: own-edge exclusion ignores every layer; it scans the whole occupancy map per validation | **Recorded** (harmless at MVP scale; a layer window and direct key lookups are the improvement). |
+| P3: a bench in `Removing` can still start a craft from a refund listener | **Recorded** (transient; `Destroy` cancels it with `StationLost`). |
+| P3: items transferred into a chest by a listener during the refund are destroyed with it | **Recorded** (contrived; would need a storage-side lock). |
+| P3: the furniture cascade picks by layer only (floor-on-floor on odd terrain) | **Recorded.** |
+| P3: builder safety now starts 7 cm inside the cell (the cell box grew back to 2 cm) | **Recorded** for PIE feel; it is the pre-B5 behaviour. |
+
+### Known Limitations Carried Forward
+
+- Interaction targeting picks the last overlapped object (B7.1 fixes this).
+- One Stone test pickup (× 10) covers one workbench only.
+- Highlights and ghosts use each piece's default pose.
+
 ## Next Checkpoint
 
-B5 is COMPLETE / APPROVED (commit `b20f70a`). B6 is implemented and validated (automation 243/243, cook PASS, PIE retest: full refund confirmed). It waits for the commit approval. Phase 5 stays IN PROGRESS.
+B6 is COMPLETE / APPROVED (`7dd0c1d`). B7 is implemented and validated (automation 250/250, cook PASS, PIE done with two findings, one fixed in B7 and one planned as B7.1). It waits for the commit approval. Then B7.1 (approved), then B8 (UI). Phase 5 stays IN PROGRESS.

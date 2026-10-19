@@ -200,7 +200,14 @@ public:
 	void SetCursor(const FVector& Location) { CursorLocation = Location; bHasCursor = true; }
 	void SetHudClass(TSubclassOf<UBuildingHudWidget> InClass) { HudWidgetClass = InClass; }
 
+	/** B8: whether the cursor counts as over the build bar (the confirm guard). */
+	bool bCursorOverBuildBar = false;
+
+	/** The LMB confirm input path, with its build-bar guard (B8). */
+	void PressConfirm() { HandleConfirmInput(); }
+
 protected:
+	virtual bool IsCursorOverBuildBar() const override { return bCursorOverBuildBar; }
 	virtual bool GetCursorWorldLocation(FVector& OutLocation) const override;
 	virtual AActor* GetCursorHitActor() const override { return CursorHitActor.Get(); }
 	virtual bool IsLocalBuilderController(const APlayerController& PlayerController) const override { return bTreatControllerAsLocal; }

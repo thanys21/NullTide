@@ -1590,31 +1590,113 @@ Expected full suite **250** (243 + 7).
 - **R-3 Pickups use the same route:** a pickup lying beside the character but outside the cone gets no prompt. PIE step 4 checks it.
 - **R-4 Facing while standing still:** the character keeps its last movement direction, so the player turns by moving. Acceptable for top-down WASD.
 
-### B8 — Building UI (build bar) — OUTLINE, to be planned after B7
+### B8 — Building UI (build bar) — COMPLETE / APPROVED (user, 2026-10-19: B8-1 to B8-5 as recommended; PIE 5/5 PASS)
 
-**Why:** there is no building UI plan yet.
-- B0 section 3.3 mentions a "HUD build bar", but B4–B6 implemented only the text HUD (`W_BuildingHud`: name, cost, status, hint) and number keys.
-- "Build menu with categories and icons" sits in Deferred Features (section 11).
-- With five buildings (B7), keys alone no longer show what can be built.
+**Why:**
+- B0 section 3.3 mentions a "HUD build bar", but B4–B7 implemented only the text HUD (`W_BuildingHud`: name, cost, status, hint) and number keys.
+- With five buildings (B7), keys alone no longer show what can be built or what it costs.
 
-**Proposed scope (to be confirmed in the B8 plan):**
-- **Build bar** at the bottom of the screen in building mode: one slot per registered building in `AvailableBuildings` order, showing:
-  - the key (1–5);
-  - an icon (`BuildingIcon`; a placeholder or the name's initial until art exists);
-  - the name;
-  - the cost against the inventory, greyed out when unaffordable.
-- **Interaction:**
-  - the selected slot is highlighted and follows `SelectBuildingIndex`, `1`–`5` and clicking a slot;
-  - a demolish slot (`C`) shows the demolish sub-mode.
-- **Display only:** it reads `GetAvailableBuildings`, `CanBuild` affordability and the inventory, and calls `SelectBuildingIndex` / `ToggleDemolishMode`. It never builds.
-- **Native widget base classes** (`UBuildingBarWidget`, `UBuildingBarSlotWidget`) bound into `W_BuildingHud`, the inventory-slot pattern.
-- **Open questions for the B8 plan:**
-  - categories or tabs (floor and walls, furniture, stations) versus one flat bar;
-  - whether clicking a slot conflicts with LMB placement (the bar must consume its clicks while the world placement ignores them);
-  - icon art;
-  - a tooltip with the description;
-  - whether the bar also shows outside building mode.
-- **Tests:** a slot per building in order; selection sync both ways; affordability updates on inventory change; the click path; no world build from a bar click.
+**Audit (source, 2026-10-19):**
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| The HUD is display-only and sets itself `HitTestInvisible` so it never takes clicks from placement. | `UI/BuildingHudWidget.cpp:10-12` | A clickable bar needs the HUD root `SelfHitTestInvisible` and the bar itself hit-testable. |
+| The HUD is created on entering building mode (`AddToPlayerScreen`) and removed on every exit. The placement component pushes texts in `RefreshHud`, which runs on every preview update (every tick in the mode). | `BuildingPlacementComponent.cpp:303, 349-353, 720-752, 782-794` | The bar lives and dies with the HUD; selection can be pushed from `RefreshHud` cheaply if it no-ops when unchanged. |
+| Building mode only shows the cursor; it does not change the input mode. The resting mode is GameOnly: screens restore `SetInputMode_GameOnly` on close. | `BuildingPlacementComponent.cpp:281-282`; `InventoryScreenWidget.cpp:251`; `StorageScreenWidget.cpp:96` | — |
+| The viewport capture mode is `CapturePermanently_IncludingInitialMouseDown`. | `Config/DefaultInput.ini:75` | In GameOnly mode the viewport keeps the mouse, so UMG buttons do not reliably receive clicks. A clickable bar needs GameAndUI (capture only during mouse down) while building mode is active. |
+| Keys `1`–`5` leave demolish first, then call `SelectBuildingIndex`; missing indices are ignored. | `BuildingPlacementComponent.cpp:192-225` | A slot click must take the same path. |
+| LMB confirm is an Enhanced Input action (`Started`) that builds or demolishes. | `BuildingPlacementComponent.cpp:162-172` | A click on the bar that reaches the viewport would also build. The confirm handler needs a guard. |
+| Definitions already hold `BuildingName`, `BuildingDescription` and `BuildingIcon` (no art assigned). | `Building/BuildingDefinition.h:22-29` | No data-model change. |
+| `CanApplyDefinitionTransaction` is the exact read-only inventory preflight; `OnInventoryChanged` fires once per change. | `Inventory/InventoryComponent.h:59, 130` | Affordability = `CanApplyDefinitionTransaction(Cost, {})` success, refreshed on `OnInventoryChanged`. |
+| The B4 tests create the real `W_BuildingHud` in a transient world through the `CreateHudWidget` test seam. | `Tests/ConstructionTests.cpp:272-277, 1860-1871` | B8 widget tests use the same fixture. |
+| MCP can create widget Blueprints and add, move and wrap widgets (`UMGToolSet`). | MCP toolset listing | The UMG assets can be authored without a manual step. |
+
+**Design (recommended):**
+- **Native widgets** (the inventory-slot and crafting-entry pattern):
+  - `UBuildingBarWidget` (`UI/BuildingBarWidget.h/.cpp`, abstract):
+    - binds a `SlotContainer` panel and has a `SlotClass`;
+    - `InitializeBar(UBuildingPlacementComponent*)` builds one slot per registered building in `AvailableBuildings` order, plus a last demolish slot (`C`), once per HUD;
+    - `SetSelection(Index, bDemolish)` highlights one slot (no-op when unchanged);
+    - it binds the builder inventory's `OnInventoryChanged` and recomputes affordability, and unbinds in `NativeDestruct`;
+    - `IsBarHovered()`.
+  - `UBuildingBarSlotWidget` (`UI/BuildingBarSlotWidget.h/.cpp`, abstract):
+    - a non-focusable `SlotButton`, plus `KeyText` ("1"–"5", "C"), `NameText`, `CostText` (`Wood 4`, `Stone 10`), `IconImage` and an `InitialText` placeholder;
+    - a selected highlight and an unaffordable grey-out;
+    - the tooltip is `BuildingDescription` when it is not empty;
+    - a click forwards to the bar.
+  - `UBuildingHudWidget` gets an optional `BuildBar` (`BindWidgetOptional`), and its root becomes `SelfHitTestInvisible`.
+- **Placement component:**
+  - Enter: after creating the HUD, `InitializeBuildBar`. Then input mode GameAndUI (no widget focus, no mouse lock, cursor kept during capture).
+  - Exit (every exit path; one place): `SetInputMode_GameOnly`, the resting mode the screens restore too.
+  - `RefreshHud` pushes `SetSelection(SelectedIndex, bDemolishModeActive)`.
+  - New public `RequestSelectBuilding(Index)` (leave demolish, then `SelectBuildingIndex`). The `1`–`5` input and slot clicks both use it. The demolish slot calls `ToggleDemolishMode`.
+  - Confirm guard: `HandleConfirmInput` does nothing while the cursor is over the bar. The protected virtual seam `IsCursorOverBuildBar()` asks the HUD.
+- **Display only:** the bar never builds, demolishes or changes the inventory. It reads definitions and the inventory, and calls only `RequestSelectBuilding` / `ToggleDemolishMode`.
+- **Assets (MCP):**
+  - new `UI/W_BuildingBar` and `UI/W_BuildingBarSlot`;
+  - `W_BuildingHud` gets `BuildBar` at the bottom centre. The existing texts stay where they are.
+  - The hint text adds "click".
+  - All compiled with warnings as errors.
+
+**Decisions (user):**
+- **B8-1 Layout.**
+  - Recommended: one flat bar of 5 buildings plus Demolish.
+  - Alternative: category tabs (floors and walls, furniture, stations). Deferred: with 5 items, tabs add clicks without benefit.
+- **B8-2 Clicking slots.**
+  - Recommended: clickable, with GameAndUI input while building mode is active, a guard so a bar click never builds, and non-focusable buttons so keys keep working.
+  - Alternative: display-only bar with keys only, no input-mode change (lowest risk).
+- **B8-3 Icons.**
+  - Recommended: show `BuildingIcon` when set; otherwise a coloured square with the name's initial. No art in B8.
+- **B8-4 Tooltip.**
+  - Recommended: the description as a tooltip, and fill five one-line descriptions on the definitions by MCP (data only).
+  - Alternative: no tooltip.
+- **B8-5 Visibility.**
+  - Recommended: only in building mode (the HUD's lifetime).
+  - Alternative: always visible.
+
+**Failure, reentrancy and lifetime:**
+- A slot click runs inside the button's handler.
+  - `RequestSelectBuilding` → `RefreshPreviewForSelection` → `RefreshHud` → `SetSelection` only re-styles slots; nothing rebuilds or destroys the bar during the click.
+  - No bar action can exit the mode.
+- The bar holds the placement component and the inventory weakly.
+  - On exit the HUD is removed and `NativeDestruct` unbinds the inventory delegate, so a removed bar never reacts to later inventory changes.
+  - Re-entering creates a fresh HUD and bar.
+- No building is registered: building mode does not start (existing rule), so there is no empty bar. A missing `SlotClass` or `SlotContainer` gives no bar and no crash; the text HUD still works.
+- Affordability is advisory display. `TryBuild` keeps its own exact preflight.
+
+**Tests (`NullTide.Building.B8.*`, planned 5):**
+- `ProductionAssets`:
+  - `W_BuildingHud` binds a `BuildBar` of class `W_BuildingBar`, whose `SlotClass` is `W_BuildingBarSlot`;
+  - the slot button is not focusable;
+  - the HUD root does not block hit tests.
+- `BarSlots`:
+  - the real HUD has 5 + 1 slots in `AvailableBuildings` order;
+  - keys "1"–"5" and "C"; names and cost texts; the initial placeholder with no icon; the tooltip text.
+- `SelectionSync`:
+  - `SelectBuildingIndex` and `ToggleDemolishMode` move the highlight;
+  - a slot click selects (leaving demolish) and the demolish slot enters demolish;
+  - a click never builds: no `OnBuildResult`, inventory revision unchanged.
+- `Affordability`:
+  - empty inventory: all greyed;
+  - adding Wood updates the slots through `OnInventoryChanged` alone;
+  - the result equals `CanApplyDefinitionTransaction`;
+  - after exit, inventory changes do not touch the removed bar.
+- `ConfirmGuard`: with the cursor over the bar, confirm input does nothing; otherwise it builds once.
+- Expected suite: 253 + 5.
+
+**PIE:**
+1. `B` shows the bar at the bottom: 5 buildings plus Demolish, the selected one highlighted.
+2. Keys `1`–`5` and `C` move the highlight; clicking a slot selects it without building.
+3. Costs grey out and update while picking up or spending Wood.
+4. LMB in the world still builds and demolishes; `R` rotates; RMB and `B` exit.
+5. After exiting, `F`, `I` and `Tab` work as before; the cursor and input behave as before entering.
+
+**Self-critique (open risks):**
+- **R-1 Input mode:** GameAndUI is the standard way to make UMG clickable with the cursor shown, but the capture behaviour is only proven in PIE. If clicks still fail, or keys stop reaching Enhanced Input, fall back to B8-2's display-only option. That is a small code change, not an asset-only change, because the bar forces itself `Visible` in `NativeOnInitialized`: no input-mode switch, and the bar `HitTestInvisible`.
+- **R-2 Restoring GameOnly on exit** assumes nothing else expects a different mode at that time. Screens cannot be open in building mode because their keys are consumed (B4), and they restore GameOnly themselves.
+- **R-3 Focus:** a focusable button would take keyboard focus on click, so `1`–`5`, `R` and `C` would stop working (the C8C Tab lesson). The slot sets its button non-focusable, and `ProductionAssets` asserts it.
+- **R-4 Hover under the bar:** the ghost still follows the cursor beneath the bar; the confirm guard prevents a build there. This is acceptable.
+- **R-5 MCP UMG authoring:** creating the two widget Blueprints and placing `BuildBar` relies on `UMGToolSet` (`CreateWidgetBlueprint`, `AddWidget`). If an anchor or property cannot be set, STOP and ask (a manual editor step).
 
 **Dependencies:** B1 → B2 → B3 → B4 → B5 → B6 → B7 → B8. B5 needs B4 for PIE; B6 needs B3–B5 content. Each checkpoint gets a build, focused tests, regressions (Crafting, Inventory, Gameplay, ResourceGathering), the full suite, the cook, a content and WP audit, docs, and a commit only after review.
 

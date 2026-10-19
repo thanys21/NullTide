@@ -4,12 +4,14 @@
 #include "Blueprint/UserWidget.h"
 #include "BuildingHudWidget.generated.h"
 
+class UBuildingBarWidget;
+class UBuildingPlacementComponent;
 class UTextBlock;
 
 /**
  * Building mode HUD: the selected building, its cost against the builder's inventory, and the placement status.
- * Display only. UBuildingPlacementComponent pushes the texts and owns the widget's lifetime; the widget never
- * blocks the cursor.
+ * Display only. UBuildingPlacementComponent pushes the texts and owns the widget's lifetime. The texts never take
+ * the cursor; the optional build bar (B8) is the only hit-testable part.
  */
 UCLASS(Abstract)
 class NULLTIDE_API UBuildingHudWidget : public UUserWidget
@@ -34,7 +36,21 @@ public:
 	FText GetHintText() const;
 	bool IsStatusValid() const { return bStatusValid; }
 
+	/** Builds the optional build bar for this placement component (B8). Returns whether a bar with slots exists. */
+	bool InitializeBuildBar(UBuildingPlacementComponent* Placement);
+
+	/** Highlights the selected building or demolish on the build bar; no-op when unchanged or without a bar. */
+	void SetBuildBarSelection(int32 SelectedIndex, bool bDemolish);
+
+	/** Unbinds the build bar from the builder (building mode exit). */
+	void ReleaseBuildBar();
+
+	bool HasBuildBar() const;
+	bool IsBuildBarHovered() const;
+	UBuildingBarWidget* GetBuildBar() const;
+
 protected:
+	virtual void NativeOnInitialized() override;
 	virtual void NativeConstruct() override;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Building|UI", meta = (BindWidget))
@@ -49,6 +65,10 @@ protected:
 	/** Optional controls hint, set per sub-mode by the placement component. */
 	UPROPERTY(BlueprintReadOnly, Category = "Building|UI", meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> HintText;
+
+	/** Optional build bar (W_BuildingBar): one slot per building plus demolish (B8). */
+	UPROPERTY(BlueprintReadOnly, Category = "Building|UI", meta = (BindWidgetOptional))
+	TObjectPtr<UBuildingBarWidget> BuildBar;
 
 	UPROPERTY(EditAnywhere, Category = "Building|UI")
 	FLinearColor ValidStatusColor = FLinearColor(0.35f, 1.f, 0.4f);

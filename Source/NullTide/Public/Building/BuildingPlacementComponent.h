@@ -68,6 +68,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Building|Placement")
 	bool SelectBuildingIndex(int32 Index);
 
+	/**
+	 * The player's select request (keys 1-5 and build bar clicks, B8): a missing index does nothing; otherwise it
+	 * leaves demolish first, then selects. Returns whether a building was selected.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Building|Placement")
+	bool RequestSelectBuilding(int32 Index);
+
+	/** The builder's construction component (on the same actor), or null. */
+	UConstructionComponent* GetConstruction() const;
+
 	/** Rotates the placement by one quarter turn (wrapping 3 -> 0). For edge pieces this flips the facing. */
 	UFUNCTION(BlueprintCallable, Category = "Building|Placement")
 	void RotatePlacement();
@@ -147,12 +157,17 @@ protected:
 	/** Creates and shows the HUD for a local player. Seam for tests (no viewport in a transient world). */
 	virtual UBuildingHudWidget* CreateHudWidget(APlayerController& PlayerController);
 
+	/** Whether the cursor is over the HUD build bar, where a confirm click must not build. Seam for tests. */
+	virtual bool IsCursorOverBuildBar() const;
+
+	/** LMB confirm input: builds or demolishes once, unless the cursor is over the build bar. */
+	void HandleConfirmInput();
+
 	/** Building mode HUD widget class (W_BuildingHud). */
 	UPROPERTY(EditDefaultsOnly, Category = "Building|Placement")
 	TSubclassOf<UBuildingHudWidget> HudWidgetClass;
 
 private:
-	UConstructionComponent* GetConstruction() const;
 	APlayerController* GetOwningPlayerController() const;
 	void BindToController(AController* Controller);
 	void UnbindFromController();
@@ -160,7 +175,6 @@ private:
 	void ShowResultMessage(const FText& Message, bool bValid);
 
 	void HandleToggleInput();
-	void HandleConfirmInput();
 	void HandleCancelInput();
 	void HandleRotateInput();
 	void HandleSelectInput(const FInputActionInstance& Instance);
@@ -281,6 +295,8 @@ private:
 
 	bool bBuildingModeActive = false;
 	bool bCursorWasShown = false;
+	/** Whether entering switched the input mode to GameAndUI (for the build bar); exit restores GameOnly. */
+	bool bInputModeChanged = false;
 	TWeakObjectPtr<APlayerController> ModeController;
 
 	TWeakObjectPtr<APlayerController> InputController;

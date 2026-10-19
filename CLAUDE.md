@@ -81,7 +81,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6,G8}` (G8 = interaction targeting)
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
-- `NullTide.Building.{B1,B2,B3,B4,B5,B6,B7}`
+- `NullTide.Building.{B1,B2,B3,B4,B5,B6,B7,B8}`
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -193,7 +193,13 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
     - `IMC_Building` (B, priority 1) is active while possessed.
     - `IMC_BuildingMode` (priority 2) is active only in the mode: LMB confirms (`Started`); RMB, `I`, `Tab` and `F` exit (`Completed`).
     - It consumes those keys, so no screen opens while the mode owns the cursor; a second press opens it.
-  - **Every exit restores the remembered cursor state:** toggle, cancel, controller change, `EndPlay`.
+  - **Every exit restores the remembered cursor state:** toggle, cancel, controller change, `EndPlay`. When the HUD has a build bar, entering also switches the input mode to GameAndUI (so UMG gets clicks) and every exit restores GameOnly.
+  - **Build bar (B8):** `W_BuildingHud` holds an optional `BuildBar` (`UBuildingBarWidget`, `W_BuildingBar` with `W_BuildingBarSlot` slots) at the bottom.
+    - One slot per `AvailableBuildings` entry (key, icon or initial, name, cost, description tooltip) plus Demolish (`C`).
+    - The highlight follows the selection (pushed from `RefreshHud`). Slots grey out when `CanApplyDefinitionTransaction(Cost, {})` fails, refreshed on `OnInventoryChanged`.
+    - A click calls `RequestSelectBuilding` (the same path as keys 1-5: leave demolish, then select) or `ToggleDemolishMode`. It never builds.
+    - LMB confirm is ignored while the cursor is over the bar (`IsCursorOverBuildBar` seam).
+    - Slot buttons are non-focusable, so keys keep reaching Enhanced Input.
   - **Selection and rotation (B5, B7):** `1`–`5` (`IA_BuildSelect1`–`5`) call `SelectBuildingIndex` in `AvailableBuildings` order (missing indices ignored; the selection persists); `R` (`IA_BuildRotate`) calls `RotatePlacement` (quarter turns, wrapping; odd turns flip an edge piece's facing). Both are in `IMC_BuildingMode`.
   - **Demolish sub-mode (B6):** `C` (`IA_BuildDemolish`, in `IMC_BuildingMode`) toggles it inside building mode only.
     - The hovered piece and everything its demolition removes get a pooled highlight ghost: orange when allowed, red on the target when refused.
@@ -201,7 +207,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
     - A registered 1–3 key returns to building. Every exit resets to building.
   - The ghost composes each template's transform up its attach chain (the door leaf under its hinge). It does not apply child-Blueprint overrides of inherited SCS templates.
   - The ghost carries a facing arrow (not a piece mesh, no collision): local +Y for edge pieces, which is the side a door opens to, and local +X for cells. It turns with `R`.
-  - Test seams: `GetCursorWorldLocation`, `GetCursorHitActor`, `IsLocalBuilderController`, `CreateHudWidget`.
+  - Test seams: `GetCursorWorldLocation`, `GetCursorHitActor`, `IsLocalBuilderController`, `CreateHudWidget`, `IsCursorOverBuildBar` (B8).
   - Building assets are in `Content/LevelPrototyping/BuildingSystem/{Input,Materials,UI}`.
 - `ABuildingDoorActor` (B5; abstract, Blueprint `Pieces/BP_BuildDoor`) is an edge piece with a blocking frame, a `DoorHinge` with the `DoorLeaf`, and an overlap-only `InteractionBounds`.
   - `ToggleDoor`/`SetDoorOpen`/`CanInteract` return `EBuildingDoorResult`: any pawn within `UseRange` (300 cm) of an `Active` door that is not being destroyed.

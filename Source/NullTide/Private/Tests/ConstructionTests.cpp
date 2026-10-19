@@ -9,6 +9,7 @@
 #include "Building/BuildingSubsystem.h"
 #include "Building/ConstructionComponent.h"
 #include "Components/BoxComponent.h"
+#include "Components/Button.h"
 #include "Components/ChildActorComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
@@ -40,6 +41,8 @@
 #include "Storage/StorageComponent.h"
 #include "TimerManager.h"
 #include "ToolLoadout/ToolLoadoutComponent.h"
+#include "UI/BuildingBarSlotWidget.h"
+#include "UI/BuildingBarWidget.h"
 #include "UI/BuildingHudWidget.h"
 #include "UI/InputPromptLibrary.h"
 #include "UObject/StrongObjectPtr.h"
@@ -3745,6 +3748,305 @@ bool FBuildingB7ProductionInputTest::RunTest(const FString& Parameters)
 		bSelectActions &= (*SelectActions)[Index] == Selects[Index];
 	}
 	TestTrue(TEXT("Placement selects with IA_BuildSelect1-5 in order"), bSelectActions);
+	return true;
+}
+
+// ---- B8: building UI (build bar) ----
+
+namespace
+{
+const TCHAR* B8BarPath = TEXT("/Game/LevelPrototyping/BuildingSystem/UI/W_BuildingBar.W_BuildingBar_C");
+const TCHAR* B8SlotPath = TEXT("/Game/LevelPrototyping/BuildingSystem/UI/W_BuildingBarSlot.W_BuildingBarSlot_C");
+
+/** The five production buildings in the player's order. */
+FB2Buildings B8Buildings(const FB7Assets& Assets)
+{
+	return { Assets.B5.Base.Floor, Assets.B5.Wall, Assets.B5.Door, Assets.Chest, Assets.Bench };
+}
+
+/** Inventory revision, build results and production Wood, for exact "nothing happened" checks. */
+struct FB8Counts
+{
+	int32 Revision = 0;
+	int32 BuildResults = 0;
+	int32 Wood = 0;
+
+	static FB8Counts Capture(const FB4Player& Player, const FB7Assets& Assets)
+	{
+		FB8Counts Counts;
+		Counts.Revision = Player.Builder.Inventory->GetRevision();
+		Counts.BuildResults = Player.Builder.Listener->BuildResults.Num();
+		Counts.Wood = Player.Builder.Inventory->GetTotalQuantity(Assets.B5.Base.Wood);
+		return Counts;
+	}
+
+	bool Delta(const FB8Counts& After, const int32 InRevision, const int32 InResults, const int32 InWood) const
+	{
+		return After.Revision - Revision == InRevision && After.BuildResults - BuildResults == InResults && After.Wood - Wood == InWood;
+	}
+};
+
+/** A builder with the five production buildings and production Wood, in building mode with the production HUD (cursor on cell A). */
+FB4Player B8EnterWithHud(FB2World& Fixture, const FB7Assets& Assets, UClass* HudClass, const int32 ProductionWood)
+{
+	FB4Player Player = B4SpawnPlayer(Fixture, B8Buildings(Assets), 0);
+	if (Player.IsValid() && Player.Builder.Inventory)
+	{
+		if (ProductionWood > 0)
+		{
+			Player.Builder.Inventory->TryAddDefinitionQuantity(Assets.B5.Base.Wood, ProductionWood);
+		}
+		Player.Placement->SetHudClass(HudClass);
+		Player.Placement->SetCursor(B2CellA);
+		Player.Placement->EnterBuildingMode();
+	}
+	return Player;
+}
+
+UBuildingBarWidget* B8Bar(const FB4Player& Player)
+{
+	const UBuildingHudWidget* Hud = Player.Placement ? Player.Placement->GetHudWidget() : nullptr;
+	return Hud ? Hud->GetBuildBar() : nullptr;
+}
+
+/** The index of the only selected slot; INDEX_NONE when none or several are selected. */
+int32 B8SelectedSlot(const UBuildingBarWidget* Bar)
+{
+	int32 Selected = INDEX_NONE;
+	int32 Count = 0;
+	for (const UBuildingBarSlotWidget* BarSlot : Bar ? Bar->GetSlots() : TArray<UBuildingBarSlotWidget*>())
+	{
+		if (BarSlot && BarSlot->IsSelected())
+		{
+			Selected = BarSlot->GetSlotIndex();
+			++Count;
+		}
+	}
+	return Count == 1 ? Selected : INDEX_NONE;
+}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB8ProductionAssetsTest,
+	"NullTide.Building.B8.ProductionAssets",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB8ProductionAssetsTest::RunTest(const FString& Parameters)
+{
+	UClass* HudClass = LoadClass<UBuildingHudWidget>(nullptr, B4HudPath);
+	UClass* BarClass = LoadClass<UBuildingBarWidget>(nullptr, B8BarPath);
+	UClass* SlotClass = LoadClass<UBuildingBarSlotWidget>(nullptr, B8SlotPath);
+	if (!TestTrue(TEXT("W_BuildingHud, W_BuildingBar and W_BuildingBarSlot load"), HudClass && BarClass && SlotClass)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+
+	UBuildingHudWidget* Hud = CreateWidget<UBuildingHudWidget>(Fixture.World, HudClass);
+	UBuildingBarWidget* Bar = Hud ? Hud->GetBuildBar() : nullptr;
+	TestTrue(TEXT("W_BuildingHud binds a BuildBar of class W_BuildingBar"), Bar && Bar->IsA(BarClass));
+	TestTrue(TEXT("The HUD root does not block hit tests (only the bar is hit-testable)"),
+		Hud && Hud->GetVisibility() == ESlateVisibility::SelfHitTestInvisible);
+	if (Bar)
+	{
+		const FClassProperty* SlotProperty = FindFProperty<FClassProperty>(UBuildingBarWidget::StaticClass(), TEXT("SlotClass"));
+		TestTrue(TEXT("The bar's SlotClass is W_BuildingBarSlot"), SlotProperty && SlotProperty->GetPropertyValue_InContainer(Bar) == SlotClass);
+		TestTrue(TEXT("The bar is hit-testable (hover guard) and handles no click itself"), Bar->GetVisibility() == ESlateVisibility::Visible);
+	}
+	UBuildingBarSlotWidget* BarSlot = CreateWidget<UBuildingBarSlotWidget>(Fixture.World, SlotClass);
+	TestTrue(TEXT("The slot button exists and is not focusable (keys keep reaching the game)"),
+		BarSlot && BarSlot->GetSlotButton() && !BarSlot->GetSlotButton()->GetIsFocusable());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB8BarSlotsTest,
+	"NullTide.Building.B8.BarSlots",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB8BarSlotsTest::RunTest(const FString& Parameters)
+{
+	const FB7Assets Assets = FB7Assets::Load();
+	UClass* HudClass = LoadClass<UBuildingHudWidget>(nullptr, B4HudPath);
+	if (!Assets.IsValid(*this) || !TestNotNull(TEXT("W_BuildingHud loads"), HudClass)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB4Player Player = B8EnterWithHud(Fixture, Assets, HudClass, 0);
+	const UBuildingBarWidget* Bar = B8Bar(Player);
+	if (!TestNotNull(TEXT("Building mode shows the build bar"), Bar)) { return false; }
+	const TArray<UBuildingBarSlotWidget*> Slots = Bar->GetSlots();
+	const FB2Buildings Buildings = B8Buildings(Assets);
+	if (!TestEqual(TEXT("One slot per building plus demolish"), Slots.Num(), Buildings.Num() + 1)) { return false; }
+
+	for (int32 Index = 0; Index < Buildings.Num(); ++Index)
+	{
+		const UBuildingBarSlotWidget* BarSlot = Slots[Index];
+		const UBuildingDefinition* Definition = Buildings[Index]->GetDefaultObject<UBuildingDefinition>();
+		const FString Name = Definition->BuildingName.ToString();
+		TestTrue(FString::Printf(TEXT("Slot %d: %s, key %d, cost '%s', initial '%s'"), Index, *Name, Index + 1,
+				*BarSlot->GetCostText().ToString(), *BarSlot->GetInitialText().ToString()),
+			BarSlot->GetBuilding() == Buildings[Index] && !BarSlot->IsDemolishSlot()
+			&& BarSlot->GetKeyText().ToString() == FString::FromInt(Index + 1) && BarSlot->GetNameText().ToString() == Name
+			&& BarSlot->GetCostText().ToString() == UBuildingPlacementComponent::DescribeRefund(Definition->Cost).ToString()
+			&& BarSlot->GetInitialText().ToString() == Name.Left(1).ToUpper()
+			&& !Definition->BuildingDescription.IsEmpty() && BarSlot->GetToolTipText().ToString() == Definition->BuildingDescription.ToString());
+	}
+	const UBuildingBarSlotWidget* Demolish = Slots.Last();
+	TestTrue(TEXT("The last slot is Demolish on C"), Demolish->IsDemolishSlot() && Demolish->GetKeyText().ToString() == TEXT("C")
+		&& Demolish->GetNameText().ToString() == TEXT("Demolish") && !Demolish->GetToolTipText().IsEmpty());
+	TestTrue(TEXT("The floor costs Wood 4"), Slots[0]->GetCostText().ToString() == TEXT("Wood 4"));
+	Player.Placement->ExitBuildingMode();
+	Fixture.Clean(*this, TEXT("Bar slots"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB8SelectionSyncTest,
+	"NullTide.Building.B8.SelectionSync",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB8SelectionSyncTest::RunTest(const FString& Parameters)
+{
+	const FB7Assets Assets = FB7Assets::Load();
+	UClass* HudClass = LoadClass<UBuildingHudWidget>(nullptr, B4HudPath);
+	if (!Assets.IsValid(*this) || !TestNotNull(TEXT("W_BuildingHud loads"), HudClass)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB4Player Player = B8EnterWithHud(Fixture, Assets, HudClass, 100);
+	UBuildingPlacementTestComponent* Placement = Player.Placement;
+	UBuildingBarWidget* Bar = B8Bar(Player);
+	if (!TestNotNull(TEXT("Build bar"), Bar)) { return false; }
+	const TArray<UBuildingBarSlotWidget*> Slots = Bar->GetSlots();
+	const int32 DemolishSlot = Slots.Num() - 1;
+	const FB8Counts Before = FB8Counts::Capture(Player, Assets);
+
+	TestEqual(TEXT("Entering highlights the selected building"), B8SelectedSlot(Bar), 0);
+	Placement->SelectBuildingIndex(3);
+	TestEqual(TEXT("SelectBuildingIndex moves the highlight"), B8SelectedSlot(Bar), 3);
+	Placement->ToggleDemolishMode();
+	TestEqual(TEXT("Demolish highlights the demolish slot"), B8SelectedSlot(Bar), DemolishSlot);
+
+	// Through the real button binding.
+	Slots[1]->GetSlotButton()->OnClicked.Broadcast();
+	TestTrue(TEXT("Clicking a building slot leaves demolish and selects it"), !Placement->IsDemolishModeActive()
+		&& Placement->GetSelectedBuildingIndex() == 1 && Placement->GetSelectedBuilding() == Assets.B5.Wall && B8SelectedSlot(Bar) == 1);
+	Slots[DemolishSlot]->HandleSlotClicked();
+	TestTrue(TEXT("Clicking the demolish slot enters demolish"), Placement->IsDemolishModeActive() && B8SelectedSlot(Bar) == DemolishSlot);
+	Slots[DemolishSlot]->HandleSlotClicked();
+	TestTrue(TEXT("Clicking it again returns to building with the selection"), !Placement->IsDemolishModeActive() && B8SelectedSlot(Bar) == 1);
+	Slots[4]->HandleSlotClicked();
+	TestTrue(TEXT("Clicking the workbench selects it"), Placement->GetSelectedBuilding() == Assets.Bench && B8SelectedSlot(Bar) == 4);
+
+	TestTrue(TEXT("Bar clicks never build or touch the inventory"), Before.Delta(FB8Counts::Capture(Player, Assets), 0, 0, 0)
+		&& Fixture.LivePieces() == 0);
+	TestTrue(TEXT("Still in building mode"), Placement->IsBuildingModeActive());
+	Placement->ExitBuildingMode();
+	Fixture.Clean(*this, TEXT("Selection sync"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB8AffordabilityTest,
+	"NullTide.Building.B8.Affordability",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB8AffordabilityTest::RunTest(const FString& Parameters)
+{
+	const FB7Assets Assets = FB7Assets::Load();
+	UClass* HudClass = LoadClass<UBuildingHudWidget>(nullptr, B4HudPath);
+	if (!Assets.IsValid(*this) || !TestNotNull(TEXT("W_BuildingHud loads"), HudClass)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB4Player Player = B8EnterWithHud(Fixture, Assets, HudClass, 0);
+	UInventoryComponent* Inventory = Player.Builder.Inventory;
+	const UBuildingBarWidget* Bar = B8Bar(Player);
+	if (!TestTrue(TEXT("Build bar and inventory"), Bar && Inventory)) { return false; }
+	const TArray<UBuildingBarSlotWidget*> Slots = Bar->GetSlots();
+	auto Pattern = [&Slots]()
+	{
+		FString Result;
+		for (const UBuildingBarSlotWidget* BarSlot : Slots)
+		{
+			Result += BarSlot->IsAffordable() ? TEXT("Y") : TEXT("n");
+		}
+		return Result;
+	};
+	auto MatchesPreflight = [&Slots, Inventory]()
+	{
+		for (const UBuildingBarSlotWidget* BarSlot : Slots)
+		{
+			const UBuildingDefinition* Definition = BarSlot->GetBuilding() ? BarSlot->GetBuilding()->GetDefaultObject<UBuildingDefinition>() : nullptr;
+			if (Definition && BarSlot->IsAffordable() != Inventory->CanApplyDefinitionTransaction(Definition->Cost, {}).IsSuccess())
+			{
+				return false;
+			}
+		}
+		return true;
+	};
+
+	TestEqual(TEXT("Empty inventory: every building greyed, demolish not"), Pattern(), FString(TEXT("nnnnnY")));
+	Inventory->TryAddDefinitionQuantity(Assets.B5.Base.Wood, 6);
+	TestEqual(TEXT("Wood 6 (through OnInventoryChanged alone): floor and wall"), Pattern(), FString(TEXT("YYnnnY")));
+	Inventory->TryAddDefinitionQuantity(Assets.B5.Scrap, 2);
+	Inventory->TryAddDefinitionQuantity(Assets.B5.Base.Wood, 14);
+	TestEqual(TEXT("Wood 20 + Scrap 2: everything but the workbench (needs Stone)"), Pattern(), FString(TEXT("YYYYnY")));
+	Inventory->TryAddDefinitionQuantity(Assets.Stone, 10);
+	TestEqual(TEXT("Stone 10: the workbench too"), Pattern(), FString(TEXT("YYYYYY")));
+	TestTrue(TEXT("Every slot equals CanApplyDefinitionTransaction"), MatchesPreflight());
+	FInventoryDefinitionQuantity Stone;
+	Stone.DefinitionClass = Assets.Stone;
+	Stone.Quantity = 10;
+	Inventory->TryApplyDefinitionTransaction({ Stone }, {});
+	TestEqual(TEXT("Spending the Stone greys the workbench again"), Pattern(), FString(TEXT("YYYYnY")));
+
+	// After exit the removed bar no longer follows the inventory.
+	Player.Placement->ExitBuildingMode();
+	Inventory->TryAddDefinitionQuantity(Assets.Stone, 10);
+	TestEqual(TEXT("A removed bar does not react to later inventory changes"), Pattern(), FString(TEXT("YYYYnY")));
+	Player.Placement->EnterBuildingMode();
+	const UBuildingBarWidget* Fresh = B8Bar(Player);
+	TestTrue(TEXT("Re-entering builds a fresh bar with the current inventory"), Fresh && Fresh != Bar
+		&& Fresh->GetSlots().Num() == Slots.Num() && Fresh->GetSlots()[4]->IsAffordable());
+	Player.Placement->ExitBuildingMode();
+	Fixture.Clean(*this, TEXT("Affordability"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildingB8ConfirmGuardTest,
+	"NullTide.Building.B8.ConfirmGuard",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBuildingB8ConfirmGuardTest::RunTest(const FString& Parameters)
+{
+	const FB7Assets Assets = FB7Assets::Load();
+	UClass* HudClass = LoadClass<UBuildingHudWidget>(nullptr, B4HudPath);
+	if (!Assets.IsValid(*this) || !TestNotNull(TEXT("W_BuildingHud loads"), HudClass)) { return false; }
+	FB2World Fixture;
+	if (!Fixture.IsValid(*this)) { return false; }
+	FB4Player Player = B8EnterWithHud(Fixture, Assets, HudClass, 8);
+	UBuildingPlacementTestComponent* Placement = Player.Placement;
+	if (!TestTrue(TEXT("Building mode with the floor selected"), Placement->IsBuildingModeActive() && Placement->GetSelectedBuildingIndex() == 0)) { return false; }
+
+	Placement->bCursorOverBuildBar = true;
+	FB8Counts Before = FB8Counts::Capture(Player, Assets);
+	Placement->PressConfirm();
+	TestTrue(TEXT("Confirm over the bar does not build"), Before.Delta(FB8Counts::Capture(Player, Assets), 0, 0, 0) && Fixture.LivePieces() == 0);
+
+	Placement->bCursorOverBuildBar = false;
+	Before = FB8Counts::Capture(Player, Assets);
+	Placement->PressConfirm();
+	TestTrue(TEXT("Confirm in the world builds once"), Before.Delta(FB8Counts::Capture(Player, Assets), 1, 1, -4) && Fixture.LivePieces() == 1);
+
+	AActor* Floor = Fixture.PieceAt(B2CellA);
+	Placement->ToggleDemolishMode();
+	Placement->CursorHitActor = Floor;
+	Placement->bCursorOverBuildBar = true;
+	Placement->PressConfirm();
+	TestTrue(TEXT("Confirm over the bar does not demolish"), ::IsValid(Floor) && !Floor->IsActorBeingDestroyed() && Fixture.LivePieces() == 1);
+	Placement->bCursorOverBuildBar = false;
+	Placement->PressConfirm();
+	TestEqual(TEXT("Confirm in the world demolishes"), Fixture.LivePieces(), 0);
+	Placement->ExitBuildingMode();
+	Fixture.Clean(*this, TEXT("Confirm guard"));
 	return true;
 }
 

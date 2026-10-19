@@ -1,18 +1,60 @@
 #include "UI/BuildingHudWidget.h"
 
 #include "Components/TextBlock.h"
+#include "UI/BuildingBarWidget.h"
 
 #define LOCTEXT_NAMESPACE "BuildingHud"
+
+void UBuildingHudWidget::NativeOnInitialized()
+{
+	Super::NativeOnInitialized();
+	// The HUD itself never takes the cursor; only the build bar inside it is hit-testable (B8).
+	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+}
 
 void UBuildingHudWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
-	// The HUD must never take clicks from the world placement.
-	SetVisibility(ESlateVisibility::HitTestInvisible);
 	if (HintText)
 	{
-		HintText->SetText(LOCTEXT("Hint", "1-5 select  ·  R rotate  ·  C demolish  ·  LMB build  ·  RMB / B exit"));
+		HintText->SetText(LOCTEXT("Hint", "1-5 / click select  ·  R rotate  ·  C demolish  ·  LMB build  ·  RMB / B exit"));
 	}
+}
+
+bool UBuildingHudWidget::InitializeBuildBar(UBuildingPlacementComponent* Placement)
+{
+	return BuildBar && BuildBar->InitializeBar(Placement);
+}
+
+void UBuildingHudWidget::SetBuildBarSelection(const int32 SelectedIndex, const bool bDemolish)
+{
+	if (BuildBar)
+	{
+		BuildBar->SetSelection(SelectedIndex, bDemolish);
+	}
+}
+
+void UBuildingHudWidget::ReleaseBuildBar()
+{
+	if (BuildBar)
+	{
+		BuildBar->ReleaseBar();
+	}
+}
+
+bool UBuildingHudWidget::HasBuildBar() const
+{
+	return BuildBar != nullptr;
+}
+
+bool UBuildingHudWidget::IsBuildBarHovered() const
+{
+	return BuildBar && BuildBar->IsBarHovered();
+}
+
+UBuildingBarWidget* UBuildingHudWidget::GetBuildBar() const
+{
+	return BuildBar;
 }
 
 void UBuildingHudWidget::SetHintText(const FText& Hint)

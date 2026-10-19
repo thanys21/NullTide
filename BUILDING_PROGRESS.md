@@ -905,6 +905,86 @@ The user's first PIE run found three problems:
 - The angle is measured to each candidate's actor location, which is its root (for pieces, the cell or edge centre).
 - The interaction reach feels slightly far in PIE; tune the probe radius and offset later.
 
+## B8 - Building UI (Build Bar)
+
+### Baseline and Scope
+
+- **Baseline:** `208b12e` (B7.1). Full automation 253/253, cook 646/7/653.
+- **Scope (user-approved 2026-10-19; `BUILDING_PLAN.md` B8, B8-1 to B8-5 as recommended):**
+  - one flat bar of the five buildings plus Demolish, visible only in building mode;
+  - clickable slots (GameAndUI while in building mode, confirm guard, non-focusable buttons);
+  - an initial-letter placeholder when there is no icon;
+  - a description tooltip, with the four missing descriptions filled in.
+- **Not in scope:** category tabs, icon art, a bar outside building mode.
+
+### Source
+
+| File | Content |
+| --- | --- |
+| `UI/BuildingBarWidget.h/.cpp` (new) | `InitializeBar` (one slot per `AvailableBuildings` entry with keys 1–n, then a demolish slot `C`), `SetSelection` (no-op when unchanged), `RefreshAffordability` (`CanApplyDefinitionTransaction(Cost, {})` on `OnInventoryChanged`), `HandleSlotClicked` (`RequestSelectBuilding` or `ToggleDemolishMode`), `ReleaseBar` (unbinds the inventory; also on `NativeDestruct`), `IsBarHovered`. Visible (hit-testable), handles no click itself. |
+| `UI/BuildingBarSlotWidget.h/.cpp` (new) | `SetupSlot` (key, name, cost as `Wood 4, Scrap 2`, icon or a coloured square with the initial, tooltip = description; demolish: "Demolish", "Full refund"), `SetSelected` (button colour), `SetAffordable` (grey tint), `HandleSlotClicked` (bound to the button in `NativeOnInitialized`). |
+| `UI/BuildingHudWidget.h/.cpp` | Optional `BuildBar`; `InitializeBuildBar`, `SetBuildBarSelection`, `ReleaseBuildBar`, `HasBuildBar`, `IsBuildBarHovered`, `GetBuildBar`. The root is `SelfHitTestInvisible` (was `HitTestInvisible`). The hint reads "1-5 / click select". |
+| `Building/BuildingPlacementComponent.h/.cpp` | New public `RequestSelectBuilding` (the key path: a missing index does nothing, else leave demolish, then select); `GetConstruction` is public. Enter: with a bar, `InitializeBuildBar`, then `SetInputMode_GameAndUIEx` (no lock, cursor kept). Exit: `ReleaseBuildBar`, then `SetInputMode_GameOnly` only if entering changed it. `RefreshHud` pushes the selection. `HandleConfirmInput` (now protected) returns while `IsCursorOverBuildBar()` (new protected virtual seam). |
+| Tests | `BuildingTestTypes.h`: `bCursorOverBuildBar`, `PressConfirm`. `ConstructionTests.cpp`: the B8 section. |
+
+### Assets (Unreal MCP, no manual step)
+
+- **New `UI/W_BuildingBarSlot`:**
+  - `SlotRoot` (padding 4) → `SlotSize` 120 × 132 → `SlotButton` (**IsFocusable off**) → `SlotContent`: `KeyText`, `IconOverlay` (`IconImage` 48 × 48, `InitialText`), `NameText`, `CostText`;
+  - the texts and the image are `HitTestInvisible`.
+- **New `UI/W_BuildingBar`:** a `SlotContainer` horizontal box; `SlotClass` = `W_BuildingBarSlot`.
+- **`W_BuildingHud`:** `BuildBar` added to `RootCanvas`, anchored bottom centre (alignment 0.5, 1; 24 cm above the edge; auto size). The text block stays at the top.
+- **Descriptions** on `Building_WoodWall`, `Building_WoodDoor`, `Building_WoodChest`, `Building_Workbench` (the floor already had one).
+- All compiled with warnings as errors and saved by path. No map change.
+
+### Tests `NullTide.Building.B8.*` (5)
+
+| Test | Covers |
+| --- | --- |
+| `ProductionAssets` | `W_BuildingHud` binds a `BuildBar` of class `W_BuildingBar`; its `SlotClass` is `W_BuildingBarSlot`; the bar is hit-testable; the slot button exists and is not focusable. |
+| `BarSlots` | The real HUD in building mode: 5 + 1 slots in `AvailableBuildings` order; keys 1–5; names; cost texts; initials; tooltips equal the descriptions; the last slot is Demolish on `C`; the floor shows "Wood 4". |
+| `SelectionSync` | The highlight follows `SelectBuildingIndex` and demolish. A slot click leaves demolish and selects; the demolish slot enters and leaves demolish; a click on the workbench selects it. Clicks never build or touch the inventory (revision, results, Wood unchanged; no piece). |
+| `Affordability` | Empty: `nnnnnY`. Wood 6: `YYnnnY` (through `OnInventoryChanged` alone). Wood 20 + Scrap 2: `YYYYnY`. Stone 10: all. Every slot equals `CanApplyDefinitionTransaction`. Spending the Stone greys the workbench. After exit the removed bar no longer reacts; re-entering builds a fresh bar with the current inventory. |
+| `ConfirmGuard` | With the cursor over the bar, confirm builds and demolishes nothing; away from the bar it builds once (Wood −4) and demolishes once. |
+
+### Validation
+
+- **Build:** clean with the editor closed (base DLL); 0 warnings.
+- **Tests (in-editor, after the assets):**
+  - `NullTide.Building.B8` 5/5 on the first run;
+  - full `NullTide` **258/258**, 0 failed.
+  - One test (`B2.ValidationFailures`) carried an engine log warning from the live rendered editor (`LogRHICore`: reserved GPU memory over budget), unrelated to the code.
+  - Final command line after the review fixes, with the editor closed (base DLL): **258/258**, exit 0.
+- **Windows cook** (editor closed): `Done!`, 0 errors, 2 environment warnings; 648 cooked, 7 skipped, 655 total (+2: `W_BuildingBar` and `W_BuildingBarSlot`, both in the cooked asset registry).
+- **Content and World Partition audit:**
+  - added `W_BuildingBar` and `W_BuildingBarSlot`;
+  - modified `W_BuildingHud` and four building definitions (descriptions);
+  - no map change;
+  - `__ExternalActors__` 94, `__ExternalObjects__` 3.
+- **Manual rendered PIE (user, 2026-10-19): PASS, 5/5.** The user confirmed all five steps:
+  1. the bar appears;
+  2. keys and clicks move the highlight, and a click builds nothing behind the bar;
+  3. tooltips appear, and affordability updates;
+  4. world build, demolish, rotate and exit work;
+  5. after exit, the first click works, and `F`/`I`/`Tab` behave as before.
+
+  This also settles R-1 (GameAndUI clicks) and the real hover guard.
+
+### Self-Review (fresh-context review pass; no P0 or P1)
+
+| Finding | Resolution |
+| --- | --- |
+| P2: exit restored `SetInputMode_GameOnly`, whose default `bConsumeCaptureMouseDown` sets `CapturePermanently` (engine `PlayerController.cpp:6450`). The project uses `CapturePermanently_IncludingInitialMouseDown`, so the first click after leaving the mode was swallowed. | **CONFIRMED, fixed.** Exit restores `FInputModeGameOnly` with `SetConsumeCaptureMouseDown(false)`. The inventory and storage screens have the same latent behaviour on close; recorded, not changed in B8. |
+| P2: the test seam replaces the real hover guard (`IsBuildBarHovered` → `IsHovered`), which needs Slate | **CONFIRMED, recorded:** the real guard is PIE evidence (step 2). |
+| P3: the input-mode switch and restore paths cannot be automated (no viewport in tests) | **Recorded:** every exit goes through `ExitBuildingMode`; PIE step 5. |
+| P3: restoring GameOnly could overwrite another UI mode | **Recorded** with a code comment: building mode consumes every screen key, so no other UI mode can be active (plan R-2). |
+| P3: a failed slot creation shifted later slot indices | **CONFIRMED, fixed.** The slot index is the building index; a click finds the slot by index. |
+| P3: key labels past 5 buildings; "1-5" in the hints | **Recorded** (exactly 5 buildings and 5 select actions). |
+| P3: the demolish slot said "Full refund" although `RefundFraction` is per definition | **CONFIRMED, fixed** ("Refund"). |
+| P3: a bar without slots still switched the input mode | **CONFIRMED, fixed.** `InitializeBuildBar` returns whether slots exist, and the input mode depends on it. |
+| P3: the bar forces `Visible`, so the R-1 fallback is a code change | **Recorded** in the plan's R-1. |
+| P3: test gaps (HUD root visibility, empty descriptions passing, click not through the button) | **CONFIRMED, fixed.** The HUD sets its root visibility in `NativeOnInitialized` and the test asserts it. `BarSlots` requires non-empty descriptions. `SelectionSync` clicks through `SlotButton->OnClicked`. |
+
 ## Next Checkpoint
 
-B7.1 is COMPLETE / APPROVED (automation 253/253, cook PASS, PIE accepted). Next: plan B8 (building UI: build bar). Phase 5 stays IN PROGRESS.
+B8 is COMPLETE / APPROVED (automation 258/258, cook PASS, manual PIE 5/5 PASS). The B8 plan's scope is done. The next Phase 5 checkpoint needs a new plan and the user's go-ahead. Phase 5 stays IN PROGRESS.

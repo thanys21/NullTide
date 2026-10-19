@@ -1,5 +1,6 @@
 #include "Building/BuildingPlacementComponent.h"
 
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Building/BuildingDefinition.h"
 #include "Building/BuildingPieceComponent.h"
 #include "Building/BuildingPreviewActor.h"
@@ -161,6 +162,11 @@ void UBuildingPlacementComponent::HandleToggleInput()
 
 void UBuildingPlacementComponent::HandleConfirmInput()
 {
+	// A click on the build bar selects there; it must never also build or demolish in the world behind it.
+	if (IsCursorOverBuildBar())
+	{
+		return;
+	}
 	if (bDemolishModeActive)
 	{
 		ConfirmDemolish();
@@ -192,17 +198,26 @@ void UBuildingPlacementComponent::HandleRotateInput()
 void UBuildingPlacementComponent::HandleSelectInput(const FInputActionInstance& Instance)
 {
 	const int32 Index = SelectBuildingActions.IndexOfByKey(Instance.GetSourceAction());
-	const UConstructionComponent* Construction = GetConstruction();
-	// A key without a registered building does nothing, in either sub-mode.
-	if (bBuildingModeActive && Index != INDEX_NONE && Construction && Construction->GetAvailableBuildings().IsValidIndex(Index))
+	if (bBuildingModeActive && Index != INDEX_NONE)
 	{
-		// Picking a building while demolishing returns to building with it.
-		if (bDemolishModeActive)
-		{
-			ToggleDemolishMode();
-		}
-		SelectBuildingIndex(Index);
+		RequestSelectBuilding(Index);
 	}
+}
+
+bool UBuildingPlacementComponent::RequestSelectBuilding(const int32 Index)
+{
+	const UConstructionComponent* Construction = GetConstruction();
+	// A key or slot without a registered building does nothing, in either sub-mode.
+	if (!Construction || !Construction->GetAvailableBuildings().IsValidIndex(Index))
+	{
+		return false;
+	}
+	// Picking a building while demolishing returns to building with it.
+	if (bDemolishModeActive)
+	{
+		ToggleDemolishMode();
+	}
+	return SelectBuildingIndex(Index);
 }
 
 bool UBuildingPlacementComponent::SelectBuildingIndex(const int32 Index)
@@ -301,6 +316,13 @@ bool UBuildingPlacementComponent::EnterBuildingMode()
 		PreviewActor->SetActorHiddenInGame(true);
 	}
 	HudWidget = CreateHudWidget(*PlayerController);
+	if (HudWidget && HudWidget->InitializeBuildBar(this))
+	{
+		// The bar is clickable: GameAndUI captures the mouse only while a button is held, so UMG gets clicks; keys and
+		// world clicks still reach Enhanced Input. Exit restores GameOnly, the resting mode screens restore too.
+		UWidgetBlueprintLibrary::SetInputMode_GameAndUIEx(PlayerController, nullptr, EMouseLockMode::DoNotLock, false);
+		bInputModeChanged = true;
+	}
 
 	Construction->OnBuildResult.AddUniqueDynamic(this, &UBuildingPlacementComponent::HandleBuildResult);
 	Construction->OnDemolishResult.AddUniqueDynamic(this, &UBuildingPlacementComponent::HandleDemolishResult);
@@ -348,6 +370,7 @@ void UBuildingPlacementComponent::ExitBuildingMode()
 	}
 	if (HudWidget)
 	{
+		HudWidget->ReleaseBuildBar();
 		HudWidget->RemoveFromParent();
 		HudWidget = nullptr;
 	}
@@ -362,7 +385,17 @@ void UBuildingPlacementComponent::ExitBuildingMode()
 		}
 		// Only the state this mode changed is restored.
 		PlayerController->SetShowMouseCursor(bCursorWasShown);
+		if (bInputModeChanged)
+		{
+			// Back to the resting game mode with the project's capture mode (CapturePermanently_IncludingInitialMouseDown),
+			// so the first click after leaving reaches the game. Building mode keeps every screen key, so no other UI
+			// mode can be active here.
+			FInputModeGameOnly GameOnly;
+			GameOnly.SetConsumeCaptureMouseDown(false);
+			PlayerController->SetInputMode(GameOnly);
+		}
 	}
+	bInputModeChanged = false;
 	ModeController.Reset();
 	bHasPreviewPlacement = false;
 	OnBuildingModeChanged.Broadcast(false);
@@ -723,12 +756,13 @@ void UBuildingPlacementComponent::RefreshHud()
 	{
 		return;
 	}
+	HudWidget->SetBuildBarSelection(SelectedIndex, bDemolishModeActive);
 	if (bDemolishModeActive)
 	{
 		RefreshDemolishHud();
 		return;
 	}
-	HudWidget->SetHintText(LOCTEXT("BuildHint", "1-5 select  ·  R rotate  ·  C demolish  ·  LMB build  ·  RMB / B exit"));
+	HudWidget->SetHintText(LOCTEXT("BuildHint", "1-5 / click select  ·  R rotate  ·  C demolish  ·  LMB build  ·  RMB / B exit"));
 	const UBuildingDefinition* Definition = SelectedBuilding ? SelectedBuilding->GetDefaultObject<UBuildingDefinition>() : nullptr;
 	const UConstructionComponent* Construction = GetConstruction();
 	if (Definition)
@@ -772,6 +806,11 @@ AActor* UBuildingPlacementComponent::GetCursorHitActor() const
 		return nullptr;
 	}
 	return Hit.GetActor();
+}
+
+bool UBuildingPlacementComponent::IsCursorOverBuildBar() const
+{
+	return HudWidget && HudWidget->IsBuildBarHovered();
 }
 
 bool UBuildingPlacementComponent::IsLocalBuilderController(const APlayerController& PlayerController) const

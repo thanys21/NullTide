@@ -417,6 +417,43 @@ FInventoryOperationResult UInventoryComponent::TryRemoveItemQuantity(FGuid ItemI
 	return Result;
 }
 
+FInventoryOperationResult UInventoryComponent::TrySplitStack(const FGuid ItemId)
+{
+	if (!CanOperate())
+	{
+		return MakeInventoryResult(EInventoryOperationResult::NotInitialized, nullptr, ItemId);
+	}
+	if (bMutationInProgress)
+	{
+		return MakeInventoryResult(EInventoryOperationResult::Busy, nullptr, ItemId);
+	}
+	TGuardValue<bool> MutationGuard(bMutationInProgress, true);
+	FArrayProperty* ProjectionArray = nullptr;
+	FClassProperty* ProjectionClass = nullptr;
+	if (InitializationState == EInventoryInitializationState::NativeReady
+		&& !LegacyInventoryStorage::FindArray(this, ProjectionArray, ProjectionClass))
+	{
+		return MakeInventoryResult(EInventoryOperationResult::NotInitialized, nullptr, ItemId);
+	}
+
+	UItemInstance* NewStack = nullptr;
+	const EInventoryOperationResult SplitResult = FInventoryStacking::SplitStack(Items, Capacity, this, ItemId, NewStack);
+	if (SplitResult != EInventoryOperationResult::Success)
+	{
+		return MakeInventoryResult(SplitResult, nullptr, ItemId);
+	}
+	// The stack list changed: keep a legacy projection in step, as every membership change does.
+	if (ProjectionArray)
+	{
+		RebuildLegacyProjection(ProjectionArray, ProjectionClass);
+	}
+	++Revision;
+	const FInventoryOperationResult Result = MakeInventoryResult(
+		EInventoryOperationResult::Success, NewStack, NewStack->GetInstanceId(), NewStack->GetQuantity());
+	OnInventoryChanged.Broadcast(Revision);
+	return Result;
+}
+
 FInventoryWorldDropResult UInventoryComponent::TryDropItemToWorld(APawn* OwningPawn, const FGuid ItemId)
 {
 	if (!CanOperate())

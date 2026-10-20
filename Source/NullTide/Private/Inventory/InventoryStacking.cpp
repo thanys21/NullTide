@@ -228,3 +228,50 @@ void FInventoryStacking::ApplyMerges(const FInventoryStackPlan& Plan)
 		check(Merge.Item->SetQuantity(Merge.Item->GetQuantity() + Merge.Quantity));
 	}
 }
+
+EInventoryOperationResult FInventoryStacking::SplitStack(TArray<TObjectPtr<UItemInstance>>& Items, const int32 Capacity,
+	UObject* Owner, const FGuid ItemId, UItemInstance*& OutNewStack)
+{
+	OutNewStack = nullptr;
+	const int32 SourceIndex = ItemId.IsValid()
+		? Items.IndexOfByPredicate([&ItemId](const TObjectPtr<UItemInstance>& Item)
+		{
+			return IsValid(Item) && Item->GetInstanceId() == ItemId;
+		})
+		: INDEX_NONE;
+	if (SourceIndex == INDEX_NONE)
+	{
+		return EInventoryOperationResult::InvalidItemId;
+	}
+	UItemInstance* Source = Items[SourceIndex];
+	if (Source->GetQuantity() < 2)
+	{
+		return EInventoryOperationResult::CannotSplit;
+	}
+	// A split adds one stack: it needs a free slot, and with none it does nothing (G9, S-3).
+	if (Items.Num() >= Capacity)
+	{
+		return EInventoryOperationResult::CapacityFull;
+	}
+
+	TSet<FGuid> ReservedIds;
+	for (const UItemInstance* Item : Items)
+	{
+		if (IsValid(Item))
+		{
+			ReservedIds.Add(Item->GetInstanceId());
+		}
+	}
+	// The new stack takes the smaller half; the source keeps the larger half and its identity. Both are within the
+	// stack limit because the source already was.
+	const int32 NewQuantity = Source->GetQuantity() / 2;
+	TArray<TStrongObjectPtr<UItemInstance>> Staged;
+	if (!StageNewStacks(Owner, Source->GetDefinitionClass(), { NewQuantity }, ReservedIds, Staged))
+	{
+		return EInventoryOperationResult::InvalidDefinitionData;
+	}
+	check(Source->SetQuantity(Source->GetQuantity() - NewQuantity));
+	Items.Insert(Staged[0].Get(), SourceIndex + 1);
+	OutNewStack = Staged[0].Get();
+	return EInventoryOperationResult::Success;
+}

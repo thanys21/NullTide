@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Inventory/InventoryTypes.h"
 #include "UObject/StrongObjectPtr.h"
 
 class UItemDefinition;
@@ -67,4 +68,11 @@ public:
 		TArray<TStrongObjectPtr<UItemInstance>>& OutStacks);
 	static bool SetStackQuantity(UItemInstance* Item, int32 Quantity);
 	static void ApplyMerges(const FInventoryStackPlan& Plan);
+	/**
+	 * Splits a stack in place (G9): a new stack of floor(Q/2) with a new id is inserted right after the source, which
+	 * keeps ceil(Q/2) and its id. Needs Q >= 2 (CannotSplit) and a free slot (CapacityFull); otherwise nothing changes.
+	 * Commits directly; the caller owns the mutation guard, revision and broadcast.
+	 */
+	static EInventoryOperationResult SplitStack(TArray<TObjectPtr<UItemInstance>>& Items, int32 Capacity, UObject* Owner,
+		FGuid ItemId, UItemInstance*& OutNewStack);
 };

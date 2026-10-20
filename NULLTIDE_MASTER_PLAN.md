@@ -809,7 +809,7 @@ Phase 4 Crafting                    ✅
 Phase 5 Building                    ✅
 
 NEXT:
-Phase 6 Colony: to be planned with the user (Phase 5 Building COMPLETE, B0–B9; see BUILDING_REPORT.md).
+G9 Storage UI/UX COMPLETE (STORAGE_UX_PROGRESS.md); G9.1 inventory details layout fix approved. Then Phase 6 Colony, to be planned with the user (Phase 5 Building COMPLETE, B0–B9; see BUILDING_REPORT.md).
 ```
 
 ---
@@ -1294,6 +1294,8 @@ These are deliberately outside the completed stacking milestone.
 
 ## Split Stack
 
+**Implemented in G9 (2026-10-20, user request) for the storage screen:** Shift + RMB splits 50% in place (`TrySplitStack` on the inventory and storage; needs a free slot). The main inventory screen has no split yet. See `STORAGE_UX_PLAN.md`.
+
 Needed eventually.
 
 Potential UX:
@@ -1310,6 +1312,8 @@ Shift drag
 Do not implement until required by Crafting/storage UX.
 
 ## Partial Storage Transfer
+
+**Implemented in G9 (2026-10-20):** moves are "as much as fits" (`MoveInventoryStackToStorage`, `MoveAll*`), atomic per stack with one notification per side. An explicit "transfer N" dialog is still deferred.
 
 Current storage transfers whole stacks.
 
@@ -1833,10 +1837,11 @@ Current validation baseline:
 - Building B7 7/7, B6 7/7, B5 6/6, B4 7/7, B3 4/4, B2 20/20, B1 9/9 (8 + OverlapOnlyVolumes); Crafting C8C 7/7 (C8B 3/3, C8A 11/11)
 - crafting C1-C8C 69/69
 - Building B8 5/5; Gameplay G8 (interaction targeting, B7.1) 3/3
-- full 258/258 (253 + 5 Building B8)
+- Inventory G9 (storage UI/UX) 8/8
+- full 266/266 (258 + 8 Inventory G9)
 
 Next:
-Phase 5 Building COMPLETE (B0–B9). Next: Phase 6 Colony, to be planned with the user (first checkpoint: one NPC, one job, navigation, one job action). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
+Phase 5 Building COMPLETE (B0–B9). G9 Storage UI/UX (storage screen: move stack, move all of an item, split, drag, ALL, info panel, sorting) COMPLETE; G9.1 inventory details layout fix next. Next: Phase 6 Colony, to be planned with the user (first checkpoint: one NPC, one job, navigation, one job action). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```

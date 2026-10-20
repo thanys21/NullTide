@@ -24,6 +24,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Storage")
 	FInventoryStorageTransferResult TryTransferItemToInventory(UInventoryComponent* Inventory, FGuid ItemId);
 
+	/**
+	 * Splits one stack in place (G9), with the same rules as UInventoryComponent::TrySplitStack: floor(Q/2) into a new
+	 * stack right after it, which needs a free slot. On success Revision rises once and OnStorageChanged fires once.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Storage")
+	FInventoryOperationResult TrySplitStack(FGuid ItemId);
+
 	UFUNCTION(BlueprintPure, Category = "Storage")
 	TArray<UItemInstance*> GetItemsSnapshot() const;
 

@@ -44,6 +44,14 @@ public:
 	FInventoryOperationResult TryRemoveItemQuantity(FGuid ItemId, int32 Quantity);
 
 	/**
+	 * Splits one stack in place (G9): a new stack of floor(Q/2) with a new ItemId right after it; the source keeps
+	 * the larger half and its ItemId. Needs Q >= 2 (CannotSplit) and a free slot (CapacityFull); otherwise nothing
+	 * changes. On success Revision rises once and OnInventoryChanged fires once. Result.Item is the new stack.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Inventory")
+	FInventoryOperationResult TrySplitStack(FGuid ItemId);
+
+	/**
 	 * Atomically removes and adds quantities by exact definition class. Removals consume the earliest
 	 * stacks first; additions are planned against the post-removal contents with the normal stacking
 	 * rules. On success Revision rises once and OnInventoryChanged fires once; on failure nothing changes.

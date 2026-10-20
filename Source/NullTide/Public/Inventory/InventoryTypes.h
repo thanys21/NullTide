@@ -31,7 +31,9 @@ enum class EInventoryOperationResult : uint8
 	NotInitialized,
 	Busy,
 	/** The inventory holds less than the requested total quantity. */
-	InsufficientQuantity
+	InsufficientQuantity,
+	/** A split needs a stack of at least 2 (G9). */
+	CannotSplit
 };
 
 /** A definition and quantity requested from an inventory query. */
@@ -150,7 +152,9 @@ enum class EInventoryStorageTransferResult : uint8
 	InvalidItemId,
 	DestinationFull,
 	Busy,
-	TransferFailed
+	TransferFailed,
+	/** A batch found no stack to move on the source side (G9). */
+	NothingToMove
 };
 
 /** Result for an exact runtime-item transfer between player inventory and storage. */
@@ -167,6 +171,38 @@ struct NULLTIDE_API FInventoryStorageTransferResult
 
 	UPROPERTY(BlueprintReadOnly, Category = "Inventory|Storage")
 	TObjectPtr<UItemInstance> Item = nullptr;
+
+	/** Units moved by this transfer (the whole stack for an exact transfer, or the part that fit, G9). */
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory|Storage")
+	int32 MovedQuantity = 0;
+
+	bool IsSuccess() const
+	{
+		return Result == EInventoryStorageTransferResult::Success;
+	}
+};
+
+/** Result of a batch storage move (G9: every stack of one item, or everything), as much as fits. */
+USTRUCT(BlueprintType)
+struct NULLTIDE_API FStorageTransferBatchResult
+{
+	GENERATED_BODY()
+
+	/** Success when anything moved; NothingToMove or DestinationFull when nothing did (then nothing changed). */
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory|Storage")
+	EInventoryStorageTransferResult Result = EInventoryStorageTransferResult::InvalidSource;
+
+	/** Units moved in total. */
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory|Storage")
+	int32 MovedQuantity = 0;
+
+	/** Source stacks that moved fully or in part. */
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory|Storage")
+	int32 MovedStacks = 0;
+
+	/** Matching source stacks still on the source side afterwards (whole or remainder). */
+	UPROPERTY(BlueprintReadOnly, Category = "Inventory|Storage")
+	int32 StacksLeft = 0;
 
 	bool IsSuccess() const
 	{

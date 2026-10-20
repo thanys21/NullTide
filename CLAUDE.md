@@ -77,7 +77,7 @@ The engine is installed at `D:/game/epic/UE_5.8`.
 
 The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WITH_DEV_AUTOMATION_TESTS`. Shared fixtures are in the `*TestTypes.h` headers there. Test names are grouped by milestone:
 
-- `NullTide.Inventory.{M1..M6,G7,Stacking}`
+- `NullTide.Inventory.{M1..M6,G7,G9,Stacking}` (G9 = storage UI/UX)
 - `NullTide.Gameplay.{G1,G2,G4,G5,G6,G8}` (G8 = interaction targeting)
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
@@ -120,6 +120,23 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 **Storage (`Storage/`)**
 - `UStorageComponent` sits on `AStorageContainerActor` (Blueprint: `BP_StorageContainer`).
 - Items move between inventory and storage through `UStorageTransferLibrary`, which is a friend of both components. A transfer moves the same `UItemInstance` and keeps its ItemId.
+- **Moves (G9):**
+  - `MoveInventoryStackToStorage` / `MoveStorageStackToInventory` move one stack as much as fits. A whole fit is the exact transfer (identity moves). A partial fit leaves the source id with the remainder; the moved part merges or gets new ids.
+  - `MoveAll*(…, OnlyDefinition)` moves every stack, or every stack of one item, under one guard, with one revision and one broadcast per side. Leftovers stay.
+  - "As much as fits" is a search over `BuildAddPlan`, never a second capacity rule.
+- **Split (G9):** `UInventoryComponent::TrySplitStack` / `UStorageComponent::TrySplitStack` (shared `FInventoryStacking::SplitStack`).
+  - A new stack of `floor(Q/2)` with a new id goes right after the source. It needs Q of at least 2 (`CannotSplit`) and a free slot (`CapacityFull`); otherwise nothing changes.
+- **Storage screen (G9):** `UStorageScreenWidget` / `W_StorageScreen` has three columns: inventory, the selected item's info, the storage. It is generic over any `UStorageComponent`, so future loot containers reuse it.
+  - Slot input is resolved by `UStorageSlotWidget::ResolveSlotAction` in `NativeOnPreviewMouseButtonDown`:
+    - LMB selects and can start a drag;
+    - Shift+LMB moves the stack;
+    - Ctrl+LMB moves every stack of the item;
+    - Shift+RMB splits.
+  - Dragging onto the other panel (`UStorageDragDropOperation`) moves the stack; a drop on the same panel does nothing.
+  - `ALL →` / `← ALL` move everything that fits.
+  - Both sides are sorted for display only (category, name, quantity), and there is no manual arrangement.
+  - Selecting only restyles slots; it does not rebuild them, because a rebuild would kill the drag source.
+  - Test seam: `SetPlayerInventoryOverride`.
 
 **Resource gathering (`ResourceGathering/`, `ToolLoadout/`)**
 - `AResourceNodeActor` runs a timed gather. Gathering requires a tool, checked against the interactor's `UToolLoadoutComponent` (tools are equipped by ItemId per `EToolType`).

@@ -176,3 +176,33 @@ Expected suite: 258 + 8 = 266. The G7, Stacking, B6 and B7 storage tests stay gr
 - **R-5 Removing `TransferToStorageButton` / `TransferToInventoryButton`** removes `BindWidgetOptional` properties. References are checked (C++, `W_StorageScreen`) before deletion.
 - **R-6 MCP UMG authoring of the relayout** (three columns, grids, anchors): if a property cannot be set, STOP and ask for a manual step.
 - **R-7 Legacy inventory mode** semantics are checked at implementation. If they cannot be supported, refuse and STOP to report.
+
+---
+
+# G9.1 — Inventory Screen Details Layout Fix
+
+**Status:** COMPLETE / APPROVED (user, 2026-10-20; PIE PASS). G9 is committed as `b07464e`.
+
+**Finding (user PIE, screenshot, 2026-10-20):** on the inventory screen (`W_Inventory`, which G9 did not change), selecting the Short Sword overlaps the tool hint and the Equip Tool button onto the capability list. The Character column shows "AXE / Axe / Axe".
+
+**Audit (MCP read of `W_Inventory`; source):**
+- The window is fixed at 760 high (`WindowSize`).
+- `DetailsPanel` is a vertical box: icon, name, category, description, capability heading and summary (5 lines for a weapon), the collapsed `FutureActionArea`, and `ToolActionPanel`.
+- `ToolActionText`, `ToolActionButtonText`, `AxeSlotLabel`, `PickaxeSlotLabel`, `AxeToolName` and `PickaxeToolName` still use the UMG default font, **24 pt bold**. The content overflows the fixed height, so the last rows draw over the capability list.
+- `UInventoryScreenWidget::RefreshToolSlot` writes "`<slot>\n<item>`" (`InventoryScreenWidget.cpp:485-488`) under a label that already names the slot. Hence "AXE / Axe / Axe".
+
+**Fix:**
+1. **Fonts:**
+   - `ToolActionText`: 12 regular, muted;
+   - `ToolActionButtonText`: 14 bold;
+   - `AxeSlotLabel` / `PickaxeSlotLabel`: 12 bold;
+   - `AxeToolName` / `PickaxeToolName`: 12 regular.
+2. **Scroll area:** the description, capability heading and capability summary move into a new `DetailsScroll` scroll box that fills the remaining height. Long text scrolls instead of overlapping; the tool panel stays at the bottom.
+3. **C++:** `RefreshToolSlot` shows only the item name, or "Empty". All bound widget names stay.
+4. **Test:** `NullTide.Inventory.G9.InventoryDetailsLayout`:
+   - the six texts are below 20 pt;
+   - the three detail texts sit in a `UScrollBox`;
+   - `DetailsScroll`'s slot fills.
+
+**Not in scope:** any other inventory-screen change.
+**Risk:** MCP moves keep the widgets' bindings (checked by the existing `CraftingUITests` binding test and the new test).

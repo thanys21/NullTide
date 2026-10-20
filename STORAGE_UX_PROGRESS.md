@@ -130,3 +130,37 @@ Confirmed by the reviewer:
 ## Next Checkpoint
 
 G9 is COMPLETE / APPROVED (automation 266/266, cook PASS, PIE PASS). Next: G9.1, the inventory details layout fix (approved). Then Phase 6 Colony is planned with the user. Then Phase 6 Colony is planned with the user.
+
+## G9.1 - Inventory Screen Details Layout Fix
+
+- **Baseline:** `b07464e` (G9). Approved by the user on 2026-10-20 (plan: `STORAGE_UX_PLAN.md` G9.1).
+- **Asset (`W_Inventory`, MCP):**
+  - Fonts that were still at the 24 pt UMG default:
+    - `ToolActionText`: 12 regular, muted;
+    - `ToolActionButtonText`: 14 bold;
+    - `AxeSlotLabel` / `PickaxeSlotLabel`: 12 bold;
+    - `AxeToolName` / `PickaxeToolName`: 12 regular.
+  - New `DetailsScroll` scroll box (slot Fill) holds `DetailsItemDescription`, `CapabilityHeading` and `CapabilitySummary`. Long details scroll instead of overlapping, and the tool panel stays at the bottom.
+  - All bound names are kept.
+  - Compiled with warnings as errors and saved by path.
+- **C++:** `UInventoryScreenWidget::RefreshToolSlot` shows only the item name, or "Empty", under the AXE / PICKAXE label. This removes the "AXE / Axe / Axe" repetition. No test or doc referenced the old format.
+- **Test:** `NullTide.Inventory.G9.InventoryDetailsLayout`:
+  - six texts below 20 pt;
+  - three detail texts inside `DetailsScroll`;
+  - its slot fills.
+- **Validation** (editor closed):
+  - build clean; the first attempt failed on a test format specifier (`%d` for a float font size), fixed to `%.0f`;
+  - command line **267/267**, exit 0 (the existing `CraftingUITests` binding check of `W_Inventory` still passes);
+  - cook `Done!` 648/7/655, 0 errors;
+  - Content: `W_Inventory` modified; `__ExternalActors__` 94, `__ExternalObjects__` 3.
+- **Self-review (fresh-context review pass; no P0, P1 or P2):**
+
+  | Finding | Resolution |
+  | --- | --- |
+  | Anything depending on the old "`<slot>\n<item>`" format | None found (`Source/`, docs); `ToolType` is still used. |
+  | P3: no test checks that the tool panel stays outside the scroll area | **CONFIRMED, fixed:** `ToolActionPanel`'s parent is `DetailsScroll`'s parent, not the scroll box. Rebuilt; **267/267**, exit 0. |
+  | P3: the `RefreshToolSlot` text change itself is not covered by automation | **Recorded:** it would need a test seam on the tool loadout refresh; the change is covered by the manual PIE (Character column). |
+- **Manual rendered PIE (user, 2026-10-20): PASS** ("ok done").
+  - Short Sword details no longer overlap; Axe and Pickaxe show the tool panel at the bottom.
+  - The Character column shows only the equipped name or "Empty".
+- **G9.1 is COMPLETE / APPROVED.** Next: Phase 6 Colony, to be planned with the user.

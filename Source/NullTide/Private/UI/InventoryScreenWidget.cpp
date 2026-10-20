@@ -482,10 +482,8 @@ void UInventoryScreenWidget::RefreshToolSlot(const EToolType ToolType, UImage* I
 	if (Icon) Icon->SetBrushFromTexture(Definition ? Definition->ItemIcon.Get() : nullptr, true);
 	if (Name)
 	{
-		const FString SlotName = ToolType == EToolType::Axe ? TEXT("Axe") : TEXT("Pickaxe");
-		Name->SetText(FText::FromString(Definition
-			? FString::Printf(TEXT("%s\n%s"), *SlotName, *Definition->ItemName.ToString())
-			: FString::Printf(TEXT("%s\nEmpty"), *SlotName)));
+		// The slot's own label already names the tool type (AXE / PICKAXE), so only the item is shown (G9.1).
+		Name->SetText(Definition ? Definition->ItemName : FText::FromString(TEXT("Empty")));
 	}
 }
 

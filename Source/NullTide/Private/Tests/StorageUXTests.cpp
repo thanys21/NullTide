@@ -4,6 +4,9 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
 #include "Components/Image.h"
+#include "Components/ScrollBox.h"
+#include "Components/TextBlock.h"
+#include "Components/VerticalBoxSlot.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -493,6 +496,44 @@ bool FStorageUXProductionScreenTest::RunTest(const FString& Parameters)
 				DetailsIcon ? *DetailsIcon->GetBrush().ImageSize.ToString() : TEXT("none")),
 			DetailsIcon && DetailsIcon->GetBrush().GetResourceObject() && DetailsIcon->GetBrush().ImageSize.Equals(FVector2D(72.0, 72.0)));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStorageUXInventoryDetailsLayoutTest,
+	"NullTide.Inventory.G9.InventoryDetailsLayout",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FStorageUXInventoryDetailsLayoutTest::RunTest(const FString& Parameters)
+{
+	// G9.1: the inventory screen's details column must not overflow its fixed-height window (PIE: overlapping text).
+	UClass* InventoryClass = LoadClass<UUserWidget>(nullptr, TEXT("/Game/LevelPrototyping/InventorySystem/UI/Widgets/W_Inventory.W_Inventory_C"));
+	if (!TestNotNull(TEXT("W_Inventory loads"), InventoryClass)) { return false; }
+	FG9World Fixture;
+	if (!TestNotNull(TEXT("Transient world"), Fixture.World)) { return false; }
+	UUserWidget* Screen = CreateWidget<UUserWidget>(Fixture.World, InventoryClass);
+	if (!TestTrue(TEXT("W_Inventory and its widget tree"), Screen && Screen->WidgetTree)) { return false; }
+
+	for (const TCHAR* Name : { TEXT("ToolActionText"), TEXT("ToolActionButtonText"), TEXT("AxeSlotLabel"), TEXT("PickaxeSlotLabel"),
+		TEXT("AxeToolName"), TEXT("PickaxeToolName") })
+	{
+		const UTextBlock* Text = Cast<UTextBlock>(Screen->WidgetTree->FindWidget(Name));
+		TestTrue(FString::Printf(TEXT("%s is styled below the 24 pt UMG default (%.0f)"), Name, Text ? Text->GetFont().Size : -1.f),
+			Text && Text->GetFont().Size < 20);
+	}
+	const UScrollBox* Scroll = Cast<UScrollBox>(Screen->WidgetTree->FindWidget(TEXT("DetailsScroll")));
+	TestNotNull(TEXT("The details texts have a scroll area"), Scroll);
+	for (const TCHAR* Name : { TEXT("DetailsItemDescription"), TEXT("CapabilityHeading"), TEXT("CapabilitySummary") })
+	{
+		const UWidget* Text = Screen->WidgetTree->FindWidget(Name);
+		TestTrue(FString::Printf(TEXT("%s scrolls instead of overlapping"), Name), Text && Scroll && Text->GetParent() == Scroll);
+	}
+	const UVerticalBoxSlot* ScrollSlot = Scroll ? Cast<UVerticalBoxSlot>(Scroll->Slot) : nullptr;
+	TestTrue(TEXT("The scroll area takes the remaining height, so the tool panel stays at the bottom"),
+		ScrollSlot && ScrollSlot->GetSize().SizeRule == ESlateSizeRule::Fill);
+	const UWidget* ToolPanel = Screen->WidgetTree->FindWidget(TEXT("ToolActionPanel"));
+	TestTrue(TEXT("The tool panel stays outside the scroll area, in the same column"),
+		ToolPanel && Scroll && ToolPanel->GetParent() != Scroll && ToolPanel->GetParent() == Scroll->GetParent());
 	return true;
 }
 

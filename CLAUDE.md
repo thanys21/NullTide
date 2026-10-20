@@ -262,6 +262,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - It applies GameOnly with `SetConsumeCaptureMouseDown(false)` to match the project's `CapturePermanently_IncludingInitialMouseDown`, so the first click afterwards reaches the game.
   - Do not call `SetInputMode_GameOnly` directly; its default swallows that click.
   - Keep every widget name that `UInventoryScreenWidget` binds when editing `W_Inventory`.
+  - The details column (description, capability heading and summary) sits in a `DetailsScroll` scroll box, so long details scroll inside the fixed-height window instead of overlapping (G9.1). Tool slots show only the item name or "Empty" under their AXE / PICKAXE label.
 
 **Content**
 - The main map is `/Game/TopDown/Lvl_TopDown`.

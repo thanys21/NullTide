@@ -585,7 +585,7 @@ Expected suite: 279 + 5 = 284.
 
 # T1 - Test Ground: Plan
 
-**Status:** APPROVED (user, 2026-10-23: "duyệt plan"). It runs right after S4 is committed, as its own checkpoint. It is a level-only change, with no code.
+**Status:** COMPLETE (manual PIE PASS, 2026-10-23). APPROVED (user, 2026-10-23: "duyệt plan"). It runs right after S4 is committed, as its own checkpoint. It is a level-only change, with no code.
 - **User direction (2026-10-23):** clear the terrain, or make one flat ground, so testing is easy. Keep only a few small bumps to test that building is refused.
 - **Audit (MCP actor list, 2026-10-23):** `Lvl_TopDown` is still the top-down template on a 40 × 40 m `Floor_0`:
   - the raised centre platform: `SM_Cube13`–`16`, `SM_Ramp9`–`12`, `SM_QuarterCylinder5`–`12`, `SM_Cylinder` cap;

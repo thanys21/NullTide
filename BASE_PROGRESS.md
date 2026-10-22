@@ -342,4 +342,51 @@ All were found clean.
 
 ## Next Checkpoint
 
-S4 COMPLETE (full automation 284/284, cook PASS, manual PIE PASS). Next: T1 test ground (approved), then S5 trading.
+S4 COMPLETE (full automation 284/284, cook PASS, manual PIE PASS; `965439c`).
+
+## T1 - Test Ground
+
+### Baseline and Scope
+
+- **Baseline:** `965439c` (S4).
+- **Scope:** `BASE_PLAN.md` T1, approved 2026-10-23. A level-only change: flat ground, a few small bumps to test refused building, more room for the zones. No code changed.
+
+### Level changes (Unreal MCP, saved by the user)
+
+- **Removed 53 template static meshes:**
+  - the raised centre platform (`SM_Cube13`–`16`, `SM_Ramp9`–`12`, `SM_QuarterCylinder5`–`12`, the `SM_Cylinder` cap);
+  - the border walls (`SM_Cube2`–`5`, `17`–`20`);
+  - the corner blocks and ramps;
+  - 8 columns.
+
+  `Brush1` is the editor's default builder brush and was kept. The first attempt, one script over the whole level, dropped the MCP connection and changed nothing; the deletes then ran in batches of 13–20.
+- **`Floor_0`:** scale 4 → 10, recentred at the origin: 100 × 100 m (±5000 cm), `BlockAll` unchanged.
+- **`NavMeshBoundsVolume`:** scale 1 → 2.333, bounds ±5250 cm.
+- **`PlayerStart`:** Z 302 → 100. It had stood on the removed platform.
+- **Pickups:** 7 that lay on the platform were lowered to the ground (bounds min Z 210 or 130 → 0): `TestPickup_Wood10`, `_Scrap`, `_Stone10`, `G3_Pickup_ShortSword2`–`5`.
+- **Zones:**
+  - `BaseZone_Start` → centre cell (0, 0), 21 × 21 (bounds −2000..2200 on both axes, buildable cells −9..9);
+  - `TraderCamp` → centre cell (18, 0), 9 × 9 (x 2800..4600, y −800..1000), 6 m east of the starter zone.
+- **Test bumps:** engine cube `StaticMeshActor`s, `BlockAll`, Static, all in the starter zone's east side.
+
+  | Actor | Shape | Bounds |
+  | --- | --- | --- |
+  | `TestBump_Step40` | 200 × 200 × 40 cm step (Uneven / Blocked) | x 1400..1600, y −1200..−1000, z 0..40 |
+  | `TestBump_Slope35` | 300 × 200 × 10 cm plate pitched 35° (TooSteep) | x 1474..1726, y −100..100, z −4..176 |
+  | `TestBump_Rock` | 60 cm block (Blocked) | x 1470..1530, y 1070..1130, z 0..60 |
+
+### Validation
+
+- **Tests (command line):** 284/284 Success, `EXIT CODE: 0` (unchanged; the tests use their own worlds).
+- **Cook:** exit 0, `Success - 0 error(s), 2 warning(s)`. Packages 655 / 7 / 662: −7, the template meshes and materials no longer referenced.
+- **Content and World Partition audit:**
+  - 53 external actor packages deleted;
+  - 12 modified (the floor, the nav volume, `PlayerStart`, 7 pickups, 2 zones);
+  - 3 added (the bumps);
+  - `__ExternalActors__` 96 → 46;
+  - no other Content change.
+- **Manual PIE (user, 2026-10-23): PASS.** Flat ground, the bumps refuse building, the larger starter zone, the Trader camp in open ground, items usable.
+
+## Next Checkpoint
+
+T1 COMPLETE (tests 284/284, cook PASS, manual PIE PASS). Next: S5 trading, after its detail plan is approved.

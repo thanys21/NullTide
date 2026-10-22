@@ -273,7 +273,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - `ABaseZoneActor` is the placeable zone: an unscaled root, `Zone`, and `ZoneBounds` (an editor outline of the snapped rectangle; no collision, hidden in game, ignores actor rotation).
   - It is not spatially loaded (always loaded in World Partition).
   - **To add a zone, place one in a level and set its size.** Zones are authored for the game and never removed during play.
-- `Lvl_TopDown` has `BaseZone_Start` (15 × 15, centre cell (−3, 0) since S4: cells x −10..4, y −7..7; `PlayerStart` inside) and the non-building `TraderCamp` (S4).
+- `Lvl_TopDown` has `BaseZone_Start` (21 × 21 around `PlayerStart` since T1: cells −10..10, buildable −9..9) and the non-building `TraderCamp` (S4).
 - **Ring visual (S3):** `ABaseZoneActor` lays 4 flat strips (`RingSouth/North/West/East`, engine cube, 2 cm thick, 1 cm above the actor) over the outer ring in `OnConstruction`.
   - They are always visible, in game and in the editor.
   - No collision, overlaps, navigation or shadow, so traces and building pass through.
@@ -311,8 +311,8 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - Bye, I, Tab and Esc close it (preview pass) through `CloseTalk`: it is removed, `RestoreGameplayCursor` + `RestoreGameOnlyInput` run, and the NPC's `EndTalk` is called. Closing again does nothing.
   - `NativeDestruct` ends the talk if the panel was removed some other way.
 - `Lvl_TopDown`:
-  - `BaseZone_Start` is centred on cell (−3, 0) (cells −10..4).
-  - `TraderCamp` is centred on cell (7, 0), 5 × 9 (cells x 5..9, y −4..4), "Trader Camp", no building, residents [`NPC_Trader`].
+  - `BaseZone_Start` is centred on cell (0, 0), 21 × 21 (T1).
+  - `TraderCamp` is centred on cell (18, 0), 9 × 9 (cells x 14..22, y −4..4; T1), "Trader Camp", no building, residents [`NPC_Trader`].
 - Build.cs: `AIModule`, `GameplayTasks` (public), `NavigationSystem` (private).
 
 **UI (`UI/`)**
@@ -345,7 +345,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - `Pieces/BP_BuildDoor` (B5): a child of `ABuildingDoorActor`; no added components.
   - `Pieces/BP_BuildChest` and `Pieces/BP_BuildWorkbench` (B7): children of `ABuildingStorageActor` (title "Wooden Chest", `W_StorageScreen`) and `ABuildingCraftingStationActor` (`Station_Workbench`, `W_Inventory`). Both implement `BPI_Interactable` (`Interact` → `OpenStorageForInteractor` / `OpenCraftingForInteractor`, Press).
   - `Definitions/Building_WoodFloor`: Wood × 4. `Building_WoodWall`: Wood × 6. `Building_WoodDoor`: Wood × 8 + Scrap × 2. `Building_WoodChest`: Wood × 12. `Building_Workbench`: Wood × 20 + Stone × 10. All refund 100% (`RefundFraction` 1.0, the default since B6), and all but the floor have `bRequiresFloor`.
-- The `Lvl_TopDown` ground `Floor_0` uses `BlockAll` (`WorldStatic`) since B4, so it supports building like every other map block. It is a World Partition external actor; MCP cannot save actor packages, so map actor edits are saved in the editor (Ctrl+S) and then audited with `git status`.
+- **Test ground (T1):** the template obstacles are gone. `Floor_0` (`BlockAll`, `WorldStatic` since B4) is a flat 100 × 100 m (±5000 cm), and `NavMeshBoundsVolume` covers ±5250 cm. Three test bumps in the starter zone exercise refused building: `TestBump_Step40` (40 cm step), `TestBump_Slope35` (35° plate) and `TestBump_Rock` (60 cm block). Map actors are World Partition external actors; MCP cannot save actor packages, so map edits are saved in the editor (Ctrl+S) and then audited with `git status`.
 - `BP_PickUpItem`'s `Quantity` is Instance Editable (B4 test aid). Test pickups near `PlayerStart` (Wood × 100, Stone × 10, Scrap × 10) were placed at the user's request; the user may remove them.
 
 ## Milestone docs

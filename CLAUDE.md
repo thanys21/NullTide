@@ -78,7 +78,7 @@ The engine is installed at `D:/game/epic/UE_5.8`.
 The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WITH_DEV_AUTOMATION_TESTS`. Shared fixtures are in the `*TestTypes.h` headers there. Test names are grouped by milestone:
 
 - `NullTide.Inventory.{M1..M6,G7,G9,Stacking}` (G9 = storage UI/UX)
-- `NullTide.Gameplay.{G1,G2,G4,G5,G6,G8}` (G8 = interaction targeting)
+- `NullTide.Gameplay.{G1,G2,G4,G5,G6,G8,G10}` (G8 = interaction targeting, G10 = cursor facing)
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
 - `NullTide.Building.{B1,B2,B3,B4,B5,B6,B7,B8}`
@@ -243,6 +243,18 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - A 0.1 s timer (no tick) broadcasts `OnFacingInteractableChanged` only when the target changes, including to null when the previous target was destroyed. `PlayerInteractionComponent` binds it to re-render the prompt.
 - `SelectFacingInteractable` considers candidates within ±70° of the actor's forward vector (2D). It picks the nearest of those within 1° of the smallest angle, which is independent of input order. It skips depleted resource nodes (`ShouldShowInteractionPromptFor`). With nothing in front there is no target and no prompt.
 - Targeting is read-only and never interacts. Interactable actors need no change; their interaction volume must overlap the Pawn channel.
+
+**Player (`Player/`)** — Phase 6 S1 (plan `BASE_PLAN.md`, progress `BASE_PROGRESS.md`)
+- `UCursorFacingComponent` on `BP_TopDownCharacter` turns the character toward the mouse.
+  - Each tick it projects the cursor onto the plane at the character's feet and sets the controller yaw.
+  - `CharMoveComp` uses controller desired rotation at 1080°/s; orient-to-movement is off.
+  - The facing is kept while the cursor is over the character: within 48 px of its screen position (`DeadZonePixels`) or 40 cm on the ground (`DeadZone`).
+  - It is a tick prerequisite of `CharMoveComp`, so the turn applies in the same frame.
+- It ticks only for a pawn controlled by a player controller with a local player (never NPCs or tests). It pauses while a UI-only screen is open: the gate is the input mode (`IgnoreInput` on the game viewport), not widget focus, so building mode (GameAndUI) keeps facing.
+- Test seams: `IsGameInputActive`, `IsLocalPlayerController` (`UCursorFacingTestComponent` in `Tests/PlayerTestTypes.h`).
+- The camera (absolute-rotation spring arm) and WASD (camera-relative) are unaffected.
+- Interaction targeting (B7.1) follows the facing, so F targets what the mouse points toward.
+- The gameplay cursor stays visible: closing a screen calls `NullTideInput::RestoreGameplayCursor` (the controller's default), never hides it.
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

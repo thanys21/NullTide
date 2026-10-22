@@ -247,7 +247,8 @@ void UInventoryScreenWidget::CloseInventory()
 	ClearCraftingStation();
 	if (APlayerController* PlayerController = GetOwningPlayer())
 	{
-		PlayerController->SetShowMouseCursor(false);
+		// The gameplay cursor stays visible after a screen closes (cursor facing, Phase 6 S1).
+		NullTideInput::RestoreGameplayCursor(*PlayerController);
 		// The first click after closing reaches the game (B9).
 		NullTideInput::RestoreGameOnlyInput(*PlayerController);
 	}

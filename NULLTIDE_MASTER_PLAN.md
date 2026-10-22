@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building COMPLETE (B0–B9, summary in `BUILDING_REPORT.md`): B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 (construction authority: activate first, pay last) COMPLETE / APPROVED (full automation 219/219, cook PASS); B3 (Wooden Floor: first buildable, construction component on the player) COMPLETE / APPROVED (full automation 223/223, cook PASS); B4 (building mode, ghost preview, input) COMPLETE / APPROVED (full automation 230/230, cook PASS, manual PIE 8/8 PASS); B5 (walls and doors, selection and rotation) COMPLETE / APPROVED (full automation 236/236, cook PASS, manual PIE PASS; `b20f70a`); B6 (demolition: C key, cascade, full refund) COMPLETE / APPROVED (full automation 243/243, cook PASS, manual PIE PASS; `7dd0c1d`); B7 (buildable chest and workbench) COMPLETE / APPROVED (full automation 250/250, cook PASS, manual PIE done; `8f4ae66`); B7.1 (facing-based interaction targeting) COMPLETE / APPROVED (full automation 253/253, cook PASS, manual PIE accepted; reach to be tuned later; `208b12e`); B8 (building UI: build bar) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 5/5 PASS; `e20b30e`); B9 (polish: interaction reach 75/75, first click after closing a screen; Phase 5 closeout) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 3/3 PASS). Next: Phase 6 Colony, to be planned with the user. Crafting queue and the inventory/crafting UI-UX pass are deferred.
+> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building COMPLETE (B0–B9, summary in `BUILDING_REPORT.md`): B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 (construction authority: activate first, pay last) COMPLETE / APPROVED (full automation 219/219, cook PASS); B3 (Wooden Floor: first buildable, construction component on the player) COMPLETE / APPROVED (full automation 223/223, cook PASS); B4 (building mode, ghost preview, input) COMPLETE / APPROVED (full automation 230/230, cook PASS, manual PIE 8/8 PASS); B5 (walls and doors, selection and rotation) COMPLETE / APPROVED (full automation 236/236, cook PASS, manual PIE PASS; `b20f70a`); B6 (demolition: C key, cascade, full refund) COMPLETE / APPROVED (full automation 243/243, cook PASS, manual PIE PASS; `7dd0c1d`); B7 (buildable chest and workbench) COMPLETE / APPROVED (full automation 250/250, cook PASS, manual PIE done; `8f4ae66`); B7.1 (facing-based interaction targeting) COMPLETE / APPROVED (full automation 253/253, cook PASS, manual PIE accepted; reach to be tuned later; `208b12e`); B8 (building UI: build bar) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 5/5 PASS; `e20b30e`); B9 (polish: interaction reach 75/75, first click after closing a screen; Phase 5 closeout) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 3/3 PASS). Phase 6 Base & NPCs in progress (BASE_PLAN.md): S1 (cursor facing) COMPLETE / APPROVED (full automation 271/271, cook PASS, manual PIE 7/7 PASS). Next: S2 base authority. Crafting queue and the inventory/crafting UI-UX pass are deferred.
 
 ---
 
@@ -809,7 +809,7 @@ Phase 4 Crafting                    ✅
 Phase 5 Building                    ✅
 
 NEXT:
-G9 Storage UI/UX COMPLETE (STORAGE_UX_PROGRESS.md); G9.1 inventory details layout fix COMPLETE. Next: Phase 6 Colony, to be planned with the user (Phase 5 Building COMPLETE, B0–B9; see BUILDING_REPORT.md).
+G9 Storage UI/UX COMPLETE (STORAGE_UX_PROGRESS.md); G9.1 inventory details layout fix COMPLETE. Phase 6 S1 cursor facing COMPLETE (BASE_PROGRESS.md). Next: Phase 6 S2 base authority (BASE_PLAN.md). Phase 5 Building COMPLETE (B0–B9; see BUILDING_REPORT.md).
 ```
 
 ---
@@ -1152,39 +1152,20 @@ B0 design APPROVED (see `BUILDING_PLAN.md`); progress in `BUILDING_PROGRESS.md`.
 
 ---
 
-# Phase 6 — Colony
+# Phase 6 — Base & NPCs
 
-After the player can gather/craft/build.
-
-Planned systems:
+**Redefined by the user (2026-10-20/21):** no colonists or worker NPCs; the player controls one character only. Phase 6 creates a base (safe area) where the player builds and interacts with NPCs, and the character faces the mouse cursor. Plan and decisions: `BASE_PLAN.md` (P-1 to P-10 approved 2026-10-21).
 
 ```text
-Colonists
-Needs
-Jobs
-Work priorities
-Beds
-Storage hauling
-Resource jobs
-Crafting jobs
-Building jobs
-Schedules
-Recruitment
+S1 Cursor facing (character turns to the mouse; cursor always visible) — COMPLETE
+S2 Base authority (buildable Base Flag, 15x15-cell area, build inside the base only, one base)
+S3 Base UX (boundary visual, HUD tag, flag info)
+S4 NPC foundation (Trader arrives when a base exists, wanders in the base, talk panel)
+S5 Trading (data offers, atomic barter through the inventory transaction)
+S6 Housing (optional: bed + room detection) and closeout
 ```
 
-Start simple.
-
-First colony checkpoint should probably be:
-
-```text
-one NPC
-→ assign one job
-→ navigate to target
-→ perform one reusable job action
-```
-
-Do not begin with complex RimWorld-level simulation.
-
+Safety effects (no hostile spawns or entry inside the base) arrive with Phase 8 Combat.
 ---
 
 # Phase 7 — Save / Load
@@ -1201,7 +1182,7 @@ Tool loadout
 Storage contents
 Resource-node RemainingYield / Depleted
 Placed buildings
-Colonists
+Base and NPCs
 World progression
 ```
 
@@ -1837,11 +1818,11 @@ Current validation baseline:
 - Building B7 7/7, B6 7/7, B5 6/6, B4 7/7, B3 4/4, B2 20/20, B1 9/9 (8 + OverlapOnlyVolumes); Crafting C8C 7/7 (C8B 3/3, C8A 11/11)
 - crafting C1-C8C 69/69
 - Building B8 5/5; Gameplay G8 (interaction targeting, B7.1) 3/3
-- Inventory G9 (storage UI/UX, incl. G9.1) 9/9
-- full 267/267 (258 + 9 Inventory G9)
+- Inventory G9 (storage UI/UX, incl. G9.1) 9/9; Gameplay G10 (cursor facing, Phase 6 S1) 4/4
+- full 271/271 (267 + 4 Gameplay G10)
 
 Next:
-Phase 5 Building COMPLETE (B0–B9). G9 Storage UI/UX (storage screen: move stack, move all of an item, split, drag, ALL, info panel, sorting) COMPLETE; G9.1 inventory details layout fix COMPLETE. Next: Phase 6 Colony, to be planned with the user (first checkpoint: one NPC, one job, navigation, one job action). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
+Phase 5 Building COMPLETE (B0–B9). G9 Storage UI/UX (storage screen: move stack, move all of an item, split, drag, ALL, info panel, sorting) COMPLETE; G9.1 inventory details layout fix COMPLETE. Next: Phase 6 Base & NPCs (BASE_PLAN.md: S1 cursor facing, S2–S3 base, S4–S5 Trader NPC, S6 housing). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1887,7 +1868,7 @@ Phase 4  Crafting                           ✅
 
 Phase 5  Building                           ✅ (B0 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅, B7 ✅, B7.1 ✅, B8 ✅, B9 ✅)
 
-Phase 6  Colony
+Phase 6  Base & NPCs (BASE_PLAN.md)
 
 Phase 7  Save / Load
 

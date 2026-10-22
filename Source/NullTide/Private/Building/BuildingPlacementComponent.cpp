@@ -852,6 +852,8 @@ FText UBuildingPlacementComponent::DescribeResult(const EBuildResult Result)
 		return LOCTEXT("BlocksBuilder", "Too close to you");
 	case EBuildResult::NeedsFloor:
 		return LOCTEXT("NeedsFloor", "Needs a floor");
+	case EBuildResult::OutsideBuildZone:
+		return LOCTEXT("OutsideBuildZone", "Outside the build zone");
 	case EBuildResult::NotDemolishable:
 		return LOCTEXT("NotDemolishable", "Can't demolish this");
 	case EBuildResult::RefundDoesNotFit:

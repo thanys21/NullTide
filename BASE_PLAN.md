@@ -206,3 +206,138 @@ Expected suite: 267 + 3 = 270.
 **Risks:**
 - Facing changes which object F targets (expected).
 - The deprojection uses the player's viewport; split-screen is not supported (none exists).
+
+---
+
+# S2 - Build Zones: Detail Plan
+
+**Status:** COMPLETE (manual PIE 5/5 PASS, 2026-10-22). APPROVED (user, 2026-10-22: Z-1 to Z-6 below; Z-4 confirmed with the diagram: "đúng, và 4 cạnh của ô chấm đều xây tường được").
+- **Baseline:** `0a3e243` (S1). Full automation 271/271, cook 648/7/655.
+- **User direction (2026-10-22):** the safe area where the player builds a base may later be **several zones**. Adding a zone must be all it takes to allow building there. Zones are created for the game by an admin/designer and are never removed during play.
+- **This replaces:**
+  - section 3.2 and the S2 row in section 4;
+  - **P-4** (a buildable Base Flag as the anchor);
+  - **P-6** (a per-definition `bRequiresBase` flag);
+  - **P-7** (one base per world).
+
+## S2.1 Audit (2026-10-22)
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| `ValidatePlacement` checks, in this order: definition, shape, builder/world, range, then the surface traces (support, slope, unevenness, floor requirement), occupancy, collision, builder safety. It is read-only. | `BuildingSubsystem.cpp` `ValidatePlacement` | The zone rule is one more read-only step. It goes after range and before the traces: it is cheap and deterministic, and the player gets the most useful message ("outside the zone", not "uneven"). |
+| Result codes are append-only, each with a HUD text in `UBuildingPlacementComponent::DescribeResult`. | `BuildingTypes.h` `EBuildResult`; `BuildingPlacementComponent.cpp` `DescribeResult` | Append `OutsideBuildZone` and its text. The ghost turns red through the existing `CanBuild` path. |
+| `TryBuild` revalidates after the provisional spawn. | `CLAUDE.md` (B2 steps 1-7) | The zone rule also holds at commit time with no extra code. |
+| The grid is world-aligned, 200 cm cells (`WorldToCell`). An edge borders exactly two cells. | `BuildingSubsystem.h` | Zones are rectangles of whole cells, so "inside" is exact. |
+| Every building test world comes from two fixtures: `FB1World` (B1, 4 uses) and `FB2World` (B2-B8, 52 uses). Test coordinates stay within ±5000 cm; the one 5000 is a cell-math row and a box below the ground. | `BuildingTests.cpp:114`; `ConstructionTests.cpp:393` | Because every building now needs a zone (Z-3), both fixtures register one large test zone. Assertions stay unchanged. |
+| `Lvl_TopDown` is World Partition. Actors stream by distance unless `bIsSpatiallyLoaded` is false. | `CLAUDE.md` (Content) | A streamed-out zone would stop allowing building. Zone actors are always loaded. |
+
+## S2.2 Decisions (user, 2026-10-22)
+
+- **Z-1:** one zone first, for testing. It is placed in the level; the buildable Base Flag is deferred. Several zones are supported by design.
+- **Z-2:** a rectangle whose length and width are set separately (`SizeInCells` X and Y).
+- **Z-3:** **every** building must be inside a zone. There is no per-definition flag.
+- **Z-4:**
+  - The **outermost ring of cells** of a zone is not buildable.
+  - Walls of the cells next to it can be built, so a wall may stand on the line between the buildable area and the ring.
+  - Confirmed: **all four edges of every buildable cell** take walls and doors.
+  - **Purpose (user):** however the player builds, the ring stays free, so the outside of a base is always walkable. A perimeter wall reaches only half its thickness (10 cm) into the ring cell.
+- **Z-5:** zones are never removed. An admin/designer creates them for the game.
+- **Z-6:** the size is adjustable per zone; 15 × 15 for now.
+
+## S2.3 Design
+
+- **`UBaseZoneComponent`** (new area `Base/`).
+  - It turns any actor into a zone: `SizeInCells` (FIntPoint, default 15 × 15, minimum 3 × 3), centred on the owner's grid cell.
+  - Odd sizes are centred exactly; for an even size the extra row or column goes to +X or +Y.
+  - It computes two rectangles:
+    - `ZoneCells` (the whole zone, for later safety and NPC queries);
+    - `BuildableCells` (`ZoneCells` minus its outer ring, Z-4).
+  - It registers on `BeginPlay` and unregisters on `EndPlay`. The rectangle is fixed while registered.
+- **`ABaseZoneActor`** (native, placeable, not abstract).
+  - It holds an unscaled root, the `UBaseZoneComponent` and a `ZoneBounds` box.
+  - `ZoneBounds` has no collision, is hidden in game and sized in `OnConstruction` to the snapped rectangle, so a designer sees the exact area.
+  - It also sets `bIsSpatiallyLoaded = false`.
+  - **To add a zone:** place one in a level and set its size.
+- **`UBaseZoneSubsystem`** (`UWorldSubsystem`) is the only zone registry.
+  - `RegisterZone` / `UnregisterZone` are idempotent, and dead entries are purged.
+  - Queries:
+    - `IsCellInZone(Cell)`;
+    - `IsCellBuildable(Cell)`;
+    - `FindZoneAt(WorldLocation)`;
+    - `GetZones()`;
+    - `IsPlacementBuildable(Definition, Placement)`.
+  - **Rule:**
+    - a cell piece needs every footprint cell buildable;
+    - an edge piece needs at least one of its two bordering cells buildable.
+
+    So walls are allowed around the buildable area (on its border with the outer ring), and refused inside the ring or on the zone's outer line.
+  - Zones combine by union of their buildable rectangles. Two touching zones therefore leave a 2-cell unbuildable strip between them, which is intended (each keeps its own border).
+  - Zones are 2D: every height layer.
+  - The subsystem never builds and never touches pieces or inventories.
+- **Building rule (Z-3):** `ValidatePlacement` asks `IsPlacementBuildable` right after range for every definition and returns `OutsideBuildZone` (appended), with the HUD text "Outside the build zone". No definition data changes.
+- **What zones leave unchanged:** demolition, interaction, crafting and storage. Demolition needs no zone; zones are never removed anyway (Z-5).
+- **Level:** one `ABaseZoneActor`, `BaseZone_Start`, 15 × 15 (13 × 13 buildable), around `PlayerStart` in `Lvl_TopDown`.
+  - It is placed via MCP and saved by the user with Ctrl+S.
+  - Expect one new external actor (`__ExternalActors__` 94 → 95). Its centre is checked against `Floor_0` during implementation.
+- **Test fixtures:** `FB1World` and `FB2World` spawn one test zone of 101 × 101 cells centred on the origin and dispatch its `BeginPlay`.
+  - That covers cells -50..50, with -49..49 buildable; tests stay within ±25 cells.
+  - S2 tests build their own small zones in separate worlds.
+- **Later:** S3 draws every zone's border in building mode and shows a HUD tag inside a zone. S4 places NPCs in a zone. Phase 8 safety queries the same subsystem.
+
+## S2.4 Invariants
+
+- `UBaseZoneSubsystem` is the only zone registry. Building asks it during validation; it never builds.
+- Zone queries are read-only, exact (whole cells) and independent of registration order.
+- `ValidatePlacement` stays read-only. Its order becomes: definition, shape, builder, range, **zone**, support surface, occupancy, collision, builder safety.
+- No tick.
+- Every building needs a buildable zone. No test or debug switch bypasses it; tests provide a zone.
+
+## S2.5 Tests (`NullTide.Base.S2.*`, planned 5)
+
+- **`ZoneMath`:**
+  - zone and buildable rectangles for odd, even and non-square sizes (for example 15 × 15, 4 × 6, 3 × 3 with a single buildable cell), including negative cells;
+  - minimum size clamp;
+  - the edge rule: an edge between a buildable cell and the ring is allowed; an edge inside the ring or on the outer line is refused.
+- **`Registry`:**
+  - zone actors register on `BeginPlay` and unregister on `EndPlay`;
+  - repeated register and unregister are idempotent, and a stale entry is purged;
+  - `FindZoneAt` and the cell queries do not depend on registration order;
+  - with two zones, each one's buildable cells are allowed.
+- **`PlacementRule`** (test definitions):
+  - with no zone: `OutsideBuildZone`;
+  - inside the buildable area: `Success`;
+  - a ring cell: refused;
+  - a 2 × 2 floor half on the ring: refused;
+  - perimeter walls of the buildable area: allowed;
+  - a wall on the outer line: refused;
+  - out of range still wins over the zone, and outside the zone wins over no ground;
+  - the subsystem's registry is unchanged.
+- **`BuildOutsideZone`:** `TryBuild` on a ring cell spawns nothing, keeps the inventory and `Revision`, and fires `OnBuildResult` once with `OutsideBuildZone`. The same piece one cell inward succeeds.
+- **`ProductionRules`:**
+  - `ABaseZoneActor` defaults: not spatially loaded, size 15 × 15;
+  - `ZoneBounds` has no collision and is hidden in game;
+  - `DescribeResult(OutsideBuildZone)` returns "Outside the build zone".
+
+**Existing tests:** `FB1World` and `FB2World` provide the large test zone. No assertion changes and no deletions are expected. Any test that still fails because of the zone is listed in the progress doc with its fix.
+
+Expected suite: 271 + 5 = 276.
+
+## S2.6 PIE
+
+1. Inside the starter zone: floors, walls, door, chest and workbench build as before.
+2. On the outermost ring and outside the zone, the ghost is red with "Outside the build zone"; a click spends nothing.
+3. Walls along the edge of the buildable area build; walls on the zone's outer line do not.
+4. Demolish works as before.
+5. In the editor, the zone outline shows the exact area, and changing its size updates it.
+
+## S2.7 Self-Critique (open risks)
+
+- **R-S2-1 Mutual dependency:** `Base/` uses the building grid, and `ValidatePlacement` asks the zone subsystem. They are in the same module and include each other only in `.cpp` files. Accepted.
+- **R-S2-2 Fixture zones:** a test world fixture that does not provide a zone fails loudly (`OutsideBuildZone`). It cannot pass silently. Tests outside `FB1World` / `FB2World` that build (none found) would surface the same way.
+- **R-S2-3 Zone size changed at runtime** is not tracked (fixed while registered). Zones are static level actors (Z-5).
+- **R-S2-4 World Partition:** if a zone were spatially loaded by mistake, building would stop while it is streamed out. `ProductionRules` checks the class default.
+- **R-S2-5 Layers:** zones are 2D.
+- **R-S2-6 Map edit:** MCP cannot save actor packages. The user saves `Lvl_TopDown` with Ctrl+S, then `git status` is audited.
+- **R-S2-8 Future zone sources (self-review):** a zone component registers on `BeginPlay` whatever its owner is. A buildable Base Flag would therefore register on its provisional spawn and make its own placement buildable. That work must register only once the piece is `Active`.
+- **R-S2-7 Feel:** building is no longer allowed anywhere. The test pickups near `PlayerStart` and the authored workbench and chest are not building pieces, so they are unaffected. Whether the starter area is big enough is a PIE check.
+

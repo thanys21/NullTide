@@ -1,5 +1,6 @@
 #include "BuildingTestTypes.h"
 
+#include "BaseTestTypes.h"
 #include "InventoryComponentTestTypes.h"
 #include "Blueprint/UserWidget.h"
 #include "Building/BuildingDoorActor.h"
@@ -407,6 +408,7 @@ struct FB2World
 		World->InitializeActorsForPlay(FURL());
 		Subsystem = World->GetSubsystem<UBuildingSubsystem>();
 		B2SpawnBlocker(World, FVector(300.0, 0.0, -50.0), FVector(700.0, 700.0, 50.0));
+		NullTideBaseTests::SpawnBaseZone(World, FVector::ZeroVector, NullTideBaseTests::FixtureZoneSize);
 	}
 
 	~FB2World()

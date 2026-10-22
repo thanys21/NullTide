@@ -1,5 +1,6 @@
 #include "BuildingTestTypes.h"
 
+#include "BaseTestTypes.h"
 #include "InventoryComponentTestTypes.h"
 #include "Building/BuildingDefinition.h"
 #include "Building/BuildingPieceActor.h"
@@ -128,6 +129,7 @@ struct FB1World
 		World->InitializeActorsForPlay(FURL());
 		Subsystem = World->GetSubsystem<UBuildingSubsystem>();
 		Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+		NullTideBaseTests::SpawnBaseZone(World, FVector::ZeroVector, NullTideBaseTests::FixtureZoneSize);
 	}
 
 	~FB1World()

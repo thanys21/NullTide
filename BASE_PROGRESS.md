@@ -65,6 +65,83 @@ So the control rotation moves neither the camera nor WASD.
 | Building-mode exit should also restore the class-default cursor. | REJECTED WITH EVIDENCE | Building mode restores the cursor state it remembered on entry (the B4 contract, tested at `ConstructionTests.cpp:1654-1668`); in gameplay that state is "shown", so the result is the same. |
 | A world drop now spawns toward where the character faces (the cursor), not the movement direction. | Recorded (behaviour change by design) | Added to the PIE checklist. |
 
+S1 COMPLETE (full automation 271/271, cook PASS, manual PIE 7/7 PASS; `0a3e243`).
+
+## S2 - Build Zones
+
+### Baseline and Scope
+
+- **Baseline:** `0a3e243` (S1). Full automation 271/271, cook 648/7/655.
+- **Scope:** `BASE_PLAN.md` S2, approved 2026-10-22 (Z-1 to Z-6). Every building must stand inside a base zone's buildable area. The outermost ring of a zone is never buildable; walls and doors fit on every edge of a buildable cell. Zones are authored for the game, any number, and never removed.
+
+### Source
+
+| File | Content |
+| --- | --- |
+| `Base/BaseZoneComponent.h/.cpp` (new area `Base/`) | `UBaseZoneComponent`: `SizeInCells` (default 15 × 15, min 3 × 3); static `ComputeZoneCells` / `ComputeBuildableCells`; registers its rectangle on `BeginPlay` (fixed while registered), unregisters on `EndPlay`. |
+| `Base/BaseZoneSubsystem.h/.cpp` | `UBaseZoneSubsystem`: idempotent `RegisterZone` / `UnregisterZone`, `PurgeStaleZones`; `GetZones` (ordered by rectangle, then path), `IsCellInZone`, `IsCellBuildable`, `FindZoneAt`, `IsPlacementBuildable` (cells: every footprint cell; edges: one bordering cell). |
+| `Base/BaseZoneActor.h/.cpp` | `ABaseZoneActor`: `ZoneRoot`, `Zone`, `ZoneBounds` (no collision, no overlaps, no navigation, hidden in game, absolute rotation and scale; sized in `OnConstruction` to the snapped rectangle). Not spatially loaded; never ticks. |
+| `Building/BuildingTypes.h` | `EBuildResult::OutsideBuildZone` appended. |
+| `Building/BuildingSubsystem.h/.cpp` | `ValidatePlacement`: the zone check right after range for every definition (no zone subsystem counts as outside). |
+| `Building/BuildingPlacementComponent.cpp` | `DescribeResult(OutsideBuildZone)`: "Outside the build zone". |
+| `Tests/BaseTestTypes.h` (new) | `NullTideBaseTests::SpawnBaseZone` (deferred spawn, size set before construction, `DispatchBeginPlay`) and `FixtureZoneSize` 101 × 101. |
+| `Tests/BuildingTests.cpp`, `Tests/ConstructionTests.cpp` | `FB1World` / `FB2World` spawn the fixture zone. No assertion changed. |
+| `Tests/BaseZoneTests.cpp` (new) | `NullTide.Base.S2.*` (5). |
+
+### Level (Unreal MCP)
+
+- `Lvl_TopDown`: one `ABaseZoneActor` labelled `BaseZone_Start` at (100, 100, 0), the centre of cell (0, 0) under `PlayerStart` (0, 0, 302).
+  - Size 15 × 15: cells −7..7, outline x/y −1400..1600 cm (MCP bounds read), inside `Floor_0` (±2000 cm). Buildable cells −6..6.
+  - `bIsSpatiallyLoaded` false (MCP read).
+- Saved by the user in the editor (Ctrl+S).
+
+### Tests `NullTide.Base.S2.*` (5)
+
+| Test | Covers |
+| --- | --- |
+| `ZoneMath` | Zone and buildable rectangles: 15 × 15, 4 × 6 (even sizes extend +X / +Y), 3 × 3 (one buildable cell), negative cells, the minimum clamp; ring cells in the zone but not buildable; 13 × 13 buildable; default size. |
+| `Registry` | Registration on `BeginPlay`, idempotent register and unregister, order independent of registration; ring and buildable cells; two touching zones keep a 2-cell strip; `FindZoneAt`; the edge rule (all four sides of the buildable area allowed; inside the ring, on the outer line, between two rings refused); a destroyed zone unregisters; a stale zone is purged; null refused. The plan listed the edge rule under `ZoneMath`; it needs the subsystem, so it lives here. |
+| `PlacementRule` | Through `ValidatePlacement` with test definitions: no zone; a buildable cell; a ring cell and corner; a 2 × 1 floor half on the ring and turned inward; walls on all four sides of the buildable area; a wall inside the ring and on the outer line; out of range wins over the zone; outside the zone wins over no ground (and a second zone exposes `NoGround`); the registry unchanged. |
+| `BuildOutsideZone` | `CanBuild` and `TryBuild` on a ring cell: `OutsideBuildZone`, nothing spawned, paid or registered, one `OnBuildResult`; one cell inward builds and pays once. |
+| `ProductionRules` | `ABaseZoneActor` defaults (not spatially loaded, 15 × 15, the outline has no collision, overlaps or navigation and is hidden in game, no tick); the HUD text; the outline matches the snapped rectangle, also for a rotated actor. |
+
+### Validation
+
+- **Build (editor closed):** `Result: Succeeded`, 0 warnings, first attempt.
+- **Tests (command line, `Automation RunTests NullTide`, `-NullRHI`, before the review fixes):** **276/276** Success, 0 failed, `EXIT CODE: 0`. Base S2 5/5. No existing building test needed a change beyond the fixture zone.
+
+### Self-review (fresh-context review subagent)
+
+No P1 finding. Rectangle and edge math, the read-only `ValidatePlacement`, every build path (preflight, revalidation, preview), the enum append (no other switch, no asset reference) and registration lifetime were checked without issues.
+
+| Finding | Classification | Resolution |
+| --- | --- | --- |
+| P2: `ProductionRules` calls `AActor::GetIsSpatiallyLoaded`, which is declared only `#if WITH_EDITOR` (`Actor.h:2583`). Dev automation tests compile in non-shipping game targets, so the game target would not compile. | CONFIRMED | The assertion is wrapped in `#if WITH_EDITOR`. |
+| P2: `BaseZone_Start` not in the level. | REJECTED WITH EVIDENCE | The review read `git status` before the user saved the map: the actor was already placed through MCP (bounds and `bIsSpatiallyLoaded` read back); the save is the user's Ctrl+S step. |
+| P3: even sizes are not centred on an actor snapped to a grid corner. | REJECTED (by design) | Z-2 / S2.3: the extra row or column goes to +X / +Y, and the editor outline shows the real area. Documented on `ComputeZoneCells`. |
+| P3: no upper size limit (int32 overflow for huge sizes). | CONFIRMED | `MaxSizeInCells` 1000 (`ClampMax` and a clamp in `ComputeZoneCells`); `ZoneMath` covers it. |
+| P3: a zone component on a building piece would register on its provisional spawn. | CONFIRMED (future) | Not reachable in S2. The class comment requires a future buildable zone source to register only once Active; recorded as R-S2-8. |
+| P3: docs not updated. | REJECTED WITH EVIDENCE | Updated while the review ran (`CLAUDE.md` Base zones section and Tests list, master plan, this file). |
+| P3: no test that a registered rectangle stays fixed. | CONFIRMED | `Registry` changes the size and moves the actor after registration; the rectangle and the queries stay the same. |
+| P3: `ProductionRules` checks the class default, not the placed instance; `BuildOutsideZone` covers a cell piece only. | Accepted | The placed instance was read through MCP. Edges go through the same `ValidatePlacement` (covered by `PlacementRule`). |
+
+### Validation after the review fixes
+
+- **Build (editor closed):** `NullTideEditor` `Result: Succeeded`, 0 warnings.
+- **Game target:** `NullTide Win64 Development` `Result: Succeeded` (compiles `BaseZoneTests.cpp`), 0 warnings. This checks the P2 fix.
+- **Tests (command line):** **276/276** Success, 0 failed, `EXIT CODE: 0`.
+- **Cook:** exit 0, `Success - 0 error(s), 2 warning(s)` (the known `PlatformFileJournal` and MCP notices). Packages 648 / 7 / 655 (unchanged).
+- **Content and World Partition audit (after the user's Ctrl+S):**
+  - one new external actor package, `__ExternalActors__/TopDown/Lvl_TopDown/1/X3/K3AJDQ28JPTE97Y62B9VK1.uasset` (`BaseZone_Start`);
+  - no other Content change; `Lvl_TopDown.umap` is unchanged;
+  - `__ExternalActors__` 94 → 95, `__ExternalObjects__` 3.
+- **Manual PIE (user, 2026-10-22): 5/5 PASS.**
+  - Building inside the starter zone works as before.
+  - The ring and the outside are refused ("Outside the build zone", nothing spent).
+  - Walls build along the edge of the buildable area and are refused on the outer line.
+  - Demolish is unchanged.
+  - The editor outline follows the zone's size.
+
 ## Next Checkpoint
 
-S1 COMPLETE (full automation 271/271, cook PASS, manual PIE 7/7 PASS). Next: S2 base authority, after its detail plan is approved.
+S2 COMPLETE (full automation 276/276, cook PASS, manual PIE 5/5 PASS). Next: S3 base UX, after its detail plan is approved.

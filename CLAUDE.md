@@ -82,6 +82,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
 - `NullTide.Building.{B1,B2,B3,B4,B5,B6,B7,B8}`
+- `NullTide.Base.{S2}` (S2 = build zones)
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -177,7 +178,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - Finalized pieces register with `RegisterActivePiece`, idempotently.
   - Pieces unregister on `EndPlay` and component destruction; dead holders are purged.
   - `AuditRegistry` must stay empty in tests.
-- `ValidatePlacement` is read-only. It recomputes surface, layer and transform (never trusts the caller) and checks, in order: definition, shape, range (600 cm), support surface (`WorldStatic` or `Active` floor; slope ≤ 30°, unevenness ≤ 25 cm), occupancy, blocking collision (Pawn channel, ground excluded geometrically, not by identity), builder safety.
+- `ValidatePlacement` is read-only. It recomputes surface, layer and transform (never trusts the caller) and checks, in order: definition, shape, range (600 cm), base zone (`OutsideBuildZone`, S2), support surface (`WorldStatic` or `Active` floor; slope ≤ 30°, unevenness ≤ 25 cm), occupancy, blocking collision (Pawn channel, ground excluded geometrically, not by identity), builder safety.
   - Edge pieces keep their end samples and collision box `EdgeEndInset` (12 cm) from the grid corners, so walls meet at corners (B5). Cells sample 5 cm inside (`CellSampleInset`) with a 2 cm box, and ignore only the `Active` edge pieces registered on their own perimeter edges (`CollectOwnEdgeActors`, B7), so floors build next to walls while thin world blockers on a border still block. An edge on an occupied edge reports `Blocked` (the existing piece is under the samples, and support is checked before occupancy).
   - A definition with `bRequiresFloor` needs an `Active` floor under it, else `NeedsFloor` ("Needs a floor"): every sample on at least one side of an edge (walls, doors), or every sample of a cell (chest, workbench; B7).
 - `UBuildingPieceComponent` holds per-piece metadata and state (`Provisional`/`Active`/`Removing`). `ABuildingPieceActor` is a thin host whose `SetProvisional` hides the piece and removes collision and navigation.
@@ -255,6 +256,23 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - The camera (absolute-rotation spring arm) and WASD (camera-relative) are unaffected.
 - Interaction targeting (B7.1) follows the facing, so F targets what the mouse points toward.
 - The gameplay cursor stays visible: closing a screen calls `NullTideInput::RestoreGameplayCursor` (the controller's default), never hides it.
+
+**Base zones (`Base/`)** — Phase 6 S2 (plan `BASE_PLAN.md`, progress `BASE_PROGRESS.md`)
+- **Every building must stand inside a base zone's buildable area.** `ValidatePlacement` asks `UBaseZoneSubsystem::IsPlacementBuildable` right after range and returns `OutsideBuildZone` ("Outside the build zone"). No definition flag and no bypass; test worlds provide a zone.
+- `UBaseZoneComponent` turns its owner into a zone:
+  - `SizeInCells` (X and Y set separately, default 15 × 15, minimum 3 × 3) centred on the owner's grid cell; an even size adds its extra row or column on +X / +Y;
+  - the rectangle is fixed when it registers on `BeginPlay`; it unregisters on `EndPlay`.
+- **The outermost ring of cells is never buildable**, so the outside of a base stays walkable.
+  - A cell piece needs every footprint cell buildable.
+  - An edge piece (wall, door) needs one buildable cell beside it, so every edge of a buildable cell takes a wall.
+- `UBaseZoneSubsystem` (`UWorldSubsystem`) is the only zone registry.
+  - Zones combine by union (each keeps its own ring) and are 2D.
+  - Queries are exact on whole cells and independent of registration order: `IsCellInZone`, `IsCellBuildable`, `FindZoneAt`, `GetZones`.
+- `ABaseZoneActor` is the placeable zone: an unscaled root, `Zone`, and `ZoneBounds` (an editor outline of the snapped rectangle; no collision, hidden in game, ignores actor rotation).
+  - It is not spatially loaded (always loaded in World Partition).
+  - **To add a zone, place one in a level and set its size.** Zones are authored for the game and never removed during play.
+- `Lvl_TopDown` has one: `BaseZone_Start` (15 × 15 around `PlayerStart`, cells −7..7, buildable −6..6).
+- Test helper: `NullTideBaseTests::SpawnBaseZone` (`Tests/BaseTestTypes.h`). `FB1World` and `FB2World` spawn a 101 × 101 fixture zone.
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

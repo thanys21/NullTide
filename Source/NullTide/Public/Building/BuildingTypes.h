@@ -102,7 +102,9 @@ enum class EBuildResult : uint8
 	/** Demolition (B6 only): a storage piece was never demolished. Unused since B7, which refuses only non-empty storage. */
 	IsStorage,
 	/** Demolition: a storage piece still holds items (its contents must never be lost). */
-	StorageNotEmpty
+	StorageNotEmpty,
+	/** The piece is not inside the buildable area of a base zone (Phase 6 S2; a zone's outer ring is not buildable). */
+	OutsideBuildZone
 };
 
 /** One occupancy slot: a floor cell, a canonical edge or a furniture cell, on one height layer. */

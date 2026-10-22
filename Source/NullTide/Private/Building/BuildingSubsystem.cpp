@@ -1,5 +1,6 @@
 #include "Building/BuildingSubsystem.h"
 
+#include "Base/BaseZoneSubsystem.h"
 #include "Building/BuildingDefinition.h"
 #include "Building/BuildingPieceComponent.h"
 #include "Components/PrimitiveComponent.h"
@@ -747,6 +748,14 @@ FBuildingPlacementResult UBuildingSubsystem::ValidatePlacement(TSubclassOf<UBuil
 	{
 		Result.Placement = Placement;
 		return MakeFailure(Result, EBuildResult::OutOfRange, FString::Printf(TEXT("The piece is farther than %.0f cm."), Range));
+	}
+
+	// Base zone (S2): every building stands inside a zone's buildable area.
+	const UBaseZoneSubsystem* Zones = World->GetSubsystem<UBaseZoneSubsystem>();
+	if (!Zones || !Zones->IsPlacementBuildable(*Definition, Placement))
+	{
+		Result.Placement = Placement;
+		return MakeFailure(Result, EBuildResult::OutsideBuildZone, TEXT("The piece is outside every base zone's buildable area."));
 	}
 
 	// Support surface: every sample needs a solid surface; WorldStatic geometry and Active floors support,

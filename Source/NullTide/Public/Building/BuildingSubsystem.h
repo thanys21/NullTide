@@ -120,7 +120,7 @@ public:
 
 	/**
 	 * Resolves and validates a placement for Builder. Checks, in order: definition, placement shape (mode, axis,
-	 * rotation, builder), build range, support surface (NoGround, Blocked by a non-support surface, TooSteep,
+	 * rotation, builder), build range, base zone (UBaseZoneSubsystem, S2), support surface (NoGround, Blocked by a non-support surface, TooSteep,
 	 * Uneven), occupancy (IgnoreReservation is treated as free), world and pawn collision, builder safety.
 	 * The returned placement recomputes SurfaceZ, Layer and WorldTransform; only the requested anchor, axis,
 	 * rotation and height hint are used. Changes nothing.

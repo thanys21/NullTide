@@ -102,7 +102,7 @@
 | S3 | Base UX | Boundary visual (flag ghost and building mode), "Base" HUD tag, flag info panel | Boundary actor lifetime and size, HUD tag state | See the area, walk in and out |
 | S4 | NPC foundation | AI modules, `UNpcDefinition`, `ANpcCharacter`, `ANpcAIController` (wander in base), arrival and leaving, talk panel | Arrival and removal with the base, definition validation, talk panel through the real widget; wander logic through a movement seam | The Trader arrives, wanders, faces you, talks |
 | S5 | Trading | Offers data, trade screen, atomic barter | Affordable or not, atomic success and failure (inventory full), one event | Trade Wood for Stone |
-| S6 | Housing (optional) + closeout | Bed, room detection, move-in rule; `BASE_REPORT.md` | Room detection cases (open, closed, door, size) | Build a room with a bed and the Trader moves in |
+| S6 | House NPCs + closeout | Summon item, room detection, requirements (bed, table, chair, room size), move-in rule; `BASE_REPORT.md` | Room detection cases (open, closed, door, size), requirements | Place the item in a valid room and the NPC moves in |
 
 Each checkpoint gets its own plan detail, approval, validation, review, PIE and commit, as in Phase 5.
 
@@ -435,4 +435,183 @@ Expected suite: 276 + 3 = 279.
 - **R-S3-4 Existing placed zone:** `BaseZone_Start` is an instance of the native class, so the new strips come from class defaults. No resave is needed; the audit confirms no map change.
 - **R-S3-5 Top-right HUD:** the build bar is at the bottom. Whether the interaction prompt or the gather progress overlaps the top right is checked in PIE.
 - **R-S3-6 MCP asset creation:** a material instance and a widget Blueprint with a native parent follow the B8 path. If MCP cannot set a parent, one manual editor step may be needed.
+
+---
+
+# S4 - NPC Foundation: Detail Plan
+
+**Status:** COMPLETE (manual PIE PASS). APPROVED (user, 2026-10-23: N-1 to N-5 below; N-4 and N-5 "tùy ý", so the recommendations apply).
+- **Baseline:** `b2d5413` (S3). Full automation 279/279, cook 650/7/657.
+- **Goal:**
+  - a Trader NPC lives in its own camp and strolls inside it;
+  - the player presses F to talk;
+  - the talk panel shows its name, a greeting and Bye. Trading is S5.
+
+## S4.1 User direction (2026-10-23)
+
+- **N-1 Two kinds of NPC:**
+  - **House NPCs** are summoned with an item and move in when the player's house meets the requirements (a bed, a table, a chair, a room size). This belongs to S6 (housing), whose scope is revised below.
+  - **Outdoor NPCs** have their own base and need no house. The Trader is one.
+- **N-2:** the Trader walks inside its own area ("khu vực của trader").
+- **N-3:** the talk panel has Bye only in S4. Trade comes with S5.
+- **N-4 / N-5 ("tùy ý"):** the Quinn mannequin with a floating name label; one checkpoint.
+
+## S4.2 Audit (2026-10-23)
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| The module depends on Core, CoreUObject, Engine, InputCore, UMG, Slate, SlateCore and EnhancedInput only. | `NullTide.Build.cs:11-13` | Add `AIModule` and `GameplayTasks` (public: `ANpcAIController.h` includes `AIController.h`) and `NavigationSystem` (private). |
+| The level uses a dynamic nav mesh. | `DefaultEngine.ini:13-53` | Built walls update paths. Pathing is PIE evidence; test worlds have no nav mesh, so movement goes through seams. |
+| Interaction runs through the Blueprint interface `BPI_Interactable` (`Interact`, `GetInteractionType` = Press, `GetHoldDuration` = 0). Adding it to a new Blueprint is a **manual editor step**; MCP then wires `EventInteract` → a native call. | `BUILDING_PROGRESS.md:565,766-772` | `BP_Npc_Trader` needs that one manual step. |
+| The facing probe finds `BPI_Interactable` actors through a Pawn-channel overlap query. | `CLAUDE.md` (B7.1, B9) | A character capsule blocks Pawn, so an NPC is targeted like any interactable. |
+| Screens open UI-only with a cursor and focus (`FCraftingStationInteraction::Open`), close on I/Tab/Esc in `NativeOnPreviewKeyDown`, and return through `RestoreGameplayCursor` + `RestoreGameOnlyInput`. | `CraftingStationInteraction.cpp:59-101`; `CLAUDE.md` (UI) | The talk panel follows the same contract. |
+| `Floor_0` spans ±2000 cm (cells −10..9). `BaseZone_Start` (15 × 15, centre cell (0, 0)) covers cells −7..7. | MCP bounds read (S2) | A separate camp does not fit beside the starter zone as placed. The starter zone moves to centre cell (−3, 0) (cells −10..4, still 15 × 15, `PlayerStart` inside). The camp takes cells 5..9. |
+| Mannequin assets exist: `SKM_Quinn_Simple`, `ABP_Unarmed`. | `Content/Characters/Mannequins/` | No new art. |
+
+## S4.3 Design
+
+- **Zones gain two fields** (`UBaseZoneComponent`):
+  - **`bAllowsBuilding`** (default true). A zone with false is an NPC's own base: `IsCellBuildable` ignores it, and its actor hides the red ring (nothing there is "buildable"). `FindZoneAt` and the tag still see it ("Trader Camp").
+  - **`Residents`** (`TArray<TSubclassOf<UNpcDefinition>>`): the outdoor NPCs that live there.
+  - `UBaseZoneSubsystem` broadcasts native `OnZoneRegistered` / `OnZoneUnregistered`, so `Base/` never depends on `Npc/`.
+- **`UNpcDefinition`** (new area `Npc/`; abstract, const; data-only Blueprints `Content/LevelPrototyping/NpcSystem/Definitions/NPC_*`):
+  - fields: `NpcName`, `GreetingLines` (one random per talk), `NpcActorClass` (`TSubclassOf<ANpcCharacter>`), `WalkSpeed` (150 cm/s), `IdleTimeMin` / `IdleTimeMax` (3 / 8 s);
+  - `ValidateNpc` / `IsDataValid` report the first problem.
+  - Production: `NPC_Trader` ("Trader", 3 greetings, `BP_Npc_Trader`).
+- **`UNpcSubsystem`** (`UWorldSubsystem`) is the only outdoor-resident authority.
+  - On `OnZoneRegistered` (with world authority) it spawns each valid resident once, on a random interior cell centre of the zone (the zone minus its ring).
+  - It records the home zone and definition on the NPC.
+  - On `OnZoneUnregistered` it destroys that zone's residents when the zone actor itself is being destroyed; any other unregistration (level teardown, end of play) only forgets them, because destroying actors inside that pass would race it. Zones are always loaded and never removed in play (Z-5), so a zone that unregisters and comes back does not happen today (self-review P3-2, accepted).
+  - `GetResidents(Zone)`.
+  - It never touches inventories, building or zones.
+- **`ANpcCharacter`** (abstract; Blueprint `BP_Npc_Trader`):
+  - an `ACharacter` with `NameLabel` (a `UTextRenderComponent` above the head, fixed to face the top-down camera);
+  - orient-to-movement on, `MaxWalkSpeed` from the definition, no actor tick;
+  - `AIControllerClass = ANpcAIController`, auto-possessed when spawned.
+  - **Talk:**
+    - `GetTalkResult(Interactor)` (`ENpcTalkResult`: `Ready`, `InvalidInteractor`, `NoPlayerController`, `OutOfRange` beyond `TalkRange` 300 cm, `NoTalkScreen`, `Busy`) is read-only.
+    - `OpenTalkForInteractor(Interactor)` opens `W_NpcTalk` (UI-only, cursor, focus), faces the player and pauses the AI. A rejected request changes nothing.
+    - `EndTalk()` resumes.
+    - `EndPlay` closes an open panel.
+  - Seams: `CreateTalkWidget`, `ShowTalkWidget`.
+- **`ANpcAIController`** (native; controller tick off; timers plus the engine's path following):
+  - **Idle** for a random time between `IdleTimeMin` and `IdleTimeMax`, then **wander**: a random interior cell of the home zone (`FRandomStream`) → `ProjectToNavigation` (seam) → `RequestWanderMove` (seam, `MoveToLocation`); a projected point outside the interior is not used, and a synchronous finish during the request never starts idling (self-review P2-1).
+  - Move completion or failure returns to idle.
+  - A failed projection or move tries up to 5 cells, then idles.
+  - **Talk:** stop movement, clear the timer, turn the pawn toward the player. **Resume:** idle again.
+  - Without a home zone it never wanders.
+- **Talk panel** `UNpcTalkWidget` (abstract, `UI/`; `W_NpcTalk` in `NpcSystem/UI/`):
+  - `NpcNameText`, `GreetingText`, `ByeButton`.
+  - Bye, I, Tab and Esc close it: it is removed, `RestoreGameplayCursor` + `RestoreGameOnlyInput` run, and the NPC's `EndTalk` is called.
+  - Closing twice is a no-op.
+- **Content (MCP, plus one manual step):**
+  - `NPC_Trader`;
+  - `BP_Npc_Trader` (parent `ANpcCharacter`; Quinn mesh and `ABP_Unarmed`; `TalkScreenClass = W_NpcTalk`; **manual: add `BPI_Interactable`**, then MCP wires `EventInteract` → `OpenTalkForInteractor`, Press, hold 0);
+  - `W_NpcTalk`.
+- **Level:**
+  - move `BaseZone_Start` to centre cell (−3, 0);
+  - add `TraderCamp` (`ABaseZoneActor`, centre cell (7, 0), 5 × 9, `ZoneName` "Trader Camp", `bAllowsBuilding` false, `Residents` [`NPC_Trader`]);
+  - the user saves (Ctrl+S): one changed and one new external actor.
+
+## S4.4 S6 scope revised (for later)
+
+S6 becomes house NPCs:
+- a summoning item per NPC;
+- room detection on the building grid;
+- requirements: a bed, a table, a chair and a minimum room size;
+- the NPC moves into a valid room of the player's base.
+
+It is planned in detail when S6 starts.
+
+## S4.5 Invariants
+
+- NPCs are never player-controlled and never change the player's inventory (S5 trading is one atomic transaction the player starts).
+- `UNpcSubsystem` is the only outdoor-resident authority: one spawn per zone registration, removal on unregistration, authority only.
+- An NPC's wander targets always lie in its home zone's interior.
+- No tick in project code.
+- A rejected talk request changes no input, cursor or widget state.
+- A non-building zone never makes a cell buildable.
+
+## S4.6 Tests (`NullTide.Npc.S4.*`, planned 5)
+
+- **`DefinitionValidation`:**
+  - each invalid case reports: no name, no greetings, no actor class, a bad idle range, a bad speed;
+  - a test definition is valid;
+  - `NPC_Trader` is valid.
+- **`Residents`:**
+  - a zone with residents spawns each once in its interior, with home zone and definition;
+  - registering again does not duplicate;
+  - an invalid definition is skipped;
+  - destroying the zone removes its residents;
+  - a non-building zone is not buildable and hides its ring, but `FindZoneAt` finds it.
+- **`Wander`** (test controller with seams):
+  - 200 targets all in the home interior, reproducible with the same seed;
+  - idle → move → completion → idle;
+  - failed projections retry, then idle;
+  - talking stops, turns the pawn and schedules nothing; resuming idles;
+  - no home zone means no wander;
+  - controller tick off.
+- **`TalkFlow`** (test NPC, viewport-free panel):
+  - each refusal (out of range, no player controller, no screen class, busy) changes nothing;
+  - a valid request fills the name and one greeting, pauses the AI and faces the player;
+  - Bye closes and resumes;
+  - I, Tab and Esc close;
+  - closing twice is a no-op;
+  - the NPC ending play closes the panel.
+- **`ProductionWiring`:**
+  - `BP_Npc_Trader`: `BPI_Interactable` (Press, hold 0), Quinn mesh and `ABP_Unarmed`, `W_NpcTalk`, `ANpcAIController`, no actor tick;
+  - `W_NpcTalk` binds its widgets;
+  - `NPC_Trader` points to `BP_Npc_Trader`.
+
+Expected suite: 279 + 5 = 284.
+
+## S4.7 PIE
+
+1. The starter zone (moved left) and the Trader Camp (right, no red ring) are both visible. "Trader Camp" shows at the top right inside the camp, and building there says "Outside the build zone".
+2. The Trader stands in the camp with its name above its head, strolls and pauses, and never leaves the camp.
+3. F facing the Trader opens the panel (name, greeting, Bye). The Trader stops and turns to you.
+4. Bye, Esc, Tab or I closes it; the Trader walks again; the cursor stays and the first click works.
+
+## S4.8 Self-Critique (open risks)
+
+- **R-S4-1 Manual interface step** on `BP_Npc_Trader` (known MCP limit).
+- **R-S4-2 Navigation:** the nav mesh must cover the camp. This is PIE evidence; the wander logic is tested through seams.
+- **R-S4-3 Moving `BaseZone_Start`** shifts the buildable area 6 cells left (still around `PlayerStart`). Anything already built in a PIE session is not saved, so nothing is lost.
+- **R-S4-4 The name label** faces a fixed camera direction (the top-down camera does not rotate). A rotating camera would need a billboard later.
+- **R-S4-5 Overlapping zones:** a non-building zone overlapping a building zone does not block building there; zones are authored without overlap for now.
+- **R-S4-6 Module dependencies:** a Build.cs change; the game target is built to confirm.
+
+---
+
+# T1 - Test Ground: Plan
+
+**Status:** APPROVED (user, 2026-10-23: "duyệt plan"). It runs right after S4 is committed, as its own checkpoint. It is a level-only change, with no code.
+- **User direction (2026-10-23):** clear the terrain, or make one flat ground, so testing is easy. Keep only a few small bumps to test that building is refused.
+- **Audit (MCP actor list, 2026-10-23):** `Lvl_TopDown` is still the top-down template on a 40 × 40 m `Floor_0`:
+  - the raised centre platform: `SM_Cube13`–`16`, `SM_Ramp9`–`12`, `SM_QuarterCylinder5`–`12`, `SM_Cylinder` cap;
+  - border walls: `SM_Cube2`–`5`, `SM_Cube17`–`20`;
+  - corner blocks and ramps: `SM_Cube`, `6`–`12`, `SM_Ramp`–`8`, `SM_QuarterCylinder`–`4`;
+  - 8 columns (`SM_Cylinder2`–`9`);
+  - `SM_Cube14`, `Brush1`.
+
+  The Trader camp holds a ramp, two columns and part of the east wall.
+
+**Plan:**
+1. Delete the template geometry above (about 45 static mesh actors and the brush). Keep the sky, lights, fog, `PlayerStart`, the pickups, the resource nodes, `C8B_Workbench`, `BP_StorageContainer` and both zones.
+2. Scale `Floor_0` to 100 × 100 m (`BlockAll` stays), and grow `NavMeshBoundsVolume` to match.
+3. Add three small test bumps inside the starter zone, away from the spawn:
+   - a 40 cm step (Uneven);
+   - a ramp of about 35° (TooSteep);
+   - a small rock block (Blocked).
+4. Rearrange the zones:
+   - the starter zone 21 × 21 around `PlayerStart`;
+   - `TraderCamp` 9 × 9 in open ground about 30 m away;
+   - nothing overlaps.
+5. Move only the items that the new layout affects. Ground items fall onto the floor (Z ≈ 0).
+
+**Validation:**
+- full automation unchanged (the tests use their own worlds);
+- cook;
+- `git status` / World Partition audit (deleted and added external actors listed);
+- PIE: walk freely, the bumps refuse building with their reasons, the Trader walks in an empty camp.
 

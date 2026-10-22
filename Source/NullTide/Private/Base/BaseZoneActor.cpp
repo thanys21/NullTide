@@ -98,5 +98,7 @@ void ABaseZoneActor::OnConstruction(const FTransform& Transform)
 		Strips[Index]->SetWorldLocationAndRotation(FVector(StripCenter.X, StripCenter.Y, StripZ), FRotator::ZeroRotator);
 		Strips[Index]->SetWorldScale3D(FVector(StripSize.X / 100.0, StripSize.Y / 100.0, RingThickness / 100.0));
 		Strips[Index]->SetMaterial(0, RingMaterial);
+		// An NPC's own base (no building) has no no-build border to show.
+		Strips[Index]->SetVisibility(Zone->bAllowsBuilding);
 	}
 }

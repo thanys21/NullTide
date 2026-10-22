@@ -34,7 +34,7 @@ public:
 	/** Whether any zone covers the cell, its outer ring included. */
 	bool IsCellInZone(const FIntPoint& Cell) const;
 
-	/** Whether any zone's buildable rectangle (the zone without its outer ring) covers the cell. */
+	/** Whether any building zone's buildable rectangle (the zone without its outer ring) covers the cell. */
 	bool IsCellBuildable(const FIntPoint& Cell) const;
 
 	/** The first zone (in GetZones order) covering the location's cell, or null. */
@@ -50,6 +50,12 @@ public:
 	int32 PurgeStaleZones();
 
 	int32 GetRegisteredZoneCount() const { return Zones.Num(); }
+
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnZoneRegistryChanged, const UBaseZoneComponent* /*Zone*/);
+	/** A zone was added (not on repeated registration). Lets other areas (NPC residents) follow zones without Base depending on them. */
+	FOnZoneRegistryChanged OnZoneRegistered;
+	/** A registered zone was removed. */
+	FOnZoneRegistryChanged OnZoneUnregistered;
 
 	virtual void Deinitialize() override;
 

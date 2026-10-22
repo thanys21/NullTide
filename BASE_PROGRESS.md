@@ -234,4 +234,112 @@ All were found clean.
 
 ## Next Checkpoint
 
-S3 COMPLETE (full automation 279/279, cook PASS, manual PIE 5/5 PASS). Next: S4 NPC foundation, after its detail plan is approved.
+S3 COMPLETE (full automation 279/279, cook PASS, manual PIE 5/5 PASS; `b2d5413`).
+
+## S4 - NPC Foundation
+
+### Baseline and Scope
+
+- **Baseline:** `b2d5413` (S3). Full automation 279/279, cook 650/7/657.
+- **Scope:** `BASE_PLAN.md` S4, approved 2026-10-23 (N-1 to N-5).
+  - An outdoor Trader lives in its own camp, strolls there, and talks (name, greeting, Bye).
+  - House NPCs (summoned with an item, room requirements) moved to S6.
+
+### Source
+
+| File | Content |
+| --- | --- |
+| `NullTide.Build.cs` | `AIModule`, `GameplayTasks` (public), `NavigationSystem` (private). |
+| `Base/BaseZoneComponent.h` | `bAllowsBuilding` (default true), `Residents`. |
+| `Base/BaseZoneSubsystem.h/.cpp` | `OnZoneRegistered` / `OnZoneUnregistered` (native, real changes only); `IsCellBuildable` ignores non-building zones. |
+| `Base/BaseZoneActor.cpp` | The ring is hidden for a non-building zone. |
+| `Npc/NpcDefinition.h/.cpp` (new area `Npc/`) | `UNpcDefinition`, `ValidateNpc`, `ResolveValidNpc`, `IsDataValid`. |
+| `Npc/NpcSubsystem.h/.cpp` | `UNpcSubsystem`: residents spawned on zone registration (game world, not a client), once each, on a random interior cell; destroyed with a destroyed zone, forgotten otherwise; `GetResidents`. |
+| `Npc/NpcCharacter.h/.cpp` | `ANpcCharacter`: name label, AI controller class, talk (`ENpcTalkResult`, `OpenTalkForInteractor`, `EndTalk`), `EndPlay` closes the panel; seams `CreateTalkWidget` / `ShowTalkWidget`. |
+| `Npc/NpcAIController.h/.cpp` | `ANpcAIController`: Idle / Moving / Talking on timers; wander to interior cells (projection 60 cm, must stay inside, 5 attempts); synchronous finish guarded; `BeginTalk` / `ResumeWander`; seams `ProjectToNavigation` / `RequestWanderMove`. |
+| `UI/NpcTalkWidget.h/.cpp` | `UNpcTalkWidget`: name, greeting, Bye; I/Tab/Esc (preview pass); `CloseTalk` once; `NativeDestruct` ends a talk removed some other way. |
+| `Tests/NpcTestTypes.h`, `Tests/NpcTests.cpp` (new) | `NullTide.Npc.S4.*` (5). |
+
+### Assets and level (Unreal MCP, one manual step)
+
+- `NpcSystem/Definitions/NPC_Trader`: "Trader", 3 greetings, `BP_Npc_Trader`, walk 150 cm/s, idle 3-8 s.
+- `NpcSystem/BP_Npc_Trader` (parent `ANpcCharacter`):
+  - `SKM_Quinn_Simple` and `ABP_Unarmed` (mesh at −95 Z, yaw −90, like the player), capsule 96 / 42, `TalkScreenClass = W_NpcTalk`.
+  - **Manual (user):** `BPI_Interactable`. The first attempt used the data-only view, whose Class Settings hide Interfaces; it was redone in the full Blueprint editor.
+  - Then MCP: the three template events removed, `EventInteract` → `OpenTalkForInteractor(self, Interactor)`. `GetInteractionType` (Press) and `GetHoldDuration` (0) are the interface defaults.
+  - Compiled with warnings as errors.
+- `NpcSystem/UI/W_NpcTalk`:
+  - a canvas holding a bottom-centre panel (640 × 200, 60 px above the bottom, dark 0.85);
+  - `NpcNameText` (Bold 22, amber), `GreetingText` (16, wrapping, fills), `ByeButton` (right, label "Bye").
+- `Lvl_TopDown` (saved by the user):
+  - `BaseZone_Start` moved to (−500, 100, 0), cells x −10..4 (bounds −2000..1000);
+  - new `TraderCamp` at (1500, 100, 0): 5 × 9, bounds x 1000..2000 and y −800..1000, "Trader Camp", no building, residents [`NPC_Trader`].
+  - The two zones touch but do not overlap, and both lie inside `Floor_0`.
+
+### Tests `NullTide.Npc.S4.*` (5)
+
+| Test | Covers |
+| --- | --- |
+| `DefinitionValidation` | Eight invalid cases each report (no name, no greetings, an empty greeting, no or an abstract actor class, zero speed, a negative or reversed idle range); broken and abstract definitions do not resolve; `NPC_Trader` is valid. |
+| `Residents` | A non-building zone with [valid, broken, valid] spawns 2 (the broken one is skipped with one expected warning), each in the interior, with home zone, kind, test controller and label. A zone without residents has none. Registering again adds nobody. The camp is a zone but not buildable and hides its ring; a building zone shows it and stays buildable. Destroying the zone removes its residents. |
+| `Wander` | No tick on the controller or the NPC. Possessed: idle with a timer. 200 cells, all in the interior, reproducible by seed. Wander → one move → finish → idle. Failed projections: 5 tries, then idle. Refused moves: idle. A synchronous finish followed by a real move leaves no idle timer. A projection outside the interior is never used. Talking: no timer, faces the partner, nothing restarts; resume idles. No home zone: no timer, no move. |
+| `TalkFlow` | Refusals (no interactor, a non-pawn, no player controller, out of range, no screen) change nothing. A valid request shows the name and one greeting, shows once, stops the NPC and faces the player. Busy is refused. Bye (the real button) closes it and resumes; closing again does nothing. The close keys. Talking again; the NPC ending play closes its panel. |
+| `ProductionWiring` | `NPC_Trader` → `BP_Npc_Trader`; `BPI_Interactable`, Press, hold 0; AI controller, auto-possess, no tick; `W_NpcTalk`; Quinn mesh with `ABP_Unarmed`; `W_NpcTalk` binds its widgets. |
+
+### Validation
+
+- **Build (editor closed):** the first attempt failed: `RequestMove` hid `AAIController::RequestMove` (C4263/C4264), `FVector::IsNearlyZero2D` does not exist, and `GetAnimClass` is not const. Renamed to `RequestWanderMove`, used `SizeSquared2D`, and took a non-const mesh. Then `Result: Succeeded`, 0 warnings.
+- **Tests (in-editor, MCP, before the fixes below):** `NullTide.Base` + `NullTide.Npc` 12/13.
+  - `Wander` failed: a direct `StartWander` call left the pending idle timer armed. `StartWander` now clears it.
+  - `Residents` reported its deliberate "skipped" warning; it is now an expected message.
+
+### Self-review (fresh-context review subagent)
+
+No P1 finding. The reviewer traced, in engine source:
+- the stop-for-talk ordering (`Talking` before `StopMovement`);
+- destroying an NPC with its panel open;
+- the zone-destroyed flag (set before `Destroyed`);
+- spawn order (`InitializeResident` before possession);
+- PIE start (zones register after the NPC subsystem binds);
+- duplicate guards;
+- no controller tick;
+- the label's collision;
+- the base changes;
+- talk input and focus (the same contract as the other screens);
+- Build.cs and the game target.
+
+All were found clean.
+
+| Finding | Classification | Resolution |
+| --- | --- | --- |
+| P2: `MoveToLocation` finishes synchronously for AlreadyAtGoal / Failed. Inside `StartWander` that armed the idle timer, then the next attempt started a real walk with the timer still armed (re-targeting mid-walk, skipped pauses, wrong state). | CONFIRMED | `bRequestingMove` ignores a finish during the request; the timer is cleared when a wander starts. `Wander` covers a synchronous finish followed by a real move. |
+| P3: a zone unregistering without being destroyed only forgets its residents (a re-registration would spawn a second set). | ACCEPTED (documented) | Zones are always loaded and never removed in play (Z-5); `BASE_PLAN.md` S4.3 records the rule. |
+| P3: the panel removed some other way (travel, `RemoveAllViewportWidgets`) leaves the NPC talking (`Busy` forever). | CONFIRMED | `NativeDestruct` finishes an open talk (input restore, `EndTalk`) without removing the widget again. |
+| P3: nav projection (100 cm) could move a target from a border cell onto the ring. | CONFIRMED | Projection extent 60 cm, and a projected target outside the interior is rejected. `Wander` covers it. |
+| P3: the spawn height depends on the zone actor's Z. | PIE check | Both zones sit at Z 0 on `Floor_0` (MCP read); NPCs spawn 100 cm above it. |
+| P3: test gaps (close-key routing, input restore, a non-pawn interactor, hold duration, teardown). | Partly CONFIRMED | Added a non-pawn interactor and hold duration 0. Key routing and input restore follow the shared screen contract and are PIE steps. |
+
+### PIE finding and fix
+
+- **Finding (user):** while the Trader walks, the "Press F" prompt stays where it first appeared.
+- **Cause:** `PlayerInteractionComponent.RenderInteractionWidget` (Blueprint) places its screen-space widget component once with `SetWorldLocation(GetActorLocation(target))`. The component is not attached to anything, so it never followed a moving target. Doors and chests never move, which is why B7.1 to S3 did not show it.
+- **Fix (MCP):** after `SetWorldLocation`, `AttachComponentToComponent(widget component → target's root, KeepWorld ×3, no weld)`. Each new target re-places and re-attaches it. Compiled with warnings as errors and saved.
+- **Retest (user):** the prompt follows the walking Trader.
+- **Manual PIE (user, 2026-10-23):** the Trader camp, the Trader walking and pausing, F → the talk panel with Bye, and closing all checked. The prompt fix was retested and passes.
+
+### Validation after the review fixes
+
+- **Build (editor closed):** `NullTideEditor` `Result: Succeeded`, 0 warnings.
+- **Game target:** `NullTide Win64 Development` `Result: Succeeded`.
+- **Tests (command line):** **284/284** Success, 0 failed, `EXIT CODE: 0`; Npc S4 5/5.
+- **Cook:** exit 0, `Success - 0 error(s), 2 warning(s)` (the known environment notices). Packages **662 / 7 / 669**: +12 for the NPC assets and the Quinn mesh, its materials and animation dependencies.
+- **Content and World Partition audit:**
+  - new `NpcSystem/` (`NPC_Trader`, `BP_Npc_Trader`, `UI/W_NpcTalk`);
+  - modified `PlayerInteractionComponent` (prompt attach);
+  - `Lvl_TopDown`: `BaseZone_Start` moved (modified external actor) and `TraderCamp` added (new external actor `2/9A/`);
+  - `__ExternalActors__` 95 → 96, `__ExternalObjects__` 3;
+  - `BP_BuildDoor` was only read (marked dirty by the graph read) and not saved.
+
+## Next Checkpoint
+
+S4 COMPLETE (full automation 284/284, cook PASS, manual PIE PASS). Next: T1 test ground (approved), then S5 trading.

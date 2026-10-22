@@ -4,6 +4,8 @@
 #include "Components/ActorComponent.h"
 #include "BaseZoneComponent.generated.h"
 
+class UNpcDefinition;
+
 /**
  * Turns its owner into a base zone (Phase 6 S2): a rectangle of SizeInCells building-grid cells centred on the owner's
  * cell, where the player may build. The outermost ring of cells is never buildable, so the outside of a base stays
@@ -32,6 +34,17 @@ public:
 
 	/** The zone cells without their outermost ring. */
 	static FIntRect ComputeBuildableCells(const FIntRect& ZoneCells);
+
+	/**
+	 * Whether the player may build in this zone. False makes it an NPC's own base (S4, for example a trader camp):
+	 * none of its cells is buildable and its ring is hidden, but it is still a zone (tag, residents).
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base|Zone")
+	bool bAllowsBuilding = true;
+
+	/** Outdoor NPCs living here, spawned by UNpcSubsystem when the zone registers (S4). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base|Zone")
+	TArray<TSubclassOf<UNpcDefinition>> Residents;
 
 	/** Shown to the player while inside the zone (S3 base tag). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base|Zone")

@@ -18,13 +18,22 @@ bool UBaseZoneSubsystem::RegisterZone(UBaseZoneComponent* Zone)
 		return false;
 	}
 	PurgeStaleZones();
-	Zones.AddUnique(Zone);
+	if (!Zones.Contains(Zone))
+	{
+		Zones.Add(Zone);
+		OnZoneRegistered.Broadcast(Zone);
+	}
 	return true;
 }
 
 void UBaseZoneSubsystem::UnregisterZone(const UBaseZoneComponent* Zone)
 {
+	const bool bWasRegistered = Zone && Zones.Contains(Zone);
 	Zones.RemoveAll([Zone](const TWeakObjectPtr<UBaseZoneComponent>& Entry) { return !Entry.IsValid() || Entry.Get() == Zone; });
+	if (bWasRegistered)
+	{
+		OnZoneUnregistered.Broadcast(Zone);
+	}
 }
 
 TArray<UBaseZoneComponent*> UBaseZoneSubsystem::GetZones() const
@@ -70,7 +79,7 @@ bool UBaseZoneSubsystem::IsCellBuildable(const FIntPoint& Cell) const
 {
 	for (const TWeakObjectPtr<UBaseZoneComponent>& Entry : Zones)
 	{
-		if (const UBaseZoneComponent* Zone = Entry.Get(); Zone && Zone->GetBuildableCells().Contains(Cell))
+		if (const UBaseZoneComponent* Zone = Entry.Get(); Zone && Zone->bAllowsBuilding && Zone->GetBuildableCells().Contains(Cell))
 		{
 			return true;
 		}

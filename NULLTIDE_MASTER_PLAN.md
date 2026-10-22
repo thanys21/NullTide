@@ -7,7 +7,7 @@
 > **Genre:** Top-down Survival Colony Builder  
 > **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building COMPLETE (B0–B9, summary in `BUILDING_REPORT.md`): B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 (construction authority: activate first, pay last) COMPLETE / APPROVED (full automation 219/219, cook PASS); B3 (Wooden Floor: first buildable, construction component on the player) COMPLETE / APPROVED (full automation 223/223, cook PASS); B4 (building mode, ghost preview, input) COMPLETE / APPROVED (full automation 230/230, cook PASS, manual PIE 8/8 PASS); B5 (walls and doors, selection and rotation) COMPLETE / APPROVED (full automation 236/236, cook PASS, manual PIE PASS; `b20f70a`); B6 (demolition: C key, cascade, full refund) COMPLETE / APPROVED (full automation 243/243, cook PASS, manual PIE PASS; `7dd0c1d`); B7 (buildable chest and workbench) COMPLETE / APPROVED (full automation 250/250, cook PASS, manual PIE done; `8f4ae66`); B7.1 (facing-based interaction targeting) COMPLETE / APPROVED (full automation 253/253, cook PASS, manual PIE accepted; reach to be tuned later; `208b12e`); B8 (building UI: build bar) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 5/5 PASS; `e20b30e`); B9 (polish: interaction reach 75/75, first click after closing a screen; Phase 5 closeout) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 3/3 PASS). Phase 6 Base & NPCs in progress (BASE_PLAN.md): S1 (cursor facing) COMPLETE / APPROVED (full automation 271/271, cook PASS, manual PIE 7/7 PASS; `0a3e243`); S2 (build zones) COMPLETE / APPROVED (full automation 276/276, cook PASS, manual PIE 5/5 PASS; `b890e2e`); S3 (base UX) COMPLETE / APPROVED (full automation 279/279, cook PASS, manual PIE 5/5 PASS). Next: S4 NPC foundation. Crafting queue and the inventory/crafting UI-UX pass are deferred.
+> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building COMPLETE (B0–B9, summary in `BUILDING_REPORT.md`): B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 (construction authority: activate first, pay last) COMPLETE / APPROVED (full automation 219/219, cook PASS); B3 (Wooden Floor: first buildable, construction component on the player) COMPLETE / APPROVED (full automation 223/223, cook PASS); B4 (building mode, ghost preview, input) COMPLETE / APPROVED (full automation 230/230, cook PASS, manual PIE 8/8 PASS); B5 (walls and doors, selection and rotation) COMPLETE / APPROVED (full automation 236/236, cook PASS, manual PIE PASS; `b20f70a`); B6 (demolition: C key, cascade, full refund) COMPLETE / APPROVED (full automation 243/243, cook PASS, manual PIE PASS; `7dd0c1d`); B7 (buildable chest and workbench) COMPLETE / APPROVED (full automation 250/250, cook PASS, manual PIE done; `8f4ae66`); B7.1 (facing-based interaction targeting) COMPLETE / APPROVED (full automation 253/253, cook PASS, manual PIE accepted; reach to be tuned later; `208b12e`); B8 (building UI: build bar) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 5/5 PASS; `e20b30e`); B9 (polish: interaction reach 75/75, first click after closing a screen; Phase 5 closeout) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 3/3 PASS). Phase 6 Base & NPCs in progress (BASE_PLAN.md): S1 (cursor facing) COMPLETE / APPROVED (full automation 271/271, cook PASS, manual PIE 7/7 PASS; `0a3e243`); S2 (build zones) COMPLETE / APPROVED (full automation 276/276, cook PASS, manual PIE 5/5 PASS; `b890e2e`); S3 (base UX) COMPLETE / APPROVED (full automation 279/279, cook PASS, manual PIE 5/5 PASS; `b2d5413`); S4 (NPC foundation) COMPLETE / APPROVED (full automation 284/284, cook PASS, manual PIE PASS). Next: T1 test ground, then S5 trading. Crafting queue and the inventory/crafting UI-UX pass are deferred.
 
 ---
 
@@ -809,7 +809,7 @@ Phase 4 Crafting                    ✅
 Phase 5 Building                    ✅
 
 NEXT:
-G9 Storage UI/UX COMPLETE (STORAGE_UX_PROGRESS.md); G9.1 inventory details layout fix COMPLETE. Phase 6 S1 cursor facing, S2 build zones and S3 base UX COMPLETE (BASE_PROGRESS.md). Next: Phase 6 S4 NPC foundation (BASE_PLAN.md). Phase 5 Building COMPLETE (B0–B9; see BUILDING_REPORT.md).
+G9 Storage UI/UX COMPLETE (STORAGE_UX_PROGRESS.md); G9.1 inventory details layout fix COMPLETE. Phase 6 S1 to S4 COMPLETE (BASE_PROGRESS.md). Next: T1 test ground, then Phase 6 S5 trading (BASE_PLAN.md). Phase 5 Building COMPLETE (B0–B9; see BUILDING_REPORT.md).
 ```
 
 ---
@@ -1160,9 +1160,9 @@ B0 design APPROVED (see `BUILDING_PLAN.md`); progress in `BUILDING_PROGRESS.md`.
 S1 Cursor facing (character turns to the mouse; cursor always visible) — COMPLETE
 S2 Build zones (level-placed base zones, any number; every building inside a zone's buildable area; outer ring kept free; starter zone 15x15) — COMPLETE
 S3 Base UX (red ring over each zone's no-build border, always visible; zone name tag at the top right) — COMPLETE
-S4 NPC foundation (Trader lives in a zone, wanders, talk panel)
+S4 NPC foundation (outdoor Trader lives in its own camp zone, wanders, talk panel with Bye) — COMPLETE
 S5 Trading (data offers, atomic barter through the inventory transaction)
-S6 Housing (optional: bed + room detection) and closeout
+S6 House NPCs (summon item; room detection; bed, table, chair, room size) and closeout
 ```
 
 Safety effects (no hostile spawns or entry inside the base) arrive with Phase 8 Combat.
@@ -1819,8 +1819,8 @@ Current validation baseline:
 - crafting C1-C8C 69/69
 - Building B8 5/5; Gameplay G8 (interaction targeting, B7.1) 3/3
 - Inventory G9 (storage UI/UX, incl. G9.1) 9/9; Gameplay G10 (cursor facing, Phase 6 S1) 4/4
-- Base S2 (build zones) 5/5; Base S3 (base UX) 3/3
-- full 279/279 (276 + 3 Base S3)
+- Base S2 (build zones) 5/5; Base S3 (base UX) 3/3; Npc S4 (NPC foundation) 5/5
+- full 284/284 (279 + 5 Npc S4)
 
 Next:
 Phase 5 Building COMPLETE (B0–B9). G9 Storage UI/UX (storage screen: move stack, move all of an item, split, drag, ALL, info panel, sorting) COMPLETE; G9.1 inventory details layout fix COMPLETE. Next: Phase 6 Base & NPCs (BASE_PLAN.md: S1 cursor facing, S2–S3 base, S4–S5 Trader NPC, S6 housing). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.

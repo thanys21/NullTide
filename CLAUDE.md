@@ -83,6 +83,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
 - `NullTide.Building.{B1,B2,B3,B4,B5,B6,B7,B8}`
 - `NullTide.Base.{S2,S3}` (S2 = build zones, S3 = base UX)
+- `NullTide.Npc.{S4}` (S4 = NPC foundation: residents, wander, talk)
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -244,6 +245,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - A 0.1 s timer (no tick) broadcasts `OnFacingInteractableChanged` only when the target changes, including to null when the previous target was destroyed. `PlayerInteractionComponent` binds it to re-render the prompt.
 - `SelectFacingInteractable` considers candidates within ±70° of the actor's forward vector (2D). It picks the nearest of those within 1° of the smallest angle, which is independent of input order. It skips depleted resource nodes (`ShouldShowInteractionPromptFor`). With nothing in front there is no target and no prompt.
 - Targeting is read-only and never interacts. Interactable actors need no change; their interaction volume must overlap the Pawn channel.
+- The prompt widget component (screen space) is placed at the target and attached to its root on every render (S4), so it follows a moving target such as an NPC.
 
 **Player (`Player/`)** — Phase 6 S1 (plan `BASE_PLAN.md`, progress `BASE_PROGRESS.md`)
 - `UCursorFacingComponent` on `BP_TopDownCharacter` turns the character toward the mouse.
@@ -271,7 +273,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 - `ABaseZoneActor` is the placeable zone: an unscaled root, `Zone`, and `ZoneBounds` (an editor outline of the snapped rectangle; no collision, hidden in game, ignores actor rotation).
   - It is not spatially loaded (always loaded in World Partition).
   - **To add a zone, place one in a level and set its size.** Zones are authored for the game and never removed during play.
-- `Lvl_TopDown` has one: `BaseZone_Start` (15 × 15 around `PlayerStart`, cells −7..7, buildable −6..6).
+- `Lvl_TopDown` has `BaseZone_Start` (15 × 15, centre cell (−3, 0) since S4: cells x −10..4, y −7..7; `PlayerStart` inside) and the non-building `TraderCamp` (S4).
 - **Ring visual (S3):** `ABaseZoneActor` lays 4 flat strips (`RingSouth/North/West/East`, engine cube, 2 cm thick, 1 cm above the actor) over the outer ring in `OnConstruction`.
   - They are always visible, in game and in the editor.
   - No collision, overlaps, navigation or shadow, so traces and building pass through.
@@ -282,6 +284,36 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - The tag `W_BaseZoneTag` (`UBaseZoneTagWidget`, `ZoneNameText`) sits at the top right, is collapsed outside a zone and is removed on `EndPlay`.
   - Test seams: `IsLocalPlayerController`, `CreateTagWidget`, `RefreshZone`.
 - Test helper: `NullTideBaseTests::SpawnBaseZone` (`Tests/BaseTestTypes.h`). `FB1World` and `FB2World` spawn a 101 × 101 fixture zone.
+
+- **Non-building zones (S4):** `bAllowsBuilding` false makes a zone an NPC's own base, such as `TraderCamp`. None of its cells is buildable and its ring is hidden, but it is still a zone (`FindZoneAt`, tag, residents).
+  - `UBaseZoneSubsystem` broadcasts native `OnZoneRegistered` / `OnZoneUnregistered` on real changes only, so other areas follow zones without `Base/` depending on them.
+
+**NPCs (`Npc/`)** — Phase 6 S4 (plan `BASE_PLAN.md`, progress `BASE_PROGRESS.md`)
+- Two kinds of NPC:
+  - **Outdoor NPCs** live in their own zone, listed in `UBaseZoneComponent::Residents` by the admin.
+  - **House NPCs** (summoned with an item, need a valid room with a bed, table and chair) are S6.
+- `UNpcDefinition` is an abstract, const UObject (the items pattern), with data-only `NpcSystem/Definitions/NPC_*`. Fields: `NpcName`, `GreetingLines`, `NpcActorClass`, `WalkSpeed`, `IdleTimeMin/Max`; `ValidateNpc` / `IsDataValid`. Production: `NPC_Trader`.
+- `UNpcSubsystem` is the only outdoor-resident authority.
+  - On `OnZoneRegistered` (game world, not a client) it spawns each valid resident once on a random interior cell, and sets its definition and home zone before `FinishSpawning`.
+  - A **destroyed** zone takes its residents with it; any other unregistration (teardown) only forgets them.
+- `ANpcCharacter` (abstract; `NpcSystem/BP_Npc_Trader`, the Quinn mannequin with `ABP_Unarmed`):
+  - `NameLabel` (TextRender at a fixed rotation facing the top-down camera), orient-to-movement, no actor tick;
+  - `AIControllerClass = ANpcAIController`, auto-possessed.
+  - **Talk:** `GetTalkResult` (`ENpcTalkResult`: InvalidInteractor, NoPlayerController, OutOfRange beyond `TalkRange` 300 cm, NoTalkScreen, Busy) is read-only. `OpenTalkForInteractor` opens `TalkScreenClass` (`W_NpcTalk`) UI-only, then pauses the AI and faces the player. `EndTalk` resumes, and `EndPlay` closes the panel.
+  - `BP_Npc_Trader` implements `BPI_Interactable` (`Interact` → `OpenTalkForInteractor`, Press, hold 0). The interface had to be added by hand in the **full** Blueprint editor, because a data-only Blueprint's Class Settings hide Interfaces.
+  - Seams: `CreateTalkWidget`, `ShowTalkWidget`.
+- `ANpcAIController` (no controller tick; timers plus engine path following): **Idle** (random `IdleTimeMin..Max`) → **Moving** to a random interior cell of the home zone → **Idle**.
+  - A target is projected to the nav mesh (60 cm) and must stay in the interior. Up to 5 attempts, then idle.
+  - `MoveTo`'s synchronous finish during a request is ignored (`bRequestingMove`).
+  - **Talking:** stop, face the player, no timer. `ResumeWander` idles again. Without a home zone it never wanders.
+  - Seams: `ProjectToNavigation`, `RequestWanderMove`.
+- `UNpcTalkWidget` (`UI/`; `W_NpcTalk`): `NpcNameText`, `GreetingText`, `ByeButton`.
+  - Bye, I, Tab and Esc close it (preview pass) through `CloseTalk`: it is removed, `RestoreGameplayCursor` + `RestoreGameOnlyInput` run, and the NPC's `EndTalk` is called. Closing again does nothing.
+  - `NativeDestruct` ends the talk if the panel was removed some other way.
+- `Lvl_TopDown`:
+  - `BaseZone_Start` is centred on cell (−3, 0) (cells −10..4).
+  - `TraderCamp` is centred on cell (7, 0), 5 × 9 (cells x 5..9, y −4..4), "Trader Camp", no building, residents [`NPC_Trader`].
+- Build.cs: `AIModule`, `GameplayTasks` (public), `NavigationSystem` (private).
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

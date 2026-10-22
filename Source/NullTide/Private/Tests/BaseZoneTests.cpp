@@ -1,4 +1,5 @@
 #include "BaseTestTypes.h"
+#include "BaseZoneTestTypes.h"
 #include "BuildingTestTypes.h"
 #include "InventoryComponentTestTypes.h"
 
@@ -10,13 +11,20 @@
 #include "Building/ConstructionComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Base/BaseZonePresenceComponent.h"
+#include "Engine/Blueprint.h"
 #include "Engine/Engine.h"
+#include "Engine/SCS_Node.h"
+#include "Engine/SimpleConstructionScript.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Character.h"
+#include "GameFramework/PlayerController.h"
 #include "Inventory/InventoryComponent.h"
+#include "Materials/MaterialInstance.h"
 #include "Misc/AutomationTest.h"
+#include "UI/BaseZoneTagWidget.h"
 #include "UObject/StrongObjectPtr.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -25,6 +33,10 @@ namespace
 {
 /** Zone A of the S2 worlds: 5 x 5 cells around the origin (cells -2..2, buildable -1..1). */
 const FIntPoint S2ZoneSize(5, 5);
+
+const TCHAR* S3PlayerPath = TEXT("/Game/TopDown/Blueprints/BP_TopDownCharacter.BP_TopDownCharacter");
+const TCHAR* S3TagClassPath = TEXT("/Game/LevelPrototyping/BaseSystem/UI/W_BaseZoneTag.W_BaseZoneTag_C");
+const TCHAR* S3RingMaterialPath = TEXT("/Game/LevelPrototyping/BaseSystem/Materials/MI_BaseZoneRing.MI_BaseZoneRing");
 
 FString S2Name(const EBuildResult Result)
 {
@@ -429,6 +441,235 @@ bool FBaseS2ProductionRulesTest::RunTest(const FString& Parameters)
 	Zone->SetActorRotation(FRotator(0.0, 30.0, 0.0));
 	Zone->OnConstruction(Zone->GetActorTransform());
 	OutlineMatches(TEXT("A rotated actor"));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBaseS3RingGeometryTest,
+	"NullTide.Base.S3.RingGeometry",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBaseS3RingGeometryTest::RunTest(const FString& Parameters)
+{
+	// The strips cover exactly the ring cells, each once.
+	struct FCase { FIntPoint Center; FIntPoint Size; };
+	const FCase Cases[] = { { FIntPoint(0, 0), FIntPoint(5, 5) }, { FIntPoint(-5, -5), FIntPoint(3, 3) }, { FIntPoint(2, -3), FIntPoint(4, 6) } };
+	for (const FCase& Case : Cases)
+	{
+		const FIntRect Zone = UBaseZoneComponent::ComputeZoneCells(Case.Center, Case.Size);
+		const FIntRect Buildable = UBaseZoneComponent::ComputeBuildableCells(Zone);
+		const TArray<FBox2D> Strips = ABaseZoneActor::ComputeRingStrips(Zone);
+		int32 Wrong = 0;
+		for (int32 Y = Zone.Min.Y - 1; Y <= Zone.Max.Y; ++Y)
+		{
+			for (int32 X = Zone.Min.X - 1; X <= Zone.Max.X; ++X)
+			{
+				const FVector Center = S2CellLocation(FIntPoint(X, Y));
+				int32 Covered = 0;
+				for (const FBox2D& Strip : Strips)
+				{
+					Covered += Strip.IsInside(FVector2D(Center.X, Center.Y)) ? 1 : 0;
+				}
+				const bool bRing = Zone.Contains(FIntPoint(X, Y)) && !Buildable.Contains(FIntPoint(X, Y));
+				Wrong += Covered == (bRing ? 1 : 0) ? 0 : 1;
+			}
+		}
+		TestTrue(FString::Printf(TEXT("%d x %d: 4 strips cover each ring cell once and nothing else (%d wrong cells)"),
+			Case.Size.X, Case.Size.Y, Wrong), Strips.Num() == 4 && Wrong == 0);
+	}
+
+	FS2World Fixture;
+	if (!Fixture.IsValid(*this))
+	{
+		return false;
+	}
+	ABaseZoneActor* Zone = Fixture.SpawnZone(FIntPoint(0, 0), S2ZoneSize);
+	if (!TestNotNull(TEXT("Zone"), Zone))
+	{
+		return false;
+	}
+	const UMaterialInterface* RingMaterial = LoadObject<UMaterialInterface>(nullptr, S3RingMaterialPath);
+	TestTrue(TEXT("The ring uses MI_BaseZoneRing"), RingMaterial && Zone->RingMaterial == RingMaterial);
+	auto StripsMatch = [this, Zone, RingMaterial](const TCHAR* What)
+	{
+		const TArray<FBox2D> Expected = ABaseZoneActor::ComputeRingStrips(Zone->GetZone()->GetZoneCells());
+		const TArray<UStaticMeshComponent*> Strips = Zone->GetRingStrips();
+		bool bMatch = Strips.Num() == 4;
+		for (int32 Index = 0; bMatch && Index < Strips.Num(); ++Index)
+		{
+			const FBox Bounds = Strips[Index]->Bounds.GetBox();
+			bMatch = FVector2D(Bounds.Min.X, Bounds.Min.Y).Equals(Expected[Index].Min, 0.1)
+				&& FVector2D(Bounds.Max.X, Bounds.Max.Y).Equals(Expected[Index].Max, 0.1)
+				&& FMath::IsNearlyEqual(Bounds.Min.Z, ABaseZoneActor::RingLift, 0.1)
+				&& FMath::IsNearlyEqual(Bounds.Max.Z, ABaseZoneActor::RingLift + ABaseZoneActor::RingThickness, 0.1)
+				&& Strips[Index]->GetMaterial(0) == RingMaterial && !Strips[Index]->bHiddenInGame;
+		}
+		TestTrue(FString::Printf(TEXT("%s: the strips lie on the ring at the zone height, visible, with the ring material"), What), bMatch);
+	};
+	StripsMatch(TEXT("Spawned"));
+	Zone->SetActorRotation(FRotator(0.0, 45.0, 0.0));
+	Zone->OnConstruction(Zone->GetActorTransform());
+	StripsMatch(TEXT("A rotated actor"));
+
+	bool bInert = true;
+	for (const UStaticMeshComponent* Strip : Zone->GetRingStrips())
+	{
+		bInert &= Strip->GetCollisionEnabled() == ECollisionEnabled::NoCollision && !Strip->GetGenerateOverlapEvents()
+			&& !Strip->CanEverAffectNavigation() && !Strip->CastShadow;
+	}
+	TestTrue(TEXT("No collision, overlaps, navigation or shadow"), bInert);
+	// A trace from above into the south strip (cell (0, -2) at 1..3 cm) reaches nothing but the ground below it.
+	FHitResult Hit;
+	const FVector Above = S2CellLocation(FIntPoint(0, -2)) + FVector(0.0, 0.0, 100.0);
+	const FVector InStrip = S2CellLocation(FIntPoint(0, -2)) + FVector(0.0, 0.0, 2.0);
+	TestFalse(TEXT("Traces pass through the ring (visibility)"), Fixture.World->LineTraceSingleByChannel(Hit, Above, InStrip, ECC_Visibility));
+	TestFalse(TEXT("Traces pass through the ring (pawn)"), Fixture.World->LineTraceSingleByChannel(Hit, Above, InStrip, ECC_Pawn));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBaseS3PresenceAndTagTest,
+	"NullTide.Base.S3.PresenceAndTag",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBaseS3PresenceAndTagTest::RunTest(const FString& Parameters)
+{
+	UClass* TagClass = LoadClass<UBaseZoneTagWidget>(nullptr, S3TagClassPath);
+	FS2World Fixture(false);
+	if (!TestNotNull(TEXT("W_BaseZoneTag loads"), TagClass) || !Fixture.IsValid(*this))
+	{
+		return false;
+	}
+	ABaseZoneActor* Home = Fixture.SpawnZone(FIntPoint(0, 0), S2ZoneSize);
+	ABaseZoneActor* Outpost = Fixture.SpawnZone(FIntPoint(5, 0), S2ZoneSize);
+	if (!TestTrue(TEXT("Two touching zones"), Home && Outpost))
+	{
+		return false;
+	}
+	Outpost->GetZone()->ZoneName = FText::FromString(TEXT("Outpost"));
+
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ACharacter* Pawn = Fixture.World->SpawnActor<ACharacter>(ACharacter::StaticClass(), S2CellLocation(FIntPoint(20, 20)),
+		FRotator::ZeroRotator, Params);
+	APlayerController* Controller = Fixture.World->SpawnActor<APlayerController>(APlayerController::StaticClass(), FTransform::Identity, Params);
+	if (!TestTrue(TEXT("Pawn and controller"), Pawn && Controller))
+	{
+		return false;
+	}
+	UBaseZonePresenceTestComponent* Presence = NewObject<UBaseZonePresenceTestComponent>(Pawn);
+	Presence->TestTagClass = TagClass;
+	Presence->bTreatAsLocal = false;
+	Pawn->AddInstanceComponent(Presence);
+	Presence->RegisterComponent();
+	Pawn->DispatchBeginPlay();
+	TStrongObjectPtr<UBaseZoneTestListener> Listener(NewObject<UBaseZoneTestListener>());
+	Presence->OnBaseZoneChanged.AddDynamic(Listener.Get(), &UBaseZoneTestListener::HandleZoneChanged);
+	TestFalse(TEXT("No timer without a controller"), Presence->IsRefreshTimerActive());
+
+	Controller->Possess(Pawn);
+	TestFalse(TEXT("No timer for a controller without a local player"), Presence->IsRefreshTimerActive());
+	Controller->UnPossess();
+	Presence->bTreatAsLocal = true;
+	Controller->Possess(Pawn);
+	TestTrue(TEXT("Timer runs for a local player; outside every zone nothing is shown"), Presence->IsRefreshTimerActive()
+		&& Listener->Changes.IsEmpty() && !Presence->GetTagWidget() && Presence->TagCreateCount == 0);
+
+	auto MoveTo = [Pawn, Presence](const FIntPoint& Cell)
+	{
+		Pawn->SetActorLocation(S2CellLocation(Cell) + FVector(0.0, 0.0, 92.0));
+		Presence->RefreshZone();
+	};
+	MoveTo(FIntPoint(1, 1));
+	UBaseZoneTagWidget* Tag = Presence->GetTagWidget();
+	TestTrue(TEXT("Entering Home: one change, the tag shows its name"), Listener->Changes.Num() == 1
+		&& Listener->Changes[0].Get() == Home->GetZone() && Presence->GetCurrentZone() == Home->GetZone() && Tag
+		&& Tag->GetZoneNameText().ToString() == TEXT("Base") && Tag->GetVisibility() == ESlateVisibility::HitTestInvisible);
+	if (Tag)
+	{
+		const FAnchors Anchors = Tag->GetAnchorsInViewport();
+		TestTrue(TEXT("The tag sits at the top right"), Anchors.Minimum.Equals(FVector2D(1.0, 0.0)) && Anchors.Maximum.Equals(FVector2D(1.0, 0.0))
+			&& Tag->GetAlignmentInViewport().Equals(FVector2D(1.0, 0.0)));
+	}
+	MoveTo(FIntPoint(-2, 2));
+	TestEqual(TEXT("Moving within Home (its ring included) changes nothing"), Listener->Changes.Num(), 1);
+	MoveTo(FIntPoint(4, 0));
+	TestTrue(TEXT("Into the touching Outpost: one change, its name"), Listener->Changes.Num() == 2
+		&& Listener->Changes[1].Get() == Outpost->GetZone() && Tag && Tag->GetZoneNameText().ToString() == TEXT("Outpost"));
+	MoveTo(FIntPoint(20, 0));
+	TestTrue(TEXT("Leaving: one change to none, the tag collapses"), Listener->Changes.Num() == 3 && !Listener->Changes[2].IsValid()
+		&& !Presence->GetCurrentZone() && Tag && Tag->GetVisibility() == ESlateVisibility::Collapsed);
+	MoveTo(FIntPoint(0, 0));
+	TestTrue(TEXT("Back in Home: the same tag is reused"), Listener->Changes.Num() == 4 && Presence->GetTagWidget() == Tag
+		&& Presence->TagCreateCount == 1 && Tag->GetVisibility() == ESlateVisibility::HitTestInvisible);
+
+	Controller->UnPossess();
+	TestTrue(TEXT("Unpossessed: the timer stops and the zone is forgotten"), !Presence->IsRefreshTimerActive()
+		&& Listener->Changes.Num() == 5 && !Listener->Changes[4].IsValid() && Tag->GetVisibility() == ESlateVisibility::Collapsed);
+	MoveTo(FIntPoint(4, 0));
+	TestEqual(TEXT("Without a local player, refreshing does nothing"), Listener->Changes.Num(), 5);
+
+	// A zone destroyed under the player counts as leaving it (its weak pointer reads null like "no zone").
+	MoveTo(FIntPoint(0, 0));
+	Controller->Possess(Pawn);
+	TestTrue(TEXT("Possessed again inside Home: the first lookup runs at once"), Listener->Changes.Num() == 6 && Listener->Changes[5].Get() == Home->GetZone()
+		&& Tag->GetVisibility() == ESlateVisibility::HitTestInvisible);
+	Home->Destroy();
+	Presence->RefreshZone();
+	TestTrue(TEXT("Home destroyed: one change to none, the tag collapses"), Listener->Changes.Num() == 7 && !Listener->Changes[6].IsValid()
+		&& !Presence->GetCurrentZone() && Tag->GetVisibility() == ESlateVisibility::Collapsed);
+	Presence->RefreshZone();
+	TestEqual(TEXT("Still nothing afterwards"), Listener->Changes.Num(), 7);
+
+	Pawn->Destroy();
+	TestTrue(TEXT("EndPlay releases the tag"), !Presence->GetTagWidget() && !Presence->IsRefreshTimerActive());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBaseS3ProductionWiringTest,
+	"NullTide.Base.S3.ProductionWiring",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FBaseS3ProductionWiringTest::RunTest(const FString& Parameters)
+{
+	const UBlueprint* PlayerBlueprint = LoadObject<UBlueprint>(nullptr, S3PlayerPath);
+	UClass* TagClass = LoadClass<UBaseZoneTagWidget>(nullptr, S3TagClassPath);
+	if (!TestTrue(TEXT("BP_TopDownCharacter and W_BaseZoneTag load"), PlayerBlueprint && TagClass))
+	{
+		return false;
+	}
+	TArray<const UBaseZonePresenceComponent*> Presences;
+	if (const USimpleConstructionScript* ConstructionScript = PlayerBlueprint->SimpleConstructionScript)
+	{
+		for (const USCS_Node* Node : ConstructionScript->GetAllNodes())
+		{
+			if (const UBaseZonePresenceComponent* Component = Node ? Cast<UBaseZonePresenceComponent>(Node->ComponentTemplate) : nullptr)
+			{
+				Presences.Add(Component);
+			}
+		}
+	}
+	FClassProperty* TagProperty = FindFProperty<FClassProperty>(UBaseZonePresenceComponent::StaticClass(), TEXT("TagWidgetClass"));
+	if (TestEqual(TEXT("The player has exactly one BaseZonePresence"), Presences.Num(), 1) && TestNotNull(TEXT("TagWidgetClass"), TagProperty))
+	{
+		TestTrue(TEXT("Its tag is W_BaseZoneTag"), TagProperty->GetObjectPropertyValue_InContainer(Presences[0]) == TagClass);
+	}
+
+	FS2World Fixture(false);
+	if (!Fixture.IsValid(*this))
+	{
+		return false;
+	}
+	const UBaseZoneTagWidget* Tag = CreateWidget<UBaseZoneTagWidget>(Fixture.World, TagClass);
+	TestTrue(TEXT("W_BaseZoneTag binds ZoneNameText"), Tag && Tag->HasZoneNameText());
+	TestEqual(TEXT("Default zone name"), GetDefault<UBaseZoneComponent>()->ZoneName.ToString(), FString(TEXT("Base")));
+
+	const UMaterialInstance* Ring = Cast<UMaterialInstance>(GetDefault<ABaseZoneActor>()->RingMaterial);
+	FLinearColor Color = FLinearColor::Black;
+	const bool bHasColor = Ring && Ring->GetVectorParameterValue(FHashedMaterialParameterInfo(TEXT("Color")), Color);
+	TestTrue(TEXT("The default ring material is MI_BaseZoneRing"), Ring && Ring->GetPathName() == S3RingMaterialPath);
+	TestTrue(FString::Printf(TEXT("The ring is red (%s)"), *Color.ToString()), bHasColor && Color.R > 0.8f && Color.G < 0.3f && Color.B < 0.3f);
 	return true;
 }
 

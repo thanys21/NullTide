@@ -341,3 +341,98 @@ Expected suite: 271 + 5 = 276.
 - **R-S2-8 Future zone sources (self-review):** a zone component registers on `BeginPlay` whatever its owner is. A buildable Base Flag would therefore register on its provisional spawn and make its own placement buildable. That work must register only once the piece is `Active`.
 - **R-S2-7 Feel:** building is no longer allowed anywhere. The test pickups near `PlayerStart` and the authored workbench and chest are not building pieces, so they are unaffected. Whether the starter area is big enough is a PIE check.
 
+---
+
+# S3 - Base UX: Detail Plan
+
+**Status:** COMPLETE (manual PIE 5/5 PASS). APPROVED (user, 2026-10-22: U-1 ring fill; U-2 "luôn luôn", always visible; U-3 "hiện ở góc phải màn hình", the tag at the top right).
+- **Baseline:** `b890e2e` (S2). Full automation 276/276, cook 648/7/655.
+- **Goal:** the player always sees where building is not allowed, and knows when they are inside a base.
+- **Revises:** the S3 row in section 4. The flag ghost and the flag info panel are dropped, because there is no buildable flag (Z-1). The building-mode HUD already says "Outside the build zone" (S2).
+
+## S3.1 Audit (2026-10-22)
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| `ABaseZoneActor` already lays out its editor outline in `OnConstruction` from the snapped rectangle (absolute rotation and scale). | `BaseZoneActor.cpp` | U-2 (always visible): the zone actor itself owns the ring visual, laid out the same way, visible in game and in the editor. Building mode needs no change. |
+| The ghost is tinted through `M_BuildPreview`'s colour parameter (`ABuildingPreviewActor::ColorParameterName`). | `BuildingPreviewActor.*`; `Materials/M_BuildPreview` | A material instance asset of it (`MI_BaseZoneRing`, red) colours the ring. There is no material graph work and no runtime material instance. |
+| The cursor ground point comes from a trace (`GetCursorWorldLocation`), and placement traces use the Pawn channel. | `BuildingPlacementComponent.h:149`; `BuildingSubsystem.cpp` | Ring meshes must have no collision, or they would shift the ghost or support pieces. |
+| Gameplay HUD pieces are owned by player components that create their widget on demand (`UGatherProgressPresenterComponent`). The interaction probe uses a timer and broadcasts only on change (B7.1). | `GatherProgressPresenterComponent.*`; `InteractionProbeComponent.*` | The base tag uses a presence component on a timer with a change event. No tick. |
+
+## S3.2 Design
+
+- **Ring visual (always, U-1 / U-2):** `ABaseZoneActor` gets 4 `UStaticMeshComponent` strips (`RingSouth`, `RingNorth`, `RingWest`, `RingEast`).
+  - Each is the engine cube, laid in `OnConstruction` over the zone's outer ring:
+    - south and north over the full width;
+    - west and east between them;
+    - 2 cm thick, at the zone actor's height + 1 cm.
+  - The strips have no collision, ignore every channel, do not affect navigation, cast no shadow and are visible in game.
+  - Absolute rotation and scale, like `ZoneBounds`.
+  - Material: `RingMaterial` (`EditAnywhere`, default `MI_BaseZoneRing`).
+  - Pure helper `ComputeRingStrips(ZoneCells) → 4 world-space 2D boxes` for tests.
+  - The ring is exactly the no-build border, so its inner edge is the boundary of the buildable area.
+- **Base tag (U-3):**
+  - `UBaseZoneComponent::ZoneName` (FText, default "Base") is set per zone.
+  - `UBaseZonePresenceComponent` (`Base/`, on `BP_TopDownCharacter`):
+    - runs only for a pawn controlled by a local player controller (the S1 gate, a protected virtual seam);
+    - a 0.25 s timer, no tick, looks up `FindZoneAt(owner location)`;
+    - on change it broadcasts `OnBaseZoneChanged(NewZone)` once (null when leaving) and updates the tag;
+    - the timer runs while possessed by a local player and stops on unpossession and `EndPlay`.
+  - `UBaseZoneTagWidget` (abstract UMG base in `UI/`), Blueprint `W_BaseZoneTag`:
+    - one `ZoneNameText` (BindWidget), not hit-testable;
+    - created on first entry and added to the player screen at the **top right** (anchors and alignment (1, 0), inset 24 px), collapsed outside a zone, removed on `EndPlay`.
+  - Test seams: `CreateTagWidget`, `RefreshZone()`.
+- **Assets (MCP):**
+  - `Content/LevelPrototyping/BaseSystem/Materials/MI_BaseZoneRing` (parent `M_BuildPreview`, red);
+  - `Content/LevelPrototyping/BaseSystem/UI/W_BaseZoneTag` (parent `UBaseZoneTagWidget`);
+  - `BP_TopDownCharacter`: add `BaseZonePresence` with `TagWidgetClass = W_BaseZoneTag`;
+  - `BaseZone_Start` keeps its defaults (name "Base"), so there is no map change.
+- **Unchanged:** zone rules and registry, building validation and building mode, input, and every screen.
+
+## S3.3 Invariants
+
+- The ring and the tag only read zone data; neither changes zones, building, inventory or input.
+- Ring meshes never collide or affect traces and navigation.
+- No tick: the tag uses a timer, and the ring is laid out at construction.
+- The tag exists only for the local player's pawn.
+
+## S3.4 Tests (`NullTide.Base.S3.*`, planned 3)
+
+- **`RingGeometry`:**
+  - for 5 × 5, 3 × 3 and 4 × 6 zones, the 4 strips cover exactly the ring cells, each once;
+  - on a spawned zone actor, even rotated, the strips match those boxes, sit at the zone height and are visible in game;
+  - they have no collision, navigation or shadow;
+  - a line trace through a strip hits nothing;
+  - they use `RingMaterial`.
+- **`PresenceAndTag`** (test presence component, `W_BaseZoneTag`):
+  - no timer before possession or without a local player;
+  - entering a zone broadcasts once and shows its name at the top right;
+  - moving within it broadcasts nothing;
+  - moving into a touching zone broadcasts that zone;
+  - leaving broadcasts null and collapses the tag;
+  - unpossession stops the timer;
+  - `EndPlay` removes the widget.
+- **`ProductionWiring`:**
+  - `BP_TopDownCharacter` has exactly one `BaseZonePresence` with `TagWidgetClass` `W_BaseZoneTag`;
+  - `W_BaseZoneTag` binds `ZoneNameText`;
+  - the default `ZoneName` is "Base";
+  - the zone actor's default `RingMaterial` is `MI_BaseZoneRing` (red).
+
+Expected suite: 276 + 3 = 279.
+
+## S3.5 PIE
+
+1. The starter zone shows a red border on its outer ring, at all times (also visible in the editor viewport).
+2. In building mode, the ghost is red over the border and green inside; the ring does not move the ghost.
+3. Walk into the zone: "Base" appears at the top right; walk out: it disappears.
+4. Open inventory or a chest inside the zone: the tag stays, and nothing else changes.
+
+## S3.6 Self-Critique (open risks)
+
+- **R-S3-1 Uneven ground:** the strips lie flat at the zone actor's height. On uneven ground they can sink or float. The starter area is flat; projecting onto terrain is deferred.
+- **R-S3-2 Translucency:** the ring and the ghost share the material, so sorting may flicker where they overlap. The ghost is red there anyway.
+- **R-S3-3 Always visible:** a red border around every base is always on screen (U-2). Its colour and opacity are in `MI_BaseZoneRing`, so they can be tuned without code.
+- **R-S3-4 Existing placed zone:** `BaseZone_Start` is an instance of the native class, so the new strips come from class defaults. No resave is needed; the audit confirms no map change.
+- **R-S3-5 Top-right HUD:** the build bar is at the bottom. Whether the interaction prompt or the gather progress overlaps the top right is checked in PIE.
+- **R-S3-6 MCP asset creation:** a material instance and a widget Blueprint with a native parent follow the B8 path. If MCP cannot set a parent, one manual editor step may be needed.
+

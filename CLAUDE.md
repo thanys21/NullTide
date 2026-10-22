@@ -82,7 +82,7 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.ResourceGathering.{RG1,RG3,RG4,RG5}`
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
 - `NullTide.Building.{B1,B2,B3,B4,B5,B6,B7,B8}`
-- `NullTide.Base.{S2}` (S2 = build zones)
+- `NullTide.Base.{S2,S3}` (S2 = build zones, S3 = base UX)
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -272,6 +272,15 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - It is not spatially loaded (always loaded in World Partition).
   - **To add a zone, place one in a level and set its size.** Zones are authored for the game and never removed during play.
 - `Lvl_TopDown` has one: `BaseZone_Start` (15 × 15 around `PlayerStart`, cells −7..7, buildable −6..6).
+- **Ring visual (S3):** `ABaseZoneActor` lays 4 flat strips (`RingSouth/North/West/East`, engine cube, 2 cm thick, 1 cm above the actor) over the outer ring in `OnConstruction`.
+  - They are always visible, in game and in the editor.
+  - No collision, overlaps, navigation or shadow, so traces and building pass through.
+  - `RingMaterial` defaults to `BaseSystem/Materials/MI_BaseZoneRing` (child of `M_BuildPreview`, red, opacity 0.35).
+- **Base tag (S3):**
+  - `UBaseZoneComponent::ZoneName` (default "Base") is shown by `UBaseZonePresenceComponent` (`BaseZonePresence` on `BP_TopDownCharacter`). For a local player only, a 0.25 s timer (no tick) checks `FindZoneAt`.
+  - `OnBaseZoneChanged` fires once per change (null when leaving or unpossessed).
+  - The tag `W_BaseZoneTag` (`UBaseZoneTagWidget`, `ZoneNameText`) sits at the top right, is collapsed outside a zone and is removed on `EndPlay`.
+  - Test seams: `IsLocalPlayerController`, `CreateTagWidget`, `RefreshZone`.
 - Test helper: `NullTideBaseTests::SpawnBaseZone` (`Tests/BaseTestTypes.h`). `FB1World` and `FB2World` spawn a 101 × 101 fixture zone.
 
 **UI (`UI/`)**

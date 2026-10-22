@@ -144,4 +144,94 @@ No P1 finding. Rectangle and edge math, the read-only `ValidatePlacement`, every
 
 ## Next Checkpoint
 
-S2 COMPLETE (full automation 276/276, cook PASS, manual PIE 5/5 PASS). Next: S3 base UX, after its detail plan is approved.
+S2 COMPLETE (full automation 276/276, cook PASS, manual PIE 5/5 PASS; `b890e2e`).
+
+## S3 - Base UX
+
+### Baseline and Scope
+
+- **Baseline:** `b890e2e` (S2). Full automation 276/276, cook 648/7/655.
+- **Scope:** `BASE_PLAN.md` S3, approved 2026-10-22:
+  - U-1: a red ring fill;
+  - U-2: always visible;
+  - U-3: the tag at the top right.
+
+### Source
+
+| File | Content |
+| --- | --- |
+| `Base/BaseZoneActor.h/.cpp` | 4 ring strips (`RingSouth/North/West/East`): engine cube, no collision, overlaps, navigation or shadow, absolute transform. Laid in `OnConstruction` from `ComputeRingStrips` (2 cm thick, 1 cm above the actor). `RingMaterial` defaults to `MI_BaseZoneRing` (ConstructorHelpers, the project's existing pattern). |
+| `Base/BaseZoneComponent.h` | `ZoneName` (FText, default "Base"). |
+| `Base/BaseZonePresenceComponent.h/.cpp` (new) | `UBaseZonePresenceComponent`: local player gate (seam), 0.25 s looping timer while possessed by a local player, `RefreshZone` (`FindZoneAt`), `OnBaseZoneChanged` once per change (null on leaving or losing the local player), the tag created on first entry, placed at the top right (position first: `SetPositionInViewport` resets anchors), collapsed outside, removed on `EndPlay`. |
+| `UI/BaseZoneTagWidget.h/.cpp` (new) | `UBaseZoneTagWidget`: `ZoneNameText` (BindWidget), hit-test invisible, `SetZoneName`. |
+| `Tests/BaseZoneTestTypes.h` (new) | `UBaseZonePresenceTestComponent` (local gate forced, viewport-free tag), `UBaseZoneTestListener`. |
+| `Tests/BaseZoneTests.cpp` | `NullTide.Base.S3.*` (3). |
+
+### Assets (Unreal MCP)
+
+- `Content/LevelPrototyping/BaseSystem/Materials/MI_BaseZoneRing`: parent `M_BuildPreview`, `Color` (0.95, 0.15, 0.1), `Opacity` 0.35 (the ghost uses 0.4). It was created before the native code that references it.
+- `Content/LevelPrototyping/BaseSystem/UI/W_BaseZoneTag`: parent `UBaseZoneTagWidget`.
+  - `TagBorder` (dark, alpha 0.65, padding 14 × 6) holds `ZoneNameText` (Roboto Bold 18, letter spacing 80, light green, default "Base").
+  - Compiled.
+- `BP_TopDownCharacter`: new `BaseZonePresence` (`TagWidgetClass = W_BaseZoneTag`). Compiled with warnings as errors.
+- No map change: `BaseZone_Start` takes the new strips and its name from class defaults.
+
+### Tests `NullTide.Base.S3.*` (3)
+
+| Test | Covers |
+| --- | --- |
+| `RingGeometry` | For 5 × 5, 3 × 3 and 4 × 6 zones, the 4 strip boxes cover each ring cell exactly once and nothing else. On a spawned zone (also rotated): the strip bounds match, 1-3 cm above the actor, visible in game, `MI_BaseZoneRing`. No collision, overlaps, navigation or shadow; visibility and pawn traces pass through. |
+| `PresenceAndTag` | No timer without a controller or without a local player. Entering a zone: one change and the zone's name. The tag is at the top right (anchors and alignment (1, 0)). Moving within a zone (ring included): nothing. A touching zone: one change and its name. Leaving: null and collapsed. Re-entering reuses the tag. Unpossession stops the timer and forgets the zone. `EndPlay` releases the tag. |
+| `ProductionWiring` | `BP_TopDownCharacter` has exactly one `BaseZonePresence` with `W_BaseZoneTag`. `W_BaseZoneTag` binds `ZoneNameText`. The default zone name is "Base". The default ring material is `MI_BaseZoneRing` and is red. |
+
+### Validation
+
+- **Build (editor closed):** `Result: Succeeded`, 0 warnings. The editor started with no "Failed to find" constructor message.
+- **Tests (in-editor, MCP `StartsWith:NullTide.Base`, before the review fixes):** 8/8 (S2 5, S3 3), 0 warnings.
+
+### Self-review (fresh-context review subagent)
+
+No P1 finding. The reviewer traced in engine source:
+- the strip geometry;
+- absolute transforms on a rotated actor;
+- the placed `BaseZone_Start` taking its new subobjects from the class defaults;
+- traces, the probe and navigation passing through the strips;
+- timer and widget lifetime;
+- broadcast semantics;
+- the top-right slot math (offsets (−24, 24), auto-size);
+- the game-target compile.
+
+All were found clean.
+
+| Finding | Classification | Resolution |
+| --- | --- | --- |
+| P2: a zone destroyed under the player: its weak pointer reads null like "no zone", so the tag stays and no leave event fires (also on unpossession). Not reachable today (zones are never removed). | CONFIRMED | `bInZone` tracks the last lookup; "was in a zone, now none" is a change in `RefreshZone` and `RefreshTimer`. `PresenceAndTag` destroys a zone under the player. |
+| P3: the tag stays bound to the first local controller after a controller swap. | CONFIRMED | `RefreshTimer` drops a tag owned by another player controller and rebuilds it for the new one. |
+| P3: silent failure without `TagWidgetClass` or when `AddToPlayerScreen` fails (and the widget was cached). | CONFIRMED | A warning is logged and nothing is cached, so the next zone change retries. |
+| P3: the test seam never calls `AddToPlayerScreen`. | Accepted | The reviewer traced the production slot order in engine source; the real screen is a PIE step. |
+| P3: the first broadcast can happen during `BeginPlay`, before Blueprint listeners bind. | Accepted (documented) | Listeners read `GetCurrentZone()` when they bind; no Blueprint listens today. |
+| P3: the ConstructorHelpers hard reference to `MI_BaseZoneRing`. | Accepted | This is the project's pattern. The reviewer confirmed that the World Partition cook reruns construction, so the strips' material is a real cook dependency. The asset existed before the code. `BaseSystem/` is committed with the code. |
+| P3: if `M_BuildPreview` disables the depth test, the ring would draw through walls and the character. | REJECTED WITH EVIDENCE | PIE: the ring does not draw over the character or walls. |
+| P3: restart required for the layout change. | REJECTED WITH EVIDENCE | It was a full build with the editor closed, then a restart. |
+
+- **Manual PIE (user, 2026-10-22/23, before the review fixes, which touch only edge cases): 5/5 PASS.**
+  - A red ring around the starter zone.
+  - The ghost is red on the ring and green inside.
+  - "Base" shows at the top right inside the zone and disappears outside.
+  - The tag stays while inventory or a chest is open.
+  - The ring does not draw over the character or walls.
+
+### Validation after the review fixes
+
+- **Build (editor closed):** `NullTideEditor` `Result: Succeeded`, 0 warnings.
+- **Game target:** `NullTide Win64 Development` `Result: Succeeded`.
+- **Tests (command line):** **279/279** Success, 0 failed, `EXIT CODE: 0`; Base S3 3/3.
+- **Cook:** exit 0, `Success - 0 error(s), 2 warning(s)` (the known environment notices). Packages **650 / 7 / 657**: +2, which are `MI_BaseZoneRing` and `W_BaseZoneTag` (the cook writes to the Zen project store, so there are no loose files to list).
+- **Content and World Partition audit:**
+  - modified `BP_TopDownCharacter`;
+  - new `BaseSystem/Materials/MI_BaseZoneRing` and `BaseSystem/UI/W_BaseZoneTag`;
+  - no map change: `__ExternalActors__` 95, `__ExternalObjects__` 3.
+
+## Next Checkpoint
+
+S3 COMPLETE (full automation 279/279, cook PASS, manual PIE 5/5 PASS). Next: S4 NPC foundation, after its detail plan is approved.

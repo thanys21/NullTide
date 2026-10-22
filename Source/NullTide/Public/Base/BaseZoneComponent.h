@@ -33,6 +33,10 @@ public:
 	/** The zone cells without their outermost ring. */
 	static FIntRect ComputeBuildableCells(const FIntRect& ZoneCells);
 
+	/** Shown to the player while inside the zone (S3 base tag). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base|Zone")
+	FText ZoneName = NSLOCTEXT("BaseZone", "DefaultZoneName", "Base");
+
 	/** Zone length (X) and width (Y) in building-grid cells, outer ring included. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Base|Zone", meta = (ClampMin = "3", ClampMax = "1000"))
 	FIntPoint SizeInCells = FIntPoint(15, 15);

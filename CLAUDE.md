@@ -292,7 +292,7 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
 **NPCs (`Npc/`)** — Phase 6 S4 (plan `BASE_PLAN.md`, progress `BASE_PROGRESS.md`)
 - Two kinds of NPC:
   - **Outdoor NPCs** live in their own zone, listed in `UBaseZoneComponent::Residents` by the admin.
-  - **House NPCs** (summoned with an item, need a valid room with a bed, table and chair) are S6.
+  - **House NPCs** (summoned with an item, need a valid room with a bed, table and chair) are S6, which is on hold (user, 2026-10-24).
 - `UNpcDefinition` is an abstract, const UObject (the items pattern), with data-only `NpcSystem/Definitions/NPC_*`. Fields: `NpcName`, `GreetingLines`, `NpcActorClass`, `WalkSpeed`, `IdleTimeMin/Max`; `ValidateNpc` / `IsDataValid`. Production: `NPC_Trader`.
 - `UNpcSubsystem` is the only outdoor-resident authority.
   - On `OnZoneRegistered` (game world, not a client) it spawns each valid resident once on a random interior cell, and sets its definition and home zone before `FinishSpawning`.

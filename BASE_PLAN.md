@@ -102,7 +102,7 @@
 | S3 | Base UX | Boundary visual (flag ghost and building mode), "Base" HUD tag, flag info panel | Boundary actor lifetime and size, HUD tag state | See the area, walk in and out |
 | S4 | NPC foundation | AI modules, `UNpcDefinition`, `ANpcCharacter`, `ANpcAIController` (wander in base), arrival and leaving, talk panel | Arrival and removal with the base, definition validation, talk panel through the real widget; wander logic through a movement seam | The Trader arrives, wanders, faces you, talks |
 | S5 | Trading | Offers data, trade screen, atomic barter | Affordable or not, atomic success and failure (inventory full), one event | Trade Wood for Stone |
-| S6 | House NPCs + closeout | Summon item, room detection, requirements (bed, table, chair, room size), move-in rule; `BASE_REPORT.md` | Room detection cases (open, closed, door, size), requirements | Place the item in a valid room and the NPC moves in |
+| S6 | House NPCs + closeout — **ON HOLD (user, 2026-10-24)** | Summon item, room detection, requirements (bed, table, chair, room size), move-in rule; `BASE_REPORT.md` | Room detection cases (open, closed, door, size), requirements | Place the item in a valid room and the NPC moves in |
 
 Each checkpoint gets its own plan detail, approval, validation, review, PIE and commit, as in Phase 5.
 
@@ -513,7 +513,9 @@ Expected suite: 276 + 3 = 279.
   - add `TraderCamp` (`ABaseZoneActor`, centre cell (7, 0), 5 × 9, `ZoneName` "Trader Camp", `bAllowsBuilding` false, `Residents` [`NPC_Trader`]);
   - the user saves (Ctrl+S): one changed and one new external actor.
 
-## S4.4 S6 scope revised (for later)
+## S4.4 S6 scope revised (for later) — ON HOLD
+
+**Status (user, 2026-10-24): ON HOLD.** "khoan làm NPC trong nhà đi, tạm stop lại trong plan". House NPCs are not planned or built until the user resumes them; the scope below is kept for that time.
 
 S6 becomes house NPCs:
 - a summoning item per NPC;

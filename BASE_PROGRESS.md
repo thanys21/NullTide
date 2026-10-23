@@ -485,4 +485,6 @@ No P1. The commit order and atomicity, pricing and rounding, no resale profit, r
 
 ## Next Checkpoint
 
-S5 COMPLETE (full automation 292/292, cook PASS, manual PIE PASS). Next: S6 house NPCs and the Phase 6 closeout, after its detail plan is approved.
+S5 COMPLETE (full automation 292/292, cook PASS, manual PIE PASS; `c9779c4`).
+
+S6 (house NPCs) is **ON HOLD** (user, 2026-10-24). The next step is to be chosen by the user.

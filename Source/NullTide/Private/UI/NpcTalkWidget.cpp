@@ -15,6 +15,18 @@ void UNpcTalkWidget::NativeOnInitialized()
 	{
 		ByeButton->OnClicked.AddUniqueDynamic(this, &UNpcTalkWidget::HandleByeClicked);
 	}
+	if (TradeButton)
+	{
+		TradeButton->OnClicked.AddUniqueDynamic(this, &UNpcTalkWidget::HandleTradeClicked);
+	}
+}
+
+void UNpcTalkWidget::HandleTradeClicked()
+{
+	if (ANpcCharacter* TalkingNpc = Npc.Get(); TalkingNpc && bTalkOpen)
+	{
+		TalkingNpc->OpenTrade();
+	}
 }
 
 void UNpcTalkWidget::OpenForNpc(ANpcCharacter* InNpc, const FText& NpcName, const FText& Greeting)
@@ -28,6 +40,10 @@ void UNpcTalkWidget::OpenForNpc(ANpcCharacter* InNpc, const FText& NpcName, cons
 	if (GreetingText)
 	{
 		GreetingText->SetText(Greeting);
+	}
+	if (TradeButton)
+	{
+		TradeButton->SetVisibility(InNpc && InNpc->CanOpenTrade() ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
 }
 

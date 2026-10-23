@@ -2,10 +2,16 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Items/ItemDefinition.h"
 #include "Npc/NpcAIController.h"
 #include "Npc/NpcCharacter.h"
 #include "Npc/NpcDefinition.h"
+#include "Npc/NpcTradeTypes.h"
+#include "Player/PlayerStatusHudComponent.h"
+#include "Player/WalletComponent.h"
 #include "UI/NpcTalkWidget.h"
+#include "UI/NpcTradeScreenWidget.h"
+#include "UI/PlayerStatusWidget.h"
 #include "NpcTestTypes.generated.h"
 
 /** Wander controller with the navigation seams scripted (S4): a test world has no nav mesh. */
@@ -67,7 +73,10 @@ public:
 
 	int32 ShowCount = 0;
 
+	int32 FocusCount = 0;
+
 	void SetTalkScreenClass(TSubclassOf<UNpcTalkWidget> InClass) { TalkScreenClass = InClass; }
+	void SetTradeScreenClass(TSubclassOf<UNpcTradeScreenWidget> InClass) { TradeScreenClass = InClass; }
 
 protected:
 	virtual UNpcTalkWidget* CreateTalkWidget(APlayerController& PlayerController) override
@@ -76,6 +85,148 @@ protected:
 	}
 
 	virtual void ShowTalkWidget(APlayerController& PlayerController, UNpcTalkWidget& Widget) override { ++ShowCount; }
+
+	virtual UNpcTradeScreenWidget* CreateTradeWidget(APlayerController& PlayerController) override
+	{
+		return TradeScreenClass ? CreateWidget<UNpcTradeScreenWidget>(GetWorld(), TradeScreenClass) : nullptr;
+	}
+
+	virtual void FocusScreen(APlayerController& PlayerController, UUserWidget& Widget) override { ++FocusCount; }
+};
+
+/** Wallet with a test seam to set the coins directly. */
+UCLASS(Transient, NotBlueprintable)
+class UWalletTestComponent : public UWalletComponent
+{
+	GENERATED_BODY()
+
+public:
+	void TestSetCoins(int32 NewCoins)
+	{
+		SpendCoins(GetCoins());
+		AddCoins(NewCoins);
+	}
+
+	bool TestAdd(int32 Amount) { return AddCoins(Amount); }
+	bool TestSpend(int32 Amount) { return SpendCoins(Amount); }
+};
+
+/** Status HUD with the local-player gate forced and a viewport-free widget. */
+UCLASS(Transient, NotBlueprintable)
+class UPlayerStatusHudTestComponent : public UPlayerStatusHudComponent
+{
+	GENERATED_BODY()
+
+public:
+	bool bTreatAsLocal = true;
+	TSubclassOf<UPlayerStatusWidget> TestWidgetClass;
+
+protected:
+	virtual bool IsLocalPlayerController(const APlayerController& PlayerController) const override { return bTreatAsLocal; }
+
+	virtual UPlayerStatusWidget* CreateStatusWidget(APlayerController& PlayerController) override
+	{
+		return TestWidgetClass ? CreateWidget<UPlayerStatusWidget>(GetWorld(), TestWidgetClass) : nullptr;
+	}
+};
+
+/** Trade test item A: stackable (50), value 4, in the test store. */
+UCLASS(Transient, NotBlueprintable)
+class UTradeTestItemA : public UItemDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UTradeTestItemA();
+};
+
+/** Trade test item B: not stackable, value 10, in the test store. */
+UCLASS(Transient, NotBlueprintable)
+class UTradeTestItemB : public UItemDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UTradeTestItemB();
+};
+
+/** Trade test item C: stackable (50), value 3, sellable but not in the store. */
+UCLASS(Transient, NotBlueprintable)
+class UTradeTestItemC : public UItemDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UTradeTestItemC();
+};
+
+/** Trade test item without a value: not tradable. */
+UCLASS(Transient, NotBlueprintable)
+class UTradeTestItemNoValue : public UItemDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UTradeTestItemNoValue();
+};
+
+/** Records the game clock's events. */
+UCLASS(Transient, NotBlueprintable)
+class UGameClockTestListener : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UFUNCTION()
+	void HandleNewDay(int32 Day) { NewDays.Add(Day); }
+
+	UFUNCTION()
+	void HandlePhaseChanged(int32 Day, bool bNight) { Phases.Add(FIntPoint(Day, bNight ? 1 : 0)); }
+
+	TArray<int32> NewDays;
+	/** (day, night ? 1 : 0) per phase change. */
+	TArray<FIntPoint> Phases;
+};
+
+/** Records OnTradeResult and OnHaggleChanged. */
+UCLASS(Transient, NotBlueprintable)
+class UNpcTradeTestListener : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UFUNCTION()
+	void HandleTradeResult(AActor* Trader, const FNpcTradeQuote& Result)
+	{
+		Results.Add(Result);
+		if (Hook)
+		{
+			Hook();
+		}
+	}
+
+	UFUNCTION()
+	void HandleHaggleChanged(ENpcHaggleResult Result) { Haggles.Add(Result); }
+
+	UFUNCTION()
+	void HandleInventoryChanged(int32 NewRevision)
+	{
+		++InventoryEvents;
+		if (InventoryHook)
+		{
+			InventoryHook();
+		}
+	}
+
+	UFUNCTION()
+	void HandleCoinsChanged(int32 NewCoins) { ++CoinEvents; }
+
+	TArray<FNpcTradeQuote> Results;
+	TArray<ENpcHaggleResult> Haggles;
+	int32 InventoryEvents = 0;
+	int32 CoinEvents = 0;
+	TFunction<void()> Hook;
+	TFunction<void()> InventoryHook;
 };
 
 /** A valid NPC kind for tests: "Tester", two greetings, short idle times. */
@@ -107,4 +258,14 @@ public:
 		NpcName = FText::FromString(TEXT("Broken"));
 		GreetingLines = { FText::FromString(TEXT("...")) };
 	}
+};
+
+/** A store NPC kind for tests: sells items A and B; sell 75%, buy 100%, 3 haggles, 5-20%, 10 s, 16 lines. */
+UCLASS(Transient, NotBlueprintable)
+class UNpcStoreTestDefinition : public UNpcTestDefinition
+{
+	GENERATED_BODY()
+
+public:
+	UNpcStoreTestDefinition();
 };

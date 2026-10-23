@@ -83,7 +83,8 @@ The automation tests are in `Source/NullTide/Private/Tests/`, wrapped in `#if WI
 - `NullTide.Crafting.{C1,C2,C3C4,C5,C6A,C6B,C7,C8A,C8B,C8C}`
 - `NullTide.Building.{B1,B2,B3,B4,B5,B6,B7,B8}`
 - `NullTide.Base.{S2,S3}` (S2 = build zones, S3 = base UX)
-- `NullTide.Npc.{S4}` (S4 = NPC foundation: residents, wander, talk)
+- `NullTide.Npc.{S4,S5}` (S4 = NPC foundation: residents, wander, talk; S5 = trading: wallet, prices, trade, haggle, trade screen)
+- `NullTide.World.{S5}` (S5 = game clock)
 
 Past milestones ran tests through the Unreal MCP automation toolset in a live editor. Some UI and drag-drop tests start and own their own PIE session, and starting a test run ends any PIE session that is already running. To run tests from the command line instead:
 
@@ -314,6 +315,43 @@ All code is in `Source/NullTide/{Public,Private}/<Area>/`.
   - `BaseZone_Start` is centred on cell (0, 0), 21 × 21 (T1).
   - `TraderCamp` is centred on cell (18, 0), 9 × 9 (cells x 14..22, y −4..4; T1), "Trader Camp", no building, residents [`NPC_Trader`].
 - Build.cs: `AIModule`, `GameplayTasks` (public), `NavigationSystem` (private).
+
+**Trading (S5; `Npc/NpcTraderComponent`, `Player/WalletComponent`, `World/GameClockSubsystem`)** — design in `BASE_PLAN.md` S5 (S5.9 notes)
+- **Money:**
+  - `UWalletComponent` (`Wallet` on `BP_TopDownCharacter`, `StartingCoins` 200 as a test aid) holds coins apart from the inventory. They are never negative and are clamped at int32.
+  - Only `UNpcTraderComponent` (a friend) changes them.
+  - `UPlayerStatusHudComponent` (`PlayerStatusHud`, `W_PlayerStatus`) shows coins and "Day N · Day/Night" under the base tag, event-driven.
+- **Clock:** `UGameClockSubsystem`, a 20-minute day then a 10-minute night (constants), on a timer.
+  - The day starts at 1 and advances after the night.
+  - It exposes `OnPhaseChanged` / `OnNewDay`, plus `AdvancePhase` / `AdvanceToNextDay` for tests.
+  - No lighting yet.
+- **Values:** `UItemFragment_TradeValue::Value` (coins) makes an item tradable; all 13 production items have one. The catalog tests count it.
+- **Store data** on `UNpcDefinition`:
+  - `StoreItems` (an unlimited catalog);
+  - `SellRate` 0.75 and `BuyRate` 1.0;
+  - `MaxLinesPerSide` 16;
+  - `HaggleAttemptsPerDay` 3, `HaggleDiscountMin/MaxPercent` 5 / 20, `HaggleTimeLimit` 10 s.
+  - `ValidateStore` forbids a resale profit (`BuyRate × (1 − max) ≥ SellRate`) and a 0% minimum discount.
+- **`UNpcTraderComponent`** (the `Trader` subobject of every `ANpcCharacter`) is the trade authority. Only the NPC's current talk partner can use it.
+  - **Prices:**
+    - `ComputePrices` sums lines per item after refusing lines below 1.
+    - Per side: `SellTotal = floor(Σ value × qty × SellRate)` and `BuyTotal = ceil(Σ value × qty × BuyRate)`.
+    - `Discount = floor(BuyTotal × percent / 100)`; `Net = Sell − (Buy − Discount)`.
+    - A trade worth more than int32 coins is refused.
+  - **`QuoteTrade` / `TryTrade`:** `QuoteTrade` is the exact read-only preflight. `TryTrade` runs: guard → checks (wallet covers −Net, wallet can hold +Net, `CanApplyDefinitionTransaction`) → **one** `TryApplyDefinitionTransaction(Sell, Buy)` (the commit point) → wallet add or spend (cannot fail) → the stored discount is used (one attempt) → one `OnTradeResult`. A nested call returns `TradeInProgress` without notifying.
+  - **Haggling** (state per NPC):
+    - `StartHaggle` gives one problem (+ − × ÷, integer answers) on a 10 s timer. The answer never reaches the UI.
+    - `SubmitHaggleAnswer`: correct stores a random 5–20% discount; wrong or timed out (or ending the talk) uses 1 of 3 daily attempts.
+    - A stored discount survives the talk until a purchase applies it, which uses the attempt. A new day restores attempts and clears it (a lazy day check).
+    - A problem answered on a later day gives and spends nothing.
+- **UI:**
+  - `W_NpcTalk`'s `TradeButton` (shown when `CanOpenTrade`) calls `ANpcCharacter::OpenTrade`, which hides the talk panel and shows `W_NpcTrade` (`UNpcTradeScreenWidget`).
+  - **Columns:** inventory (tradable items), the exchange (You sell / You buy, totals, haggle with a countdown, TRADE / Clear), the store.
+  - **Picking:** a stackable item asks for a quantity (`W_TradeQuantityPicker`); a non-stackable one goes straight in.
+  - Rows are `W_NpcTradeItemRow` (`UNpcTradeItemRowWidget`, non-focusable buttons).
+  - **Closing:** Back returns to the talk (`CloseTrade(true)`). I/Tab/Esc close everything (only Esc while typing an answer; Enter submits).
+  - The screen follows the inventory, the wallet, the trader and the clock.
+  - **Seams:** `CreateTradeWidget`, `FocusScreen` (NPC), `IsLocalPlayerController` / `CreateStatusWidget` (HUD).
 
 **UI (`UI/`)**
 - The C++ widget base classes are inventory and storage screens and slots, plus the drag-drop operation and drag visual. The UMG Blueprints in `Content/LevelPrototyping/InventorySystem/UI/Widgets/` are built on them.

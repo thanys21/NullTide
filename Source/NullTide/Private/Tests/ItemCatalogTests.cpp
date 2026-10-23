@@ -11,6 +11,7 @@
 #include "Items/Fragments/ItemFragment_Resource.h"
 #include "Items/Fragments/ItemFragment_Stackable.h"
 #include "Items/Fragments/ItemFragment_Tool.h"
+#include "Items/Fragments/ItemFragment_TradeValue.h"
 #include "Items/Fragments/ItemFragment_Weapon.h"
 #include "Engine/Texture2D.h"
 #include "Misc/AutomationTest.h"
@@ -103,7 +104,8 @@ bool FItemCatalogTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("No legacy authoring"), Definition->Fragments.IsEmpty());
 	const auto Templates = Definition->GetResolvedFragments();
 	const bool bStackable = IsStackableCatalogItem(Parameters);
-	const int32 ExpectedTotalFragmentCount = Entry->FragmentCount + 1 + (bStackable ? 1 : 0);
+	// Capabilities, world presentation, optional stacking and the trade value (S5: every catalog item is tradable).
+	const int32 ExpectedTotalFragmentCount = Entry->FragmentCount + 1 + (bStackable ? 1 : 0) + 1;
 	TestEqual(TEXT("Exact capabilities, optional stackability, and world presentation"), Templates.Num(), ExpectedTotalFragmentCount);
 	TArray<UObject*> Children;
 	GetObjectsWithOuter(Definition, Children, EGetObjectsFlags::None);
@@ -116,6 +118,7 @@ bool FItemCatalogTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("Stackable catalog definitions use the prototype cap"), Stackable->MaxStackSize, 50);
 	}
+	TestTrue(TEXT("Every catalog item has a trade value (S5)"), UItemFragment_TradeValue::GetTradeValue(Class) > 0);
 	TArray<FString> Before;
 	for (const UItemFragment* Fragment : Templates)
 	{

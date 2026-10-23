@@ -306,7 +306,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FStorageUXSlotInputMappingTest::RunTest(const FString& Parameters)
 {
 	struct FCase { FKey Button; bool bShift; bool bCtrl; EStorageSlotAction Expected; const TCHAR* Name; };
-	const FCase Cases[] = {
+	// Not "Cases": InventoryUITests.cpp has a file-scope Cases, and unity builds can share a translation unit.
+	const FCase InputCases[] = {
 		{ EKeys::LeftMouseButton, false, false, EStorageSlotAction::Select, TEXT("LMB selects") },
 		{ EKeys::LeftMouseButton, true, false, EStorageSlotAction::MoveStack, TEXT("Shift + LMB moves the stack") },
 		{ EKeys::LeftMouseButton, false, true, EStorageSlotAction::MoveAllOfItem, TEXT("Ctrl + LMB moves every stack of the item") },
@@ -317,7 +318,7 @@ bool FStorageUXSlotInputMappingTest::RunTest(const FString& Parameters)
 		{ EKeys::RightMouseButton, true, true, EStorageSlotAction::None, TEXT("Shift + Ctrl + RMB does nothing") },
 		{ EKeys::MiddleMouseButton, true, false, EStorageSlotAction::None, TEXT("Other buttons do nothing") },
 	};
-	for (const FCase& Case : Cases)
+	for (const FCase& Case : InputCases)
 	{
 		TestEqual(Case.Name, UStorageSlotWidget::ResolveSlotAction(Case.Button, Case.bShift, Case.bCtrl), Case.Expected);
 	}

@@ -74,7 +74,7 @@ bool FWorldPresentationCatalogTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Complete canonical definition validates: ") + Diagnostic, Definition->ValidateFragments(Diagnostic));
 	const TArray<UItemFragment*> Fragments = Definition->GetResolvedFragments();
 	TestEqual(TEXT("Capabilities, optional stacking, plus one presentation"), Fragments.Num(),
-		Entry->G1FragmentCount + 1 + (IsStackablePresentationItem(Parameters) ? 1 : 0));
+		Entry->G1FragmentCount + 1 + (IsStackablePresentationItem(Parameters) ? 1 : 0) + /* trade value, S5 */ 1);
 
 	int32 PresentationCount = 0;
 	const UItemFragment_WorldPresentation* Presentation = nullptr;

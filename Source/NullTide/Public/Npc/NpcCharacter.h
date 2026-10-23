@@ -8,6 +8,9 @@ class APlayerController;
 class UBaseZoneComponent;
 class UNpcDefinition;
 class UNpcTalkWidget;
+class UNpcTraderComponent;
+class UNpcTradeScreenWidget;
+class UUserWidget;
 class UTextRenderComponent;
 
 /** Read-only outcome of a talk request, in check order. */
@@ -65,9 +68,28 @@ public:
 	/** The talk ended (the panel closed): the AI walks again. */
 	void EndTalk();
 
+	/** From the talk panel: opens the trade screen for the talk partner (the talk stays open, its panel hidden). */
+	UFUNCTION(BlueprintCallable, Category = "NPC|Trade")
+	bool OpenTrade();
+
+	/** Closes the trade screen: back to the talk panel, or ends the whole talk. */
+	void CloseTrade(bool bReturnToTalk);
+
+	bool IsTrading() const { return TradeWidget != nullptr; }
+
+	/** Whether this NPC offers trading (a store and a trade screen class). */
+	bool CanOpenTrade() const;
+	UNpcTradeScreenWidget* GetTradeWidget() const { return TradeWidget; }
+
 	bool IsTalking() const { return TalkWidget != nullptr; }
 	UNpcTalkWidget* GetTalkWidget() const { return TalkWidget; }
 	UTextRenderComponent* GetNameLabel() const { return NameLabel; }
+
+	/** The pawn this NPC is talking to, while a talk is open. */
+	APawn* GetTalkPartner() const { return IsTalking() ? TalkPartner.Get() : nullptr; }
+
+	/** Store, trading and haggling (S5); inactive for an NPC without a store. */
+	UNpcTraderComponent* GetTrader() const { return Trader; }
 
 	/** Horizontal distance within which a player can start talking. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "NPC", meta = (ClampMin = "1.0", Units = "cm"))
@@ -86,20 +108,39 @@ protected:
 	/** Shows the panel with the cursor, UI-only input and focus. Seam for tests. */
 	virtual void ShowTalkWidget(APlayerController& PlayerController, UNpcTalkWidget& Widget);
 
+	/** Creates the trade screen for the player. Seam for tests. */
+	virtual UNpcTradeScreenWidget* CreateTradeWidget(APlayerController& PlayerController);
+
+	/** Shows a screen with the cursor, UI-only input and focus (the trade screen, or the talk panel again). Seam for tests. */
+	virtual void FocusScreen(APlayerController& PlayerController, UUserWidget& Widget);
+
 	UPROPERTY(EditDefaultsOnly, Category = "NPC|UI")
 	TSubclassOf<UNpcTalkWidget> TalkScreenClass;
+
+	UPROPERTY(EditDefaultsOnly, Category = "NPC|UI")
+	TSubclassOf<UNpcTradeScreenWidget> TradeScreenClass;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "NPC")
 	TObjectPtr<UTextRenderComponent> NameLabel;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "NPC")
+	TObjectPtr<UNpcTraderComponent> Trader;
+
 private:
 	void ApplyDefinition();
+
+	/** Removes the trade screen without touching the talk panel. */
+	void DismissTradeWidget();
 
 	UPROPERTY(VisibleInstanceOnly, Category = "NPC")
 	TSubclassOf<UNpcDefinition> NpcDefinition;
 
 	TWeakObjectPtr<const UBaseZoneComponent> HomeZone;
+	TWeakObjectPtr<APawn> TalkPartner;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UNpcTalkWidget> TalkWidget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UNpcTradeScreenWidget> TradeWidget;
 };

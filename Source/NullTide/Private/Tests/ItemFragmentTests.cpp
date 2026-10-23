@@ -210,7 +210,8 @@ bool FInventoryFragmentValidationTest::RunTest(const FString& Case)
 			const UItemDefinition* Authored = Class->GetDefaultObject<UItemDefinition>();
 			const bool bWood = FString(Name) == TEXT("Wood");
 			const int32 ExpectedG1Count = bWood ? 1 : 3;
-			const int32 ExpectedCount = ExpectedG1Count + 1 + (bWood ? 1 : 0);
+			// Plus world presentation, Wood's stacking and the trade value (S5).
+			const int32 ExpectedCount = ExpectedG1Count + 1 + (bWood ? 1 : 0) + 1;
 			TestTrue(TEXT("Authored canonical data valid"), Authored->ValidateFragments(Diagnostic));
 			TestTrue(TEXT("Legacy source empty"), Authored->Fragments.IsEmpty());
 			const auto Before = Authored->GetResolvedFragments();

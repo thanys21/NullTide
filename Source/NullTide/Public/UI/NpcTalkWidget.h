@@ -30,6 +30,7 @@ public:
 	FText GetNpcNameText() const;
 	FText GetGreetingText() const;
 	bool HasRequiredWidgets() const { return NpcNameText && GreetingText && ByeButton; }
+	UButton* GetTradeButton() const { return TradeButton; }
 
 	static bool IsCloseKey(const FKey& Key);
 
@@ -48,9 +49,16 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "NPC|UI", meta = (BindWidget))
 	TObjectPtr<UButton> ByeButton;
 
+	/** Opens the trade screen (S5); shown only when the NPC trades. */
+	UPROPERTY(BlueprintReadOnly, Category = "NPC|UI", meta = (BindWidgetOptional))
+	TObjectPtr<UButton> TradeButton;
+
 private:
 	UFUNCTION()
 	void HandleByeClicked();
+
+	UFUNCTION()
+	void HandleTradeClicked();
 
 	/** Restores game input and ends the NPC's talk (the panel is already closed). */
 	void FinishTalk();

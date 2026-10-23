@@ -389,4 +389,100 @@ S4 COMPLETE (full automation 284/284, cook PASS, manual PIE PASS; `965439c`).
 
 ## Next Checkpoint
 
-T1 COMPLETE (tests 284/284, cook PASS, manual PIE PASS). Next: S5 trading, after its detail plan is approved.
+T1 COMPLETE (tests 284/284, cook PASS, manual PIE PASS; `5c7403c`).
+
+## S5 - Trading (Shop, Wallet, Haggling)
+
+### Baseline and Scope
+
+- **Baseline:** `5c7403c` (T1). Full automation 284/284, cook 655/7/662.
+- **Scope:** `BASE_PLAN.md` S5, approved 2026-10-23 (revision 3; C-1 to C-3 in S5.4; deviations in S5.9).
+  - A three-column trade screen and a coin wallet with a HUD.
+  - 75% sell / 100% buy, and an unlimited store.
+  - Haggling: 10 s, 5–20%, 3 attempts per NPC per day.
+  - A 20 + 10 minute day/night clock.
+
+### Source
+
+| File | Content |
+| --- | --- |
+| `World/GameClockSubsystem.*` (new area `World/`) | Day 1200 s / night 600 s on a timer (no tick); `GetDay`, `IsNight`, `GetPhaseProgress01`, `OnPhaseChanged`, `OnNewDay`; `StartClock` (play begins it), `AdvancePhase`, `AdvanceToNextDay`; broadcast values captured against re-entry. |
+| `Player/WalletComponent.*` | Coins, never negative, clamped at int32; `OnCoinsChanged`; `StartingCoins`; the mutators are reachable only by `UNpcTraderComponent` (friend). |
+| `Player/PlayerStatusHudComponent.*`, `UI/PlayerStatusWidget.*` | Coins and "Day N · Day/Night" at the top right under the base tag, for the local player; refreshed by the wallet and clock events. |
+| `Items/Fragments/ItemFragment_TradeValue.*` | `Value` ≥ 1 coin; `GetTradeValue(Item)` (0 = not tradable). |
+| `Npc/NpcDefinition.*` | Store data (`StoreItems`, `SellRate`, `BuyRate`, `MaxLinesPerSide`, `HaggleAttemptsPerDay`, `HaggleDiscountMin/MaxPercent`, `HaggleTimeLimit`); `ValidateStore` (tradable unique catalog, rates, limits, a minimum discount ≥ 1%, no resale profit). |
+| `Npc/NpcTradeTypes.h` | `ENpcTradeResult`, `FNpcTradeRequest`, `FNpcTradeQuote`, `ENpcHaggleResult`, `FNpcHaggleState`. |
+| `Npc/NpcTraderComponent.*` | The trade authority. Pure `ComputePrices` (lines ≥ 1 checked before merging, per-side floor/ceil, overflow refused); `QuoteTrade` (exact preflight); `TryTrade` (guard → checks → one inventory transaction → wallet → discount used → one result). Haggling: `MakeProblem`, `StartHaggle`, `SubmitHaggleAnswer`, `ExpireHaggleProblem` (10 s timer), lazy day refresh, problem day. |
+| `Npc/NpcCharacter.*` | Talk partner; `Trader` subobject; `OpenTrade` / `CloseTrade` / `DismissTradeWidget`; `CanOpenTrade`; `TradeScreenClass`; seams `CreateTradeWidget`, `FocusScreen`; ending a talk expires an open problem. |
+| `UI/NpcTalkWidget.*` | Optional `TradeButton`, shown only when the NPC trades. |
+| `UI/NpcTradeScreenWidget.*`, `UI/NpcTradeItemRowWidget.*`, `UI/TradeQuantityPickerWidget.*` | The trade screen (three columns, baskets, totals, haggling with a countdown, TRADE/Clear/Back, I/Tab/Esc unless typing, Enter submits); a reusable row; the quantity picker. |
+| `Tests/NpcTradeTests.cpp` (new), `Tests/NpcTestTypes.h` | 8 tests; test items A/B/C/no value, a store definition, wallet/HUD seams, listeners. |
+| `Tests/ItemCatalogTests.cpp`, `ItemFragmentTests.cpp`, `WorldPresentationTests.cpp` | The exact fragment counts include the trade value; every catalog item must have one. |
+| `Tests/StorageUXTests.cpp` | Local `Cases` renamed to `InputCases` (a unity-build clash with `InventoryUITests.cpp`'s file-scope `Cases`). |
+
+### Assets (Unreal MCP)
+
+- **Trade values on the 13 items:** a `UItemFragment_TradeValue` instanced subobject appended to `ItemFragments` (the existing fragments are kept). Wood 2, Stone 3, Scrap 5, Meat 6, Water Bottle 4, Sandwich 12, Health Potion 25, Wood Arrow 1, Wood Bow 40, Axe 30, Pickaxe 30, Short Sword 45, Long Sword 80. Compiled with warnings as errors and saved.
+- **`NPC_Trader`:** the catalog Stone, Scrap, Health Potion, Sandwich, Wood Arrow, Wood Bow, Axe, Pickaxe (rates and haggling at the class defaults).
+- **New widgets:**
+  - `BaseSystem/UI/W_PlayerStatus`: `CoinsText` gold, `DayText`.
+  - `NpcSystem/UI/W_NpcTradeItemRow`: `RowButton` non-focusable with icon, name, quantity and price.
+  - `NpcSystem/UI/W_TradeQuantityPicker`: title, `QuantityBox` spin box, OK / Cancel.
+  - `NpcSystem/UI/W_NpcTrade`: a 1200 × 650 window with header and Back, three columns of scroll lists, totals, the haggle row and answer row, feedback, Clear / TRADE, and the picker on top; `RowClass` = `W_NpcTradeItemRow`.
+- **`W_NpcTalk`:** a `TradeButton` above Bye.
+- **`BP_Npc_Trader`:** `TradeScreenClass` = `W_NpcTrade`.
+- **`BP_TopDownCharacter`:** `Wallet` (`StartingCoins` 200) and `PlayerStatusHud` (`W_PlayerStatus`).
+- No map change.
+
+### Tests (8)
+
+| Test | Covers |
+| --- | --- |
+| `World.S5.GameClock` | Lengths; day 1; idempotent start; day → night → day 2 with one `OnNewDay`; next day from day and from night. |
+| `Npc.S5.Wallet` | Starting coins; add, spend, zero, negative, overspend, never negative, the int32 clamp, one event per change; the status HUD shows coins and day for a local player, follows changes and the night, and goes away on unpossession. |
+| `Npc.S5.TradeData` | Fragment validation; trade values; the test store is valid; an NPC without a store; 12 invalid store cases each refused (including a 0% minimum and a resale profit). |
+| `Npc.S5.Pricing` | Sell, buy, mixed with a discount, cheap rounding, summed lines, discount rounding; empty, not tradable, not in the store, zero or negative lines, overflow, too many lines, the default 16. |
+| `Npc.S5.TradeTransaction` | Not talking, another pawn; sell, buy, both (one revision, one inventory and coin event, one result each); insufficient items, not tradable, not in the store, empty, too few coins, a wallet that cannot hold a sale; full inventory refused, then a sale that frees the slot; a nested trade refused without a notification; after the talk. |
+| `Npc.S5.Haggle` | 400 problems in range and reproducible; start, already active, wrong (−1), no problem, timed out (−1), correct (5–20%, no attempt used), stored blocks re-haggling, kept after the talk, a sale does not use it, a purchase uses it once and spends the last attempt, no attempts left, another NPC independent, a new day restores, leaving a talk with a problem uses it, a problem answered the next day gives nothing and spends nothing, a stored discount cleared by a new day. |
+| `Npc.S5.TradeScreen` | Trade hidden without a store; the screen opens and hides the talk; left lists tradable items only, right the catalog; the picker for stackables (OK / Cancel), non-stackables straight in; totals match the NPC; haggling on the screen; whole-number answers only; TRADE trades once with feedback; too few coins shows the reason; removing a line; a new day refreshes the totals and haggling while open; Back, Close, the close keys; the NPC ending play releases the screen. |
+| `Npc.S5.ProductionWiring` | The 13 values; `NPC_Trader`'s catalog, rates and haggling; `BP_Npc_Trader` → `W_NpcTrade` → `W_NpcTradeItemRow`; every widget binds; `W_NpcTalk` has Trade; the player has one wallet (200) and one status HUD (`W_PlayerStatus`). |
+
+### Validation
+
+- **Build:**
+  - The first build failed: `UNpcStoreTestDefinition` was declared before its base; a member name was shadowed; `UButton::SetIsFocusable` does not exist in 5.8 (now set in the asset); `ItemDefinition.h` includes were missing; and there was the unity `Cases` clash.
+  - All were fixed. The last build is `Result: Succeeded` with 0 warnings; the deprecated `EKeys::Virtual_Accept` was dropped.
+- **In-editor (MCP), before the review fixes:** `NullTide.Npc` + `World` + `Base` 21/21.
+- **Command line, after the review fixes:**
+  - The first full run was 265 passed, 27 failed. The item catalog, world presentation and authored-template tests assert exact fragment counts, which now include the trade value.
+  - The expectations were updated, and a "has a trade value" check was added.
+  - Then **292/292**, `EXIT CODE: 0` (S5 8/8).
+- **Cook:** exit 0, 0 errors, the 2 known warnings. Packages **659 / 7 / 666**: +4, the new widgets.
+- **Game target:** `NullTide Win64 Development` `Result: Succeeded`.
+- **Content and World Partition audit:**
+  - 13 items, `NPC_Trader`, `BP_Npc_Trader`, `W_NpcTalk` and `BP_TopDownCharacter` modified;
+  - 4 new widgets;
+  - no map change: `__ExternalActors__` 46, `__ExternalObjects__` 3.
+- **Manual PIE (user, 2026-10-23/24):** tested; no issue reported.
+
+### Self-review (fresh-context review subagent)
+
+No P1. The commit order and atomicity, pricing and rounding, no resale profit, re-entrancy, haggle abuse, widget lifetimes, the HUD, the clock and the game-target compile were traced and found clean.
+
+| Finding | Classification | Resolution |
+| --- | --- | --- |
+| P2: a day change while the screen is open: the totals still show yesterday's discount, and TRADE charges more. | CONFIRMED | The screen follows `OnPhaseChanged` (totals and haggling). `TradeScreen` covers it. |
+| P3: a problem from day N answered or expired on day N+1 spends or earns on day N+1. | CONFIRMED | The problem day is stored; such an answer gives nothing and spends nothing. `Haggle` covers it. |
+| P3: coins lost or undercharged at the int32 cap. | CONFIRMED | A side worth more than int32, or a sale the wallet cannot hold, is refused (`InvalidQuantity`). |
+| P3: negative lines cancelled out when summed. | CONFIRMED | Every line must be ≥ 1 before merging. |
+| P3: a 0% minimum discount allowed endless re-haggles. | CONFIRMED | The minimum must be ≥ 1% when attempts > 0. |
+| P3: decimals accepted as answers ("12.9" → 12). | CONFIRMED | `IsWholeNumber`. |
+| P3: focus stayed on the collapsed answer box (I/Tab stopped closing). | CONFIRMED | The screen takes focus back when the problem ends. |
+| P3: the screen passed its own `Request` into `TryTrade` while its handlers rewrote it. | CONFIRMED | A copy is sent. |
+| P3: `AdvancePhase` re-entry could misreport the day. | CONFIRMED | The values are captured before broadcasting. |
+| P3: code vs plan naming and shape differences. | CONFIRMED | Recorded in `BASE_PLAN.md` S5.9. |
+| Test gaps: timer-driven expiry, the countdown text, the key routing. | Accepted | Expiry is tested through the timer's handler; the countdown and keys are PIE steps. |
+
+## Next Checkpoint
+
+S5 COMPLETE (full automation 292/292, cook PASS, manual PIE PASS). Next: S6 house NPCs and the Phase 6 closeout, after its detail plan is approved.

@@ -615,3 +615,231 @@ Expected suite: 279 + 5 = 284.
 - `git status` / World Partition audit (deleted and added external actors listed);
 - PIE: walk freely, the bumps refuse building with their reasons, the Trader walks in an empty camp.
 
+---
+
+# S5 - Trading (Shop, Wallet, Haggling): Detail Plan
+
+**Status:** COMPLETE (manual PIE PASS). APPROVED (user, 2026-10-23; C-1 to C-3 confirmed in S5.4).
+- Implementation runs in internal steps: clock and wallet → data and pricing → trade and haggle → UI.
+- **Baseline:** `5c7403c` (T1). Full automation 284/284, cook 655/7/662.
+
+## S5.1 User direction (2026-10-23)
+
+- **Trade screen:** your inventory on the left; the exchange area in the middle (what you sell, what you buy); the Trader's store on the right.
+- **Money:** coins, kept **apart from the inventory** in a wallet and shown on the player's HUD ("làm chung luôn": in this checkpoint, no split).
+- **Rates:** you sell at **75%** of an item's value and buy at **100%**.
+- **Store:** a fixed catalog, unlimited.
+- **Haggling:**
+  - solve one random simple problem (+ − × ÷) within **10 seconds**;
+  - a correct answer gives a **random 5–20% discount**;
+  - **3 haggled trades per day per NPC**, each with its own random discount;
+  - the result is **kept per NPC** after the talk ends, until a trade uses it or a **new day** resets it.
+- **Limits per trade:** up to **16 item types / stacks** on the selling side and 16 on the buying side.
+- **Clicks:** clicking a stackable item asks for a **quantity**; a non-stackable item goes straight into the trade.
+
+## S5.2 Audit (2026-10-23)
+
+| Fact | Source | Consequence |
+| --- | --- | --- |
+| `TryApplyDefinitionTransaction` is atomic; `CanApplyDefinitionTransaction` is its exact preflight. | `InventoryComponent.h:54-68` | The item part of a trade is one inventory transaction. |
+| Building pays inside a sequence whose last fallible step is the commit point ("activate first, pay last"); nothing fallible runs after it. | `CLAUDE.md` (B2); `ConstructionComponent.cpp` | Wallet + inventory: validate both, commit the inventory (the commit point), then apply the wallet change, which cannot fail at that point. |
+| Capabilities are fragments; `UItemFragment_Stackable` holds `MaxStackSize`. | `Items/Fragments/` | `UItemFragment_TradeValue` marks tradable items. Stackability decides whether the quantity picker shows. |
+| There is no day or clock system. | `Source/NullTide/Public` (no Day/Clock types) | A minimal game clock is needed for "per day" and "new day". |
+| The talk panel (S4) ends the NPC's talk on close; the base tag (S3) sits at the top right. | `NpcTalkWidget.*`; `BaseZonePresenceComponent.*` | The trade screen opens from the talk panel. The coin readout sits on the HUD under the base tag. |
+
+## S5.3 Design
+
+**Game clock (minimal, new area `World/`)**
+- `UGameClockSubsystem` (`UWorldSubsystem`):
+  - `GetDay()` (starts at 1);
+  - `GetTimeOfDay01()`;
+  - `OnNewDay`, driven by a timer (no tick);
+  - `DayLengthSeconds` (C-1, recommended **20 real minutes**).
+- Test seam: `AdvanceToNextDay()`. No save (Phase 7), no lighting change.
+
+**Wallet**
+- `UWalletComponent` on `BP_TopDownCharacter`: `GetCoins()` (int32 ≥ 0) and `OnCoinsChanged`.
+- Its mutators (`TryAddCoins`, `TrySpendCoins`) are reachable only by the trade authority (a friend), the same rule as inventory mutators.
+- `StartingCoins` is a test aid: 0 in code, **200** on `BP_TopDownCharacter` for PIE.
+- **HUD readout** (`UWalletHudWidget` / `W_WalletHud`): the coin count with an icon, under the base tag, always visible for the local player, refreshed by `OnCoinsChanged`. The component's timer-free pattern follows S3.
+
+**Item values**
+- `UItemFragment_TradeValue` (`Value` ≥ 1 coin) on the 13 production items.
+- Starting values (data):
+  - Wood 2, Stone 3, Scrap 5, Meat 6, Water Bottle 4, Sandwich 12;
+  - Health Potion 25, Wood Arrow 1, Wood Bow 40, Axe 30, Pickaxe 30, Short Sword 45, Long Sword 80.
+
+**NPC store data** (`UNpcDefinition`)
+- `StoreItems`, the catalog: Stone, Scrap, Health Potion, Sandwich, Wood Arrow, Wood Bow, Axe, Pickaxe.
+- `SellRate` 0.75 and `BuyRate` 1.0.
+- `HaggleTradesPerDay` 3, `HaggleDiscountMin/Max` 0.05 / 0.20, `HaggleTimeLimit` 10 s.
+- `MaxLinesPerSide` 16.
+- `ValidateNpc` checks every field.
+
+**Prices** (per side totals)
+- `SellTotal = floor(Σ value × qty × 0.75)` and `BuyTotal = ceil(Σ value × qty × 1.0)`.
+- `Discount = floor(BuyTotal × d)`, where `d` is the stored haggle roll (5–20%).
+- `Net = SellTotal − (BuyTotal − Discount)`. Positive means coins are received; negative means coins are paid.
+- With the maximum discount, buying costs 80% against selling at 75%, so buying and reselling never makes a profit.
+
+**Trade authority** (native, on the NPC; only the talk partner)
+- `QuoteTrade(Trader, Request)` is the exact read-only preflight. `TryTrade(Trader, Request)` commits.
+- Checks:
+  - the talk partner, with an inventory and a wallet;
+  - 1–16 lines per side (stacks are summed by item);
+  - every sold item has a value; every bought item is in the catalog;
+  - quantities ≥ 1;
+  - the wallet covers `−Net`;
+  - the inventory preflight (sold items present; bought items fit after the removals).
+- **Commit order:** guard → the checks → **one** `TryApplyDefinitionTransaction(Sell, Buy)` (the commit point) → the wallet adds or spends `Net` (cannot fail: the amount was checked under the guard, and the wallet has no other writer here) → the stored discount, if used, is consumed → `OnTradeResult` once.
+- Results (`ENpcTradeResult`): `Success`, `NotTalking`, `NoInventory`, `NoWallet`, `EmptyTrade`, `TooManyLines`, `NotTradable`, `NotInStore`, `InvalidQuantity`, `NotEnoughCoins`, `InsufficientItems`, `InventoryFull`, `InventoryBusy`, `TradeInProgress`.
+
+**Haggling** (authority on the NPC, kept per NPC)
+- State on the NPC:
+  - `HaggleDay`;
+  - `HaggleTradesUsedToday` (0–3);
+  - the stored discount (none, or 5–20%);
+  - the active problem (the answer and its deadline), which stays on the NPC and never goes to the UI.
+- `StartHaggle(Trader)` works for the talk partner when no discount is stored and fewer than 3 haggled trades happened today.
+  - It creates one problem: a + b or a − b (10–99, never negative), a × b (2–12 × 2–9), or a ÷ b (an exact quotient 2–12, divisor 2–9).
+  - It starts a 10 s world timer.
+- `SubmitHaggleAnswer(Trader, Value)`:
+  - correct and in time → roll the discount `d` ∈ [5%, 20%] and store it;
+  - wrong or timed out → no discount (C-2: the attempt is used up).
+- A stored discount survives the end of the talk and applies to this NPC's next trade, which consumes it and counts 1 of the 3 daily haggled trades.
+- `OnNewDay` clears the stored discount and resets the count.
+- A seeded `FRandomStream` keeps it testable.
+
+**UI**
+- **The talk panel** gets a **Trade** button when the NPC has a store.
+- **`W_NpcTrade`** (UI-only; `UNpcTradeScreenWidget`) has three columns.
+  - **Left – Your inventory:** the tradable stacks (name, quantity, sell value).
+  - **Middle – Exchange:**
+    - "You sell" and "You buy" (at most 16 lines each; LMB removes a line);
+    - totals: sell (75%), buy, discount, net (+ receive / − pay), wallet;
+    - **Haggle**: the problem, a 10-second countdown, the answer box and OK, then the result ("−12%" or "No discount"; "2/3 haggled trades left today");
+    - **TRADE** (disabled with its reason), **Clear**, and feedback.
+  - **Right – Store:** the catalog with buy prices.
+  - **Picking:** a non-stackable item moves straight in. A stackable item opens a quantity picker (a slider plus a number, 1..available when selling, 1..stack size when buying; OK / Cancel).
+  - **Back** returns to the talk; Esc/I/Tab close everything. Lists refresh on `OnInventoryChanged` and `OnCoinsChanged`.
+- **Widgets:**
+  - `UNpcTradeScreenWidget`;
+  - `UNpcTradeItemRowWidget` (a reusable row);
+  - `UTradeQuantityPickerWidget`;
+  - `UWalletHudWidget`.
+
+  Test seams: viewport-free creation and explicit trader, wallet and clock.
+
+**Content (MCP)**
+- trade values on the 13 items;
+- `NPC_Trader`'s store data;
+- `W_NpcTrade`, `W_NpcTradeItemRow`, `W_TradeQuantityPicker`, `W_WalletHud`;
+- the Trade button in `W_NpcTalk`;
+- `WalletComponent` (`StartingCoins` 200) and the wallet HUD on `BP_TopDownCharacter`.
+
+There is no coin item and no map change.
+
+## S5.4 Decisions (user) and open points
+
+Recorded from 2026-10-23: section S5.1. Confirmed by the user (2026-10-23):
+- **C-1 Day cycle:**
+  - each cycle is a **day of 20 real minutes, then a night of 10 real minutes**;
+  - the day number advances when a new day starts (after the night);
+  - the HUD shows "Day N" (and Day/Night) clearly, for save/load later.
+  - The clock exposes `GetDay()`, `IsNight()`, `GetPhaseProgress01()`, `OnNewDay` and `OnPhaseChanged`.
+  - The night has no lighting change in S5 (out of scope; a later visual pass).
+- **C-2 Haggle attempts:** **3 per NPC per day.**
+  - A **wrong or timed-out answer uses 1** and, if attempts remain, the player may try a new random problem.
+  - A **correct answer** stores the discount. The attempt is **used when a trade applies the discount**, and then a new problem can be tried if attempts remain.
+  - Only one discount is stored at a time. A new day restores 3 attempts and clears a stored discount.
+- **C-3:** trading itself is unlimited; only haggling is limited.
+
+**Status update:** APPROVED (user, 2026-10-23; the plan with C-1 to C-3 as confirmed).
+
+## S5.5 Invariants
+
+- **One trade:** guard → checks → one inventory transaction (the commit point) → an infallible wallet change → discount consumption → one `OnTradeResult`. Any failure before the commit changes nothing.
+- The wallet is never negative, and only the trade authority changes it.
+- Prices, the haggle problem, its answer, the timer and the discount live on the NPC (authority), never trusted from the UI. `QuoteTrade` is exact and read-only.
+- At most 3 haggle attempts per NPC per day (a wrong or timed-out answer uses one; a stored discount uses one when a trade applies it), each discount in [5%, 20%]. A stored discount applies once.
+- No tick: the clock and the haggle timer are timers.
+
+## S5.6 Tests (`NullTide.Npc.S5.*` and `NullTide.World.S5.*`, planned 8)
+
+- **`World.S5.GameClock`:**
+  - the day starts at 1;
+  - the timer advances the day;
+  - `OnNewDay` fires once per day;
+  - `AdvanceToNextDay` works.
+- **`Npc.S5.Wallet`:**
+  - starting coins;
+  - add and spend, never negative;
+  - one `OnCoinsChanged` per change;
+  - no public mutator;
+  - the HUD readout updates.
+- **`Npc.S5.TradeData`:**
+  - fragment and NPC validation (each field);
+  - the production values and store.
+- **`Npc.S5.Pricing`:**
+  - sell, buy, discount and net;
+  - rounding on cheap items;
+  - the 16-line limit;
+  - summing duplicate stacks.
+- **`Npc.S5.TradeTransaction`:**
+  - selling, buying, both;
+  - not enough coins or items, the reward does not fit, and paying frees the slot;
+  - not the partner; not tradable or not in the store; empty; too many lines;
+  - a nested call;
+  - one inventory revision, one wallet change and one result;
+  - `QuoteTrade` matches `TryTrade` and changes nothing.
+- **`Npc.S5.Haggle`:**
+  - problems are integers in range and reproducible;
+  - correct within 10 s → a discount in [5, 20]%;
+  - wrong or timed out → none (per C-2);
+  - the discount survives the end of the talk and is used by the next trade only;
+  - 3 haggled trades per day, then refused;
+  - a new day resets it;
+  - per NPC (two NPCs do not share).
+- **`Npc.S5.TradeScreen`** (the real widgets, viewport-free):
+  - the columns;
+  - a non-stackable item moves straight in; a stackable one opens the picker, and OK / Cancel work;
+  - the 16-line cap;
+  - the totals match `QuoteTrade`;
+  - TRADE is disabled with its reason, then trades once;
+  - the haggle flow with the countdown;
+  - Back, the close keys, and the NPC ending play.
+- **`Npc.S5.ProductionWiring`:** the widget bindings; the Trade button; the wallet (200) and HUD on the player; the store data.
+
+Expected suite: 284 + 8 = 292.
+
+## S5.7 PIE
+
+1. The HUD shows 200 coins (and Day 1).
+2. Talk → Trade: three columns, store prices.
+3. Sell 20 Wood (the picker asks for 20): +30 coins on TRADE.
+4. Haggle: solve within 10 s → "−N%". Close and talk again: the discount is still there. Buy a Health Potion at the discounted price.
+5. Let the timer run out: "No discount". After 3 haggled trades: "No haggles left today".
+6. Too few coins: TRADE disabled, "Not enough coins". Esc: the Trader walks again.
+
+## S5.8 Self-Critique (open risks)
+
+- **R-S5-1 Two stores (inventory + wallet):** atomic by ordering. The wallet change after the inventory commit cannot fail (the amount was checked under the guard, the wallet has no other writer here, and it is clamped at int32 max). Tested by the transaction cases.
+- **R-S5-2 Exploits:** buying at 80% at best against selling at 75% means no profit loop. Retrying a haggle (C-2) is bounded by 10 s and fresh problems.
+- **R-S5-3 Day length** is a placeholder until a real day/night cycle exists; it is data.
+- **R-S5-4 Screen size:** three columns need about 1200 × 650 px; this is checked in PIE.
+- **R-S5-5 Fragments on 13 items** via MCP (instanced arrays on CDOs). If MCP cannot add them, a manual step may be needed.
+- **R-S5-6 Size:** this is the largest checkpoint of Phase 6 (by user choice, in one go). It is implemented in internal steps (clock and wallet → data and pricing → trade and haggle → UI), each built and tested before the next.
+- **R-S5-7 Persistence:** coins, the day and the haggle state reset when play restarts until save/load (Phase 7).
+
+## S5.9 Implementation notes (deviations from S5.3, within the approved behaviour)
+
+- **The HUD readout** is `UPlayerStatusHudComponent` + `UPlayerStatusWidget` (`BaseSystem/UI/W_PlayerStatus`), showing both coins and "Day N · Day/Night", instead of `UWalletHudWidget` / `W_WalletHud`.
+- **The haggle limit** is `HaggleAttemptsPerDay` (C-2 counts attempts, not haggled trades). Discounts are whole percents (`HaggleDiscountMin/MaxPercent` 5 / 20), not fractions.
+- **Day reset is lazy:** each haggle call compares the stored day with the clock's day. This replaces an `OnNewDay` binding per NPC: no binding lifetimes, and the same effect.
+  - A problem given on one day and answered or expired on the next neither earns a discount nor spends the new day's attempt (self-review).
+- **The day and night lengths** are code constants on `UGameClockSubsystem` (1200 s / 600 s), not data. A data asset or setting can come with the day/night visuals.
+- **Trade results** add `NoStore`. Overflow is refused with `InvalidQuantity`: a side worth more than int32 coins, or a sale the wallet cannot hold.
+- **Quantity lines** below 1 are refused before lines of one item are summed.
+- **The trade screen** follows the clock's `OnPhaseChanged`, so a new day refreshes the totals and the haggle state while it is open.
+- **The trade screen** lives on the NPC (`OpenTrade` / `CloseTrade`; `Back` returns to the talk, `Close` ends it). Its row buttons are made non-focusable in the asset (a `UButton`'s focusability is fixed at construction in 5.8).
+

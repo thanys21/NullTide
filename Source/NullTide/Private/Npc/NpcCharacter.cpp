@@ -8,7 +8,9 @@
 #include "GameFramework/PlayerController.h"
 #include "Npc/NpcAIController.h"
 #include "Npc/NpcDefinition.h"
+#include "Npc/NpcTraderComponent.h"
 #include "UI/NpcTalkWidget.h"
+#include "UI/NpcTradeScreenWidget.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogNpcTalk, Log, All);
 
@@ -38,6 +40,8 @@ ANpcCharacter::ANpcCharacter()
 	NameLabel->SetWorldSize(28.f);
 	NameLabel->SetTextRenderColor(FColor::White);
 	NameLabel->SetCastShadow(false);
+
+	Trader = CreateDefaultSubobject<UNpcTraderComponent>(TEXT("Trader"));
 }
 
 void ANpcCharacter::InitializeResident(const TSubclassOf<UNpcDefinition> InDefinition, const UBaseZoneComponent* InHomeZone)
@@ -134,6 +138,7 @@ bool ANpcCharacter::OpenTalkForInteractor(AActor* Interactor)
 	const FText Greeting = Definition && !Definition->GreetingLines.IsEmpty()
 		? Definition->GreetingLines[FMath::RandRange(0, Definition->GreetingLines.Num() - 1)] : FText::GetEmpty();
 	TalkWidget = Widget;
+	TalkPartner = Pawn;
 	Widget->OpenForNpc(this, GetNpcName(), Greeting);
 	if (ANpcAIController* AI = Cast<ANpcAIController>(GetController()))
 	{
@@ -144,9 +149,80 @@ bool ANpcCharacter::OpenTalkForInteractor(AActor* Interactor)
 	return true;
 }
 
+bool ANpcCharacter::CanOpenTrade() const
+{
+	return TradeScreenClass && Trader && Trader->HasStore();
+}
+
+bool ANpcCharacter::OpenTrade()
+{
+	APawn* Partner = GetTalkPartner();
+	APlayerController* PlayerController = Partner ? Cast<APlayerController>(Partner->GetController()) : nullptr;
+	if (!PlayerController || TradeWidget || !CanOpenTrade())
+	{
+		return false;
+	}
+	UNpcTradeScreenWidget* Widget = CreateTradeWidget(*PlayerController);
+	if (!Widget)
+	{
+		UE_LOG(LogNpcTalk, Warning, TEXT("%s: could not create the trade screen."), *GetName());
+		return false;
+	}
+	TradeWidget = Widget;
+	Widget->OpenForNpc(this, Partner);
+	TalkWidget->SetVisibility(ESlateVisibility::Collapsed);
+	FocusScreen(*PlayerController, *Widget);
+	return true;
+}
+
+void ANpcCharacter::DismissTradeWidget()
+{
+	if (UNpcTradeScreenWidget* Widget = TradeWidget)
+	{
+		TradeWidget = nullptr;
+		Widget->ReleaseNpc();
+		Widget->RemoveFromParent();
+	}
+}
+
+void ANpcCharacter::CloseTrade(const bool bReturnToTalk)
+{
+	if (!TradeWidget)
+	{
+		return;
+	}
+	DismissTradeWidget();
+	UNpcTalkWidget* Talk = TalkWidget;
+	if (!Talk)
+	{
+		return;
+	}
+	if (bReturnToTalk)
+	{
+		Talk->SetVisibility(ESlateVisibility::Visible);
+		APawn* Partner = GetTalkPartner();
+		if (APlayerController* PlayerController = Partner ? Cast<APlayerController>(Partner->GetController()) : nullptr)
+		{
+			FocusScreen(*PlayerController, *Talk);
+		}
+	}
+	else
+	{
+		Talk->CloseTalk();
+	}
+}
+
 void ANpcCharacter::EndTalk()
 {
+	// The trade screen never outlives the talk.
+	DismissTradeWidget();
+	// Leaving the talk with a problem on the clock counts as running out of time (no free retries by closing).
+	if (Trader)
+	{
+		Trader->ExpireHaggleProblem();
+	}
 	TalkWidget = nullptr;
+	TalkPartner.Reset();
 	if (ANpcAIController* AI = Cast<ANpcAIController>(GetController()))
 	{
 		AI->ResumeWander();
@@ -159,6 +235,16 @@ UNpcTalkWidget* ANpcCharacter::CreateTalkWidget(APlayerController& PlayerControl
 }
 
 void ANpcCharacter::ShowTalkWidget(APlayerController& PlayerController, UNpcTalkWidget& Widget)
+{
+	FocusScreen(PlayerController, Widget);
+}
+
+UNpcTradeScreenWidget* ANpcCharacter::CreateTradeWidget(APlayerController& PlayerController)
+{
+	return CreateWidget<UNpcTradeScreenWidget>(&PlayerController, TradeScreenClass);
+}
+
+void ANpcCharacter::FocusScreen(APlayerController& PlayerController, UUserWidget& Widget)
 {
 	if (!Widget.IsInViewport())
 	{

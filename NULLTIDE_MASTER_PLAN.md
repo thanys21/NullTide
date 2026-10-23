@@ -4,16 +4,16 @@
 >
 > **Project:** Null Tide  
 > **Engine:** Unreal Engine 5.8.2  
-> **Genre:** Top-down Survival Colony Builder  
-> **Core pitch:** Project Zomboid + Core Keeper, starting from one survivor and growing toward a colony.  
+> **Genre:** Top-down Survival Base Builder  
+> **Core pitch:** Project Zomboid + Core Keeper: one survivor gathers, crafts and builds a safe base, trades with NPCs and explores. No colonists (user, 2026-10-20): the player controls one character only.  
 > **Primary platform:** PC / Steam  
-> **Current development state:** Phase 4 Crafting COMPLETE (C1-C8). Crafting C8 Workstations COMPLETE: C8A, C8B and C8C approved (C8C manual rendered PIE 13 PASS + 1 N/A, Tab focus retest 6/6 PASS; full automation 190/190). Phase 5 Building COMPLETE (B0–B9, summary in `BUILDING_REPORT.md`): B0 APPROVED; B1 (data model, grid, occupancy, placement validation) COMPLETE / APPROVED (full automation 198/198, cook PASS); B2 (construction authority: activate first, pay last) COMPLETE / APPROVED (full automation 219/219, cook PASS); B3 (Wooden Floor: first buildable, construction component on the player) COMPLETE / APPROVED (full automation 223/223, cook PASS); B4 (building mode, ghost preview, input) COMPLETE / APPROVED (full automation 230/230, cook PASS, manual PIE 8/8 PASS); B5 (walls and doors, selection and rotation) COMPLETE / APPROVED (full automation 236/236, cook PASS, manual PIE PASS; `b20f70a`); B6 (demolition: C key, cascade, full refund) COMPLETE / APPROVED (full automation 243/243, cook PASS, manual PIE PASS; `7dd0c1d`); B7 (buildable chest and workbench) COMPLETE / APPROVED (full automation 250/250, cook PASS, manual PIE done; `8f4ae66`); B7.1 (facing-based interaction targeting) COMPLETE / APPROVED (full automation 253/253, cook PASS, manual PIE accepted; reach to be tuned later; `208b12e`); B8 (building UI: build bar) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 5/5 PASS; `e20b30e`); B9 (polish: interaction reach 75/75, first click after closing a screen; Phase 5 closeout) COMPLETE / APPROVED (full automation 258/258, cook PASS, manual PIE 3/3 PASS). Phase 6 Base & NPCs in progress (BASE_PLAN.md): S1 (cursor facing) COMPLETE / APPROVED (full automation 271/271, cook PASS, manual PIE 7/7 PASS; `0a3e243`); S2 (build zones) COMPLETE / APPROVED (full automation 276/276, cook PASS, manual PIE 5/5 PASS; `b890e2e`); S3 (base UX) COMPLETE / APPROVED (full automation 279/279, cook PASS, manual PIE 5/5 PASS; `b2d5413`); S4 (NPC foundation) COMPLETE / APPROVED (full automation 284/284, cook PASS, manual PIE PASS; `965439c`); T1 (test ground: flat 100 m floor, test bumps, zones rearranged) COMPLETE / APPROVED (cook PASS, manual PIE PASS; `5c7403c`); S5 (trading: wallet, clock, shop, haggling) COMPLETE / APPROVED (full automation 292/292, cook PASS, manual PIE PASS; `c9779c4`). S6 house NPCs ON HOLD (user, 2026-10-24); next step to be chosen by the user. Crafting queue and the inventory/crafting UI-UX pass are deferred.
+> **Current development state:** Phases 1–5 COMPLETE (items and inventory, resource gathering, stacking, crafting C1–C8 in `CRAFTING_PROGRESS.md`, building B0–B9 in `BUILDING_REPORT.md`; G9 storage UI/UX). Phase 6 Base & NPCs (`BASE_PLAN.md`, `BASE_PROGRESS.md`): S1 cursor facing, S2 build zones, S3 base UX, S4 NPC foundation, T1 test ground and S5 trading (wallet, day/night clock, shop, haggling) COMPLETE; last commit `c9779c4`, full automation 292/292. S6 house NPCs ON HOLD (user, 2026-10-24). Next step: chosen by the user (Phase 6 report, then Phase 7 Save / Load recommended). Crafting queue and the inventory/crafting UI-UX pass stay deferred.
 
 ---
 
 # 1. Project Vision
 
-Null Tide is a top-down survival colony-builder where the player begins as a single survivor and gradually rebuilds a functioning settlement.
+Null Tide is a top-down survival base builder where the player is a single survivor who builds a safe base, meets and trades with NPCs, and pushes out into the world. The player controls one character only; there are no colonists or worker NPCs (user, 2026-10-20).
 
 The intended gameplay loop is:
 
@@ -26,11 +26,9 @@ Manage inventory / tools / storage
   ↓
 Craft
   ↓
-Build
+Build a base (inside base zones)
   ↓
-Grow colony
-  ↓
-Automate / specialize colonists
+Meet and trade with NPCs
   ↓
 Explore deeper regions / story
 ```
@@ -41,7 +39,7 @@ The game should favor:
 - reusable data-driven systems;
 - simple but expandable combat;
 - inventory and world interactions with exact runtime identity;
-- systems that can later support colony automation;
+- systems that can later grow the base and its NPCs (house NPCs are planned and on hold);
 - minimal one-off item subclasses;
 - modular Unreal architecture;
 - production-safe authority boundaries.
@@ -748,21 +746,34 @@ Resource nodes:
 2 Scrap
 ```
 
-Storage:
+Ground (T1):
+
+```text
+Floor_0: flat 100 x 100 m (BlockAll), NavMeshBoundsVolume ±5250 cm
+Template obstacles removed; test bumps TestBump_Step40, TestBump_Slope35, TestBump_Rock in the starter zone
+```
+
+Base zones and NPCs (S2–S5):
+
+```text
+BaseZone_Start  21 x 21 cells around PlayerStart (buildable 19 x 19), "Base"
+TraderCamp      9 x 9 cells, 6 m east, no building, resident NPC_Trader (store + haggling)
+```
+
+Storage and stations:
 
 ```text
 1 BP_StorageContainer
+1 BP_Workbench (C8B)
 ```
 
-Player crafting (C5):
+Player (BP_TopDownCharacter):
 
 ```text
-BP_TopDownCharacter
-  CraftingComponent (UCraftingComponent)
-    AvailableRecipes:
-      Recipe_Axe        Wood x3 + Stone x5 → Axe x1
-      Recipe_WoodArrow  Wood x1 → WoodArrow x5
-      Recipe_Pickaxe    Wood x2 + Stone x3 → Pickaxe x1 (timed, 3 s)
+CraftingComponent  AvailableRecipes: Recipe_Axe, Recipe_WoodArrow, Recipe_Pickaxe (timed), Recipe_ShortSword
+ConstructionComponent + BuildingPlacement  floor, wall, door, chest, workbench (B to build)
+CursorFacing (S1), InteractionProbe (B7.1), BaseZonePresence (S3)
+Wallet (200 starting coins, test aid) + PlayerStatusHud (S5)
 ```
 
 Crafting is the right column of the inventory screen (I or Tab). Since C6B the CRAFT button crafts the selected recipe through UCraftingComponent and shows a result message.
@@ -807,9 +818,11 @@ Crafting C8B Workbench Actor/Interaction ✅
 Crafting C8C Workstation Crafting UI  ✅
 Phase 4 Crafting                    ✅
 Phase 5 Building                    ✅
+G9 Storage UI/UX (+ G9.1)           ✅
+Phase 6 Base & NPCs                 S1–S5 + T1 ✅, S6 house NPCs ON HOLD
 
 NEXT:
-G9 Storage UI/UX COMPLETE (STORAGE_UX_PROGRESS.md); G9.1 inventory details layout fix COMPLETE. Phase 6 S1 to S5 and T1 COMPLETE (BASE_PROGRESS.md); S6 house NPCs ON HOLD (user, 2026-10-24). Phase 5 Building COMPLETE (B0–B9; see BUILDING_REPORT.md).
+Chosen by the user. Recommended: the Phase 6 report (BASE_REPORT.md), then Phase 7 Save / Load.
 ```
 
 ---
@@ -1182,7 +1195,11 @@ Tool loadout
 Storage contents
 Resource-node RemainingYield / Depleted
 Placed buildings
-Base and NPCs
+Base zones (authored; their names and sizes are data, so usually nothing to save)
+Outdoor NPCs (residents respawn from their zones; save position only if needed)
+Wallet coins (S5)
+Game day and day/night phase (S5)
+Haggle state per NPC: attempts used today, stored discount (S5)
 World progression
 ```
 
@@ -1226,7 +1243,7 @@ Quests/events
 Region progression
 Null Tide phenomenon
 Special resources
-Colony story events
+Base and NPC story events
 ```
 
 Keep story systems data-driven when possible.
@@ -1248,8 +1265,8 @@ Spawn
 → manage stack inventory
 → store resources
 → craft useful items
-→ build first structures
-→ establish first colony functionality
+→ build first structures inside the base zone
+→ meet and trade with the Trader
 → encounter basic danger/story hook
 ```
 
@@ -1431,35 +1448,18 @@ Do not implement without a dedicated milestone.
 
 # 15. Recommended Next Immediate Checkpoint
 
-## Building — B6 Demolition and Refund (implemented and validated, awaiting acceptance)
+Phase 6 Base & NPCs has S1–S5 and T1 complete (`BASE_PROGRESS.md`); S6 house NPCs is on hold (user, 2026-10-24).
 
-Phase 4 Crafting is COMPLETE (C1–C8; see `CRAFTING_PROGRESS.md`). Phase 5 Building is IN PROGRESS:
-- B0 architecture is APPROVED (`BUILDING_PLAN.md`).
-- B1 (data model, grid coordinates, occupancy, placement validation) is COMPLETE / APPROVED.
-- B2 (construction authority, activate first and pay last) is COMPLETE / APPROVED (`bccd0bc`).
-- B3 (Wooden Floor) is COMPLETE / APPROVED (`ff04c0e`).
-- **B4 (building mode, ghost preview, input) is COMPLETE / APPROVED** (`7ce9be3`).
-  - The player builds floors with `B`, the cursor ghost and LMB.
-  - `Floor_0` is now `WorldStatic`.
-  - 7 B4 tests; full automation 230/230; cook PASS; manual rendered PIE 8/8 PASS.
-- **B5 (walls and doors, selection and rotation) is COMPLETE / APPROVED** (`b20f70a`).
-  - Walls and doors on cell edges (they need a floor on one side); `1`/`2`/`3` select, `R` rotates; the ghost shows a facing arrow; the door opens with `F` towards its facing side.
-  - 6 B5 tests; full automation 236/236; cook PASS; manual rendered PIE PASS after the rework.
-
-- **B6 (demolition and refund) is IMPLEMENTED AND VALIDATED, awaiting acceptance.**
-  - `C` in building mode switches to demolish. A floor takes the walls and doors it alone carries. Storage is always refused. The refund is 100%.
-  - 7 B6 tests; full automation 243/243; cook PASS; PIE retest: full refund confirmed.
-
-Claude instruction (B6 is implemented; see BUILDING_PROGRESS.md B6):
+Recommended next, for the user to choose:
 
 ```text
-1. Wait for the user's commit approval for B6.
-2. After the commit, review BUILDING_PLAN.md for the remaining Phase 5
-   scope (deferred items, D3 thin-blocker fix with furniture) and propose
-   the next checkpoint plan. STOP for approval.
+1. Phase 6 report (BASE_REPORT.md): summary of S1–S5 and T1, the architecture, the open
+   risks and what S6 would need. Docs only.
+2. Phase 7 Save / Load: plan first (the state to save now includes buildings, storage,
+   wallet coins, the game day and per-NPC haggle state). STOP for approval.
 ```
 
-This keeps Building incremental and keeps inventory, crafting, storage and interaction authority unchanged.
+Claude instruction: never start a phase or checkpoint without the user's choice and an approved plan.
 
 ---
 
@@ -1752,9 +1752,13 @@ Do not clean up content merely because its label, transform, or name looks unusu
 Use this abbreviated context when resuming:
 
 ```text
-Null Tide is a UE5.8 top-down survival colony builder.
+Null Tide is a UE5.8 top-down survival base builder (one player character, no colonists).
 
-Completed:
+Completed (details in CLAUDE.md and the *_PROGRESS.md / *_REPORT.md files):
+- Phases 1-5 (items, inventory, gathering, stacking, crafting C1-C8, building B0-B9), G9 storage UI/UX
+- Phase 6 S1-S5 + T1 (cursor facing, build zones, base UX, Trader NPC, test ground, trading); S6 on hold
+
+Older detail (kept for reference):
 - Phase 1 Foundation
 - Phase 2 Items & Inventory
 - G1-G7
@@ -1771,7 +1775,7 @@ Completed:
 
 Current crafting:
 - UCraftingRecipeDefinition data-only Blueprint recipes, validated by ValidateRecipe
-- Recipe_Axe (Wood x3 + Stone x5 → Axe x1), Recipe_WoodArrow (Wood x1 → WoodArrow x5)
+- Recipe_Axe, Recipe_WoodArrow, Recipe_Pickaxe (timed), Recipe_ShortSword (some need the Workbench since C8)
 - generic inventory queries: GetTotalQuantity, CanRemoveDefinitionQuantity,
   CanAddDefinitionQuantity, CanAddDefinitionQuantities
 - UCraftingQueryLibrary: advisory read-only ingredient / output-capacity checks
@@ -1779,7 +1783,7 @@ Current crafting:
 - UInventoryComponent::TryApplyDefinitionTransaction: atomic remove + add by
   exact definition class, one revision, one event (native only)
 - FCraftingTransaction::TryCraftRecipeAtomic: authoritative craft path (native only)
-- UCraftingComponent on BP_TopDownCharacter (Recipe_Axe, Recipe_WoodArrow):
+- UCraftingComponent on BP_TopDownCharacter (the four recipes above):
   GetAvailableRecipes, CanCraftRecipe (exact), TryCraftRecipe, OnCraftingResult
 - C6A crafting UI (read-only): right column of W_Inventory (W_CraftingPanel),
   inventory left, character middle; CRAFT enabled by exact CanCraftRecipe
@@ -1796,7 +1800,8 @@ Current inventory:
 - MaxStackSize generally 50 for stackable catalog
 - atomic multi-quantity add
 - exact ItemId semantics
-- whole-stack drop/storage transfer
+- whole-stack drop; storage moves are "as much as fits" with split (G9)
+- coins live in a separate wallet, not in the inventory (S5)
 
 Current gathering:
 - Tree → Wood, Axe, yield 5
@@ -1810,8 +1815,10 @@ Current tools:
 - context-sensitive Equip/Unequip inventory button
 
 Current input:
-- F interact (with the object the character faces, B7.1)
+- the character faces the mouse cursor (S1)
+- F interact (with the object the character faces, B7.1): doors, chests, workbenches, the Trader
 - I or Tab inventory (inventory + character + crafting screen)
+- B building mode (1-5 select, R rotate, C demolish, LMB build)
 - Enhanced Input via IMC_Default
 
 Current validation baseline:
@@ -1823,7 +1830,7 @@ Current validation baseline:
 - full 292/292 (284 + 8 S5)
 
 Next:
-Phase 5 Building COMPLETE (B0–B9). G9 Storage UI/UX (storage screen: move stack, move all of an item, split, drag, ALL, info panel, sorting) COMPLETE; G9.1 inventory details layout fix COMPLETE. Next: Phase 6 Base & NPCs (BASE_PLAN.md: S1 cursor facing, S2–S3 base, S4–S5 Trader NPC, S6 housing). Crafting queue, UI-UX pass and Campfire/Forge stay deferred.
+Chosen by the user (see section 15). S6 house NPCs is on hold. Crafting queue, UI-UX pass, Campfire/Forge and day/night lighting stay deferred.
 
 Do not start split-stack, quick bar, weight, or unrelated refactors unless explicitly approved.
 ```
@@ -1869,7 +1876,14 @@ Phase 4  Crafting                           ✅
 
 Phase 5  Building                           ✅ (B0 ✅, B1 ✅, B2 ✅, B3 ✅, B4 ✅, B5 ✅, B6 ✅, B7 ✅, B7.1 ✅, B8 ✅, B9 ✅)
 
-Phase 6  Base & NPCs (BASE_PLAN.md)
+Phase 6  Base & NPCs (BASE_PLAN.md)         S1–S5 ✅, T1 ✅, S6 ⏸ on hold
+         S1 Cursor facing                   ✅
+         S2 Build zones                     ✅
+         S3 Base UX (ring, zone tag)        ✅
+         S4 NPC foundation (Trader)         ✅
+         T1 Test ground                     ✅
+         S5 Trading (wallet, clock, shop)   ✅
+         S6 House NPCs                      ⏸ on hold
 
 Phase 7  Save / Load
 

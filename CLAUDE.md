@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Null Tide is an Unreal Engine 5.8 top-down game project (single runtime module `NullTide`, Windows). The C++ work so far covers inventory, items, storage, resource gathering, crafting (Phase 4 complete, including workstations) and building (Phase 5 complete; summary in `BUILDING_REPORT.md`). Blueprints and UMG widgets are built on top of that code.
+Null Tide is an Unreal Engine 5.8 top-down game project (single runtime module `NullTide`, Windows). It is a survival base builder with one player character (no colonists). The C++ work so far covers inventory, items, storage, resource gathering, crafting (Phase 4 complete, including workstations), building (Phase 5 complete; summary in `BUILDING_REPORT.md`) and Phase 6 Base & NPCs (S1–S5 complete: cursor facing, build zones, base UX, the Trader NPC, trading with a wallet, a day/night clock and haggling; S6 house NPCs on hold; `BASE_PROGRESS.md`). Blueprints and UMG widgets are built on top of that code.
 
 ## Project roadmap
 
